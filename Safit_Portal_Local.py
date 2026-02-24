@@ -82,19 +82,31 @@ def pulisci_numero(serie):
 @st.cache_data
 def load_data():
     try:
+        # Cerchiamo il file ignorando maiuscole/minuscole nella cartella
+        files = os.listdir('.')
+        file_arca = next((f for f in files if f.lower() == 'righe_ordini_arca.xlsx'), None)
+        file_access = next((f for f in files if f.lower() == 'avanzamento_access.xlsx'), None)
+
+        if not file_arca:
+            st.error(f"❌ File degli ordini non trovato! File presenti: {files}")
+            return pd.DataFrame()
+
         # Caricamento ARCA
-        df = pd.read_excel('righe_Ordini_ARCA.xlsx', sheet_name='Foglio1', skiprows=2)
+        df = pd.read_excel(file_arca, sheet_name='Foglio1', skiprows=2, engine='openpyxl')
         df.columns = [str(c).strip() for c in df.columns]
+        
+        # Riempimento celle vuote per trascinamento (ffill)
         for col in ['Cliente Fornitore CD', 'Articolo C', 'Articolo D', 'Data', 'Documento']:
             if col in df.columns: df[col] = df[col].ffill()
+            
         df['Data_Consegna'] = pd.to_datetime(df['Data'], errors='coerce')
         col_res = 'Qta Residua' if 'Qta Residua' in df.columns else 'Qta Doc'
         df['Qta_Effettiva'] = pd.to_numeric(df[col_res], errors='coerce').fillna(0)
         df = df[df['Qta_Effettiva'] > 0]
         
-        # Caricamento Access (riga 2)
-        if os.path.exists('Avanzamento_access.xlsx'):
-            df_tech = pd.read_excel('Avanzamento_access.xlsx', skiprows=1) 
+        # Caricamento Access
+        if file_access:
+            df_tech = pd.read_excel(file_access, skiprows=1, engine='openpyxl') 
             df_tech.columns = [str(c).strip() for c in df_tech.columns]
             if 'Codice' in df_tech.columns:
                 df_tech = df_tech.rename(columns={'Codice': 'Art_Key'})
@@ -104,7 +116,7 @@ def load_data():
                 df = pd.merge(df, df_tech[['Art_Key', 'Acq', 'Gia']], left_on='Articolo C', right_on='Art_Key', how='left')
         return df
     except Exception as e:
-        st.error(f"Errore caricamento dati: {e}")
+        st.error(f"Errore tecnico nel caricamento: {e}")
         return pd.DataFrame()
 
 data = load_data()
@@ -184,3 +196,4 @@ if not df_cli.empty:
                     st.markdown(f'<div class="{r["css"]}"><b>Consegna: {r["date"].strftime("%d/%m/%Y") if pd.notnull(r["date"]) else "N.D."}</b> | Q.tà: {r["qta"]:,.0f} <span style="float:right;">Stima: {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span></div>', unsafe_allow_html=True)
 else:
     st.warning("Nessun ordine in sospeso trovato per questo cliente.")
+
