@@ -81,6 +81,7 @@ def pulisci_numero(serie):
 
 @st.cache_data
 def load_data():
+st.write(f"DEBUG: Clienti trovati nel file: {df['Cliente Fornitore CD'].unique()}")
     try:
         # Cerchiamo il file ignorando maiuscole/minuscole nella cartella
         files = os.listdir('.')
@@ -196,4 +197,5 @@ if not df_cli.empty:
                     st.markdown(f'<div class="{r["css"]}"><b>Consegna: {r["date"].strftime("%d/%m/%Y") if pd.notnull(r["date"]) else "N.D."}</b> | Q.tà: {r["qta"]:,.0f} <span style="float:right;">Stima: {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span></div>', unsafe_allow_html=True)
 else:
     st.warning("Nessun ordine in sospeso trovato per questo cliente.")
+
 
