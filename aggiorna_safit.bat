@@ -17,20 +17,21 @@ git pull origin main --quiet
 echo.
 echo [2/3] Preparazione file Excel...
 git add .
-:: Il comando sotto "impacchetta" le modifiche
 git commit -m "Aggiornamento dati %date% %time%" --quiet
 
 echo.
 echo [3/3] Invio dati al portale online...
-:: Questo invia i dati su GitHub e aggiorna Streamlit
 git push origin main
 
 echo.
 echo ============================================================
-echo              OPERAZIONE COMPLETATA!
-echo.
-echo Il portale Streamlit si aggiornera' a breve.
-echo Puoi chiudere questa finestra o premere un tasto.
+echo    DATI INVIATI! APERTURA PORTALE IN CORSO...
 echo ============================================================
-pause
+
+:: USA QUESTO INDIRIZZO SPECIFICO (IL TUO PORTALE PUBBLICO)
+start chrome.exe "https://qey2qqomzpzjmuxb8mfm5h.streamlit.app"
+
+echo.
+echo Operazione completata. 
+timeout /t 5
 exit
