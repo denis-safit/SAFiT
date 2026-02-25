@@ -35,7 +35,7 @@ echo ==========================================
 echo    OPERAZIONE COMPLETATA!
 echo ==========================================
 echo Il portale Streamlit si aggiornera' a breve.
-start https://safit-portal.streamlit.app/
+
 
 echo.
 pause
