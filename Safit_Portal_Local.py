@@ -19,19 +19,19 @@ st.markdown("""
 # --- 2. GESTIONE UTENTI (LETTURA EXCEL) ---
 @st.cache_data
 def load_users():
-    # Cerca il file utenti.xlsx ignorando maiuscole/minuscole
-    files = os.listdir('.')
-    file_u = next((f for f in files if f.lower() == 'utenti.xlsx'), 'utenti.xlsx')
-    
+    # Cerca il file utenti.xlsx nella cartella corrente
+    file_u = 'utenti.xlsx'
     if os.path.exists(file_u):
         try:
             df_u = pd.read_excel(file_u)
             df_u.columns = [str(c).strip() for c in df_u.columns]
+            # Converte in dizionario: {username: [password, cliente_arca]}
             return df_u.set_index('username')[['password', 'cliente_arca']].T.to_dict('list')
         except Exception as e:
             st.error(f"Errore caricamento utenti: {e}")
             return {'safit_admin': ['admin2026', 'TUTTI']}
     else:
+        # Fallback se il file manca durante lo sviluppo
         return {'safit_admin': ['admin2026', 'TUTTI']}
 
 USER_DB = load_users()
@@ -46,9 +46,10 @@ def check_password():
             if os.path.exists('Logo SAFIT.JPG'):
                 st.image('Logo SAFIT.JPG', width=300)
             st.title("Accesso Area Riservata")
-            user = st.text_input("Username").lower().strip()
+            user = st.text_input("Username")
             pw = st.text_input("Password", type="password")
             if st.button("Accedi"):
+                # Controllo credenziali dal file Excel
                 if user in USER_DB and str(USER_DB[user][0]) == pw:
                     st.session_state["authenticated"] = True
                     st.session_state["user_type"] = USER_DB[user][1]
@@ -72,6 +73,7 @@ def aggiungi_giorni_lavorativi(data_inizio, giorni):
     return data_corrente
 
 def pulisci_numero(serie):
+    """Trasforma stringhe come '2.501,00' in numeri decimali"""
     return pd.to_numeric(
         serie.astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False), 
         errors='coerce'
@@ -80,27 +82,19 @@ def pulisci_numero(serie):
 @st.cache_data
 def load_data():
     try:
-        # Cerca il file Excel ignorando maiuscole/minuscole
-        files = os.listdir('.')
-        target_name = 'righe_ordini_arca.xlsx'
-        file_arca = next((f for f in files if f.lower() == target_name), target_name)
-        
-        df = pd.read_excel(file_arca, sheet_name='Foglio1', skiprows=2)
+        # Caricamento ARCA
+        df = pd.read_excel('righe_Ordini_ARCA.xlsx', sheet_name='Foglio1', skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
-        
-        # --- FIX: TRASCINAMENTO DATI ---
         for col in ['Cliente Fornitore CD', 'Articolo C', 'Articolo D', 'Data', 'Documento']:
-            if col in df.columns: 
-                df[col] = df[col].ffill()
-        
+            if col in df.columns: df[col] = df[col].ffill()
         df['Data_Consegna'] = pd.to_datetime(df['Data'], errors='coerce')
         col_res = 'Qta Residua' if 'Qta Residua' in df.columns else 'Qta Doc'
         df['Qta_Effettiva'] = pd.to_numeric(df[col_res], errors='coerce').fillna(0)
         df = df[df['Qta_Effettiva'] > 0]
         
-        file_acc = next((f for f in files if f.lower() == 'avanzamento_access.xlsx'), 'Avanzamento_access.xlsx')
-        if os.path.exists(file_acc):
-            df_tech = pd.read_excel(file_acc, skiprows=1) 
+        # Caricamento Access (riga 2)
+        if os.path.exists('Avanzamento_access.xlsx'):
+            df_tech = pd.read_excel('Avanzamento_access.xlsx', skiprows=1) 
             df_tech.columns = [str(c).strip() for c in df_tech.columns]
             if 'Codice' in df_tech.columns:
                 df_tech = df_tech.rename(columns={'Codice': 'Art_Key'})
@@ -123,9 +117,9 @@ with st.sidebar:
     
     st.write(f"Utente: **{st.session_state['username']}**")
     
+    # Se ADMIN, può scegliere il cliente. Se CLIENTE, è bloccato
     if st.session_state["user_type"] == "TUTTI":
-        # --- FIX: LISTA CLIENTI COMPLETA ---
-        clienti_list = sorted([str(x) for x in data['Cliente Fornitore CD'].dropna().unique()])
+        clienti_list = sorted([str(x) for x in data['Cliente Fornitore CD'].unique()])
         sel_cli = st.selectbox("👤 Seleziona Cliente:", clienti_list)
     else:
         sel_cli = st.session_state["user_type"]
@@ -139,7 +133,7 @@ with st.sidebar:
 
 # --- 5. INTERFACCIA CENTRALE ---
 st.title("🚜 Portale Avanzamento Produzione")
-df_cli = data[data['Cliente Fornitore CD'].astype(str).str.lower() == str(sel_cli).lower()].copy()
+df_cli = data[data['Cliente Fornitore CD'] == sel_cli].copy()
 
 if not df_cli.empty:
     articoli_dis = sorted([str(x) for x in df_cli['Articolo C'].unique()])
@@ -150,6 +144,7 @@ if not df_cli.empty:
         df_art = df_cli[df_cli['Articolo C'] == art].sort_values('Data_Consegna')
         desc = df_art['Articolo D'].iloc[0] if 'Articolo D' in df_art.columns else ""
         
+        # Inizializza stock per calcolo ACQ
         st_gia = float(df_art['Gia'].iloc[0]) if 'Gia' in df_art.columns and pd.notnull(df_art['Gia'].iloc[0]) else 0.0
         st_acq = float(df_art['Acq'].iloc[0]) if 'Acq' in df_art.columns and pd.notnull(df_art['Acq'].iloc[0]) else 0.0
 
@@ -158,6 +153,7 @@ if not df_cli.empty:
             qta = float(row['Qta_Effettiva'])
             req_date = row['Data_Consegna']
             
+            # Logica di calcolo ACQ ed erosione stock
             if st_gia >= qta:
                 st_gia -= qta
                 eta, nota, cat = oggi_dt, "Pronto", "Solo Disponibili"
@@ -171,6 +167,7 @@ if not df_cli.empty:
                 eta, nota, cat = aggiungi_giorni_lavorativi(oggi_dt, 25), "Nuova Produzione", "In Lavorazione"
                 css = "delay-row"
 
+            # Gestione ritardi rispetto alla data richiesta
             if pd.notnull(req_date) and eta.date() > req_date.date():
                 if cat != "Solo Disponibili":
                     cat = "In Ritardo"
