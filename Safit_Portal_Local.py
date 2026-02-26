@@ -3,7 +3,7 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta
 
-# --- 1. CONFIGURAZIONE PAGINA E VERSIONE  ---
+# --- 1. CONFIGURAZIONE PAGINA E VERSIONE ---
 APP_VERSION = "1.0.02"
 st.set_page_config(page_title=f"Safit - Portale Avanzamento {APP_VERSION}", layout="wide")
 
@@ -22,7 +22,6 @@ st.markdown(f"""
         gap: 10px;
         font-size: 14px;
     }}
-    /* COLORI LOGICA SAFIT ORIGINALE */
     .on-time-row {{ background-color: #f1f8e9; border-left: 6px solid #4caf50; color: #1b5e20; }} 
     .client-delay-row {{ background-color: #e3f2fd; border-left: 6px solid #2196f3; color: #0d47a1; }} 
     .delay-row {{ background-color: #fff8e1; border-left: 6px solid #ffc107; color: #5d4037; }} 
@@ -47,7 +46,9 @@ def load_users():
     return {'safit_admin': ['admin2026', 'TUTTI']}
 
 USER_DB = load_users()
-# st.write("Utenti caricati:", list(USER_DB.keys()))
+
+# RIGA TEST: Lasciata commentata con #. Togli il # solo se Nikola non riesce ad entrare.
+# st.write("Utenti caricati:", list(USER_DB.keys())) 
 
 def check_password():
     if "authenticated" not in st.session_state:
@@ -58,37 +59,25 @@ def check_password():
         with col2:
             if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', width=300)
             st.title("Accesso Area Riservata")
-            # Puliamo l'input da tastiera
+            
             user_input = st.text_input("Username").strip()
             pw_input = st.text_input("Password", type="password").strip()
             
             if st.button("Accedi"):
-                # Puliamo i dati che arrivano dal file Excel (USER_DB)
                 for db_user, info in USER_DB.items():
                     if str(db_user).strip() == user_input and str(info[0]).strip() == pw_input:
                         st.session_state["authenticated"] = True
                         st.session_state["user_type"] = info[1]
                         st.session_state["username"] = user_input
                         st.rerun()
-                
                 st.error("Username o Password errati")
         return False
     return True
 
-# Blocca l'esecuzione qui se non loggato
-if not check_password(): st.stop()
+# Blocca l'app qui se l'utente non è loggato
+if not check_password():
+    st.stop()
 
-# --- 4. SIDEBAR (Ora è protetta dal KeyError) ---
-with st.sidebar:
-    if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
-    # Mostriamo l'utente solo se esiste nel session_state
-    if st.session_state.get("username"):
-#        st.write(f"Utente: **{st.session_state['username']}**")
-    
-    st.markdown(f'<p class="version-tag">Versione: {APP_VERSION}</p>', unsafe_allow_html=True)
-    
-    # ... resto del codice sidebar ...
-    
 # --- 3. FUNZIONI TECNICHE ---
 def aggiungi_giorni_lavorativi(data_inizio, giorni):
     data_corrente = data_inizio
@@ -136,21 +125,26 @@ oggi_dt = datetime.now()
 # --- 4. SIDEBAR ---
 with st.sidebar:
     if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
-    st.write(f"Utente: **{st.session_state['username']}**")
+    
+    # MOSTRA UTENTE: Solo se autenticato correttamente
+    if st.session_state.get("username"):
+        st.write(f"Utente: **{st.session_state['username']}**")
+    
     st.markdown(f'<p class="version-tag">Versione: {APP_VERSION}</p>', unsafe_allow_html=True)
     
     if st.session_state["user_type"] == "TUTTI":
         clienti_list = sorted([str(x) for x in data['Cliente Fornitore CD'].unique()])
         sel_cli = st.selectbox("👤 Seleziona Cliente:", clienti_list)
-    else: sel_cli = st.session_state["user_type"]
+    else: 
+        sel_cli = st.session_state["user_type"]
     
     filtro_label = st.radio("Filtra per stato:", ["Mostra tutto", "Solo Disponibili", "In Lavorazione", "In Ritardo"])
+    
     if st.button("Logout"):
         st.session_state["authenticated"] = False
         st.rerun()
 
 # --- 5. LOGICA CENTRALE ---
-# Rimossa icona trattore come richiesto
 st.title("Portale Avanzamento Produzione")
 df_cli = data[data['Cliente Fornitore CD'] == sel_cli].copy()
 
@@ -171,7 +165,6 @@ if not df_cli.empty:
             qta = float(row['Qta_Effettiva'])
             req_date = row['Data_Consegna']
             
-            # --- DETERMINAZIONE STATO ---
             if st_gia >= qta:
                 st_gia -= qta
                 eta, nota, cat_core = oggi_dt, "Pronto", "DISPONIBILE"
@@ -183,24 +176,15 @@ if not df_cli.empty:
 
             is_ritardo = (pd.notnull(req_date) and eta.date() > req_date.date())
             
-            # --- ASSEGNAZIONE COLORI E TESTI SPECIFICI ---
             if cat_core == "DISPONIBILE":
-                if is_ritardo:
-                    css, nota_display = "client-delay-row", "Pronto (Ritardo Ritiro)"
-                else:
-                    css, nota_display = "on-time-row", "Pronto"
-            else: # LAVORAZIONE o NUOVA PROD
-                if is_ritardo:
-                    css, nota_display = "prod-delay-row", f"{nota} (In Ritardo)"
-                else:
-                    css, nota_display = "delay-row", nota
+                css, nota_display = ("client-delay-row", "Pronto (Ritardo Ritiro)") if is_ritardo else ("on-time-row", "Pronto")
+            else:
+                css, nota_display = ("prod-delay-row", f"{nota} (In Ritardo)") if is_ritardo else ("delay-row", nota)
 
-            # --- FILTRO ---
-            passa = False
-            if filtro_label == "Mostra tutto": passa = True
-            elif filtro_label == "Solo Disponibili" and cat_core == "DISPONIBILE": passa = True
-            elif filtro_label == "In Lavorazione" and cat_core == "LAVORAZIONE": passa = True
-            elif filtro_label == "In Ritardo" and is_ritardo: passa = True
+            passa = (filtro_label == "Mostra tutto") or \
+                    (filtro_label == "Solo Disponibili" and cat_core == "DISPONIBILE") or \
+                    (filtro_label == "In Lavorazione" and cat_core == "LAVORAZIONE") or \
+                    (filtro_label == "In Ritardo" and is_ritardo)
 
             if passa:
                 righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota_display})
