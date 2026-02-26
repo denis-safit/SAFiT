@@ -4,125 +4,117 @@ import os
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURAZIONE ---
-APP_VERSION = "1.0.08"
-st.set_page_config(page_title=f"Safit Check - {APP_VERSION}", layout="wide")
+APP_VERSION = "1.1.0"
+st.set_page_config(page_title=f"Safit Avanzamento - {APP_VERSION}", layout="wide")
 
+# CSS personalizzato per i colori Safit
 st.markdown("""
     <style>
-    .status-row { display: flex; justify-content: space-between; padding: 10px; border-radius: 5px; margin-bottom: 5px; }
-    .delay-row { background-color: #fff8e1; border-left: 5px solid #ffc107; }
-    .on-time-row { background-color: #f1f8e9; border-left: 5px solid #4caf50; }
-    .client-delay-row { background-color: #e3f2fd; border-left: 5px solid #2196f3; }
+    .status-row { display: flex; justify-content: space-between; padding: 12px; border-radius: 8px; margin-bottom: 8px; }
+    .on-time-row { background-color: #f1f8e9; border-left: 6px solid #4caf50; color: #1b5e20; } /* VERDE: PRONTO */
+    .acq-row { background-color: #e3f2fd; border-left: 6px solid #2196f3; color: #0d47a1; }    /* BLU: IN ARRIVO ACQUISTO */
+    .prod-row { background-color: #fff8e1; border-left: 6px solid #ffc107; color: #5d4037; }   /* GIALLO: IN PRODUZIONE */
+    .urgent-row { background-color: #ffebee; border-left: 6px solid #f44336; color: #b71c1c; } /* ROSSO: MANCANTE TOTALE */
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. FUNZIONI TECNICHE ---
 def pulisci_numero(serie):
     return pd.to_numeric(serie.astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False), errors='coerce').fillna(0)
-
-def standardizza_codice(valore):
-    return str(valore).strip().upper()
 
 @st.cache_data
 def load_data():
     try:
         # A. ARCA
-        df = pd.read_excel('righe_Ordini_ARCA.xlsx', sheet_name='Foglio1', skiprows=2)
-        df.columns = [str(c).strip() for c in df.columns]
+        df_arca = pd.read_excel('righe_Ordini_ARCA.xlsx', sheet_name='Foglio1', skiprows=2)
+        df_arca.columns = [str(c).strip() for c in df_arca.columns]
         for col in ['Cliente Fornitore CD', 'Articolo C', 'Articolo D', 'Data']:
-            if col in df.columns: df[col] = df[col].ffill()
-        df = df.dropna(subset=['Articolo C'])
-        df['Articolo C'] = df['Articolo C'].apply(standardizza_codice)
-        df['Data_Consegna'] = pd.to_datetime(df['Data'], errors='coerce')
-        df['Qta_Effettiva'] = pd.to_numeric(df['Qta Residua'], errors='coerce').fillna(pd.to_numeric(df['Qta Doc'], errors='coerce')).fillna(0)
-        
+            if col in df_arca.columns: df_arca[col] = df_arca[col].ffill()
+        df_arca = df_arca.dropna(subset=['Articolo C'])
+        df_arca['Articolo C'] = df_arca['Articolo C'].astype(str).str.strip().str.upper()
+        df_arca['Data_Consegna'] = pd.to_datetime(df_arca['Data'], errors='coerce')
+        q_col = 'Qta Residua' if 'Qta Residua' in df_arca.columns else 'Qta Doc'
+        df_arca['Qta_Effettiva'] = pd.to_numeric(df_arca[q_col], errors='coerce').fillna(0)
+        df_arca = df_arca[df_arca['Qta_Effettiva'] > 0]
+
         # B. ACCESS
-        file_tech = 'Avanzamento_access.xlsx'
-        if os.path.exists(file_tech):
-            df_tech = pd.read_excel(file_tech, skiprows=1)
-            df_tech.columns = [str(c).strip() for c in df_tech.columns]
+        file_access = 'Avanzamento_access.xlsx'
+        if os.path.exists(file_access):
+            # Carichiamo saltando la prima riga se necessario
+            df_access = pd.read_excel(file_access, skiprows=1)
+            df_access.columns = [str(c).strip() for c in df_access.columns]
             
-            # Identificazione dinamica
-            col_cod = next((c for c in df_tech.columns if 'CODICE' in c.upper()), df_tech.columns[0])
-            col_gia = next((c for c in df_tech.columns if 'GIA' in c.upper()), df_tech.columns[1])
+            # Mappatura secondo le tue istruzioni
+            df_access['Key'] = df_access['Codice'].astype(str).str.strip().str.upper()
+            df_access['Magazzino'] = pulisci_numero(df_access['GIA'])
+            df_access['Acquisti'] = pulisci_numero(df_access['ACQ'])
+            # Produzione = Somma di LAN, GRZ, TMP, RWI, TRS
+            df_access['Produzione'] = df_access[['LAN', 'GRZ', 'TMP', 'RWI', 'TRS']].apply(pulisci_numero).sum(axis=1)
+
+            # Unione
+            df = pd.merge(df_arca, df_access[['Key', 'Magazzino', 'Acquisti', 'Produzione']], 
+                          left_on='Articolo C', right_on='Key', how='left')
             
-            df_tech['Art_Key_Match'] = df_tech[col_cod].apply(standardizza_codice)
-            df_tech['Gia_Val'] = pulisci_numero(df_tech[col_gia])
-            
-            for c in ['Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS']:
-                col_f = next((col for col in df_tech.columns if col.upper() == c.upper()), None)
-                df_tech[c] = pulisci_numero(df_tech[col_f]) if col_f else 0
-            
-            df_tech['Lav_Tot'] = df_tech[['Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS']].sum(axis=1)
-            
-            df = pd.merge(df, df_tech[['Art_Key_Match', 'Gia_Val', 'Lav_Tot']], 
-                          left_on='Articolo C', right_on='Art_Key_Match', how='left')
-            df['Gia'] = df['Gia_Val'].fillna(0)
-            df['Lavorazione_Totale'] = df['Lav_Tot'].fillna(0)
-            
-        return df
+            # Riempiamo i vuoti per gli articoli non trovati in Access
+            for c in ['Magazzino', 'Acquisti', 'Produzione']:
+                df[c] = df[c].fillna(0)
+            return df
+        return df_arca
     except Exception as e:
         st.error(f"Errore caricamento: {e}")
         return pd.DataFrame()
 
-# --- 3. LOGIN ---
+# --- INTERFACCIA ---
 if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
 if not st.session_state["authenticated"]:
     st.title("Safit Login")
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
-    if st.button("Entra"):
-        st.session_state["authenticated"] = True
-        st.rerun()
+    if st.button("Entra"): st.session_state["authenticated"] = True; st.rerun()
     st.stop()
 
-# --- 4. PANNELLO DI CONTROLLO FILE (Solo per te) ---
-st.title("🛠 Pannello di Controllo Dati")
-file_access = 'Avanzamento_access.xlsx'
-
-if os.path.exists(file_access):
-    m_time = os.path.getmtime(file_access)
-    dt_m = datetime.fromtimestamp(m_time)
-    st.info(f"📁 **File Access rilevato!** Ultima modifica: `{dt_m.strftime('%d/%m/%Y %H:%M:%S')}`")
-    
-    # Mostriamo cosa c'è dentro veramente
-    with st.expander("👀 Anteprima grezza del file Access (Clicca per aprire)"):
-        test_df = pd.read_excel(file_access, nrows=5)
-        st.write("Prime 5 righe trovate nel file:")
-        st.dataframe(test_df)
-else:
-    st.error("❌ IL FILE 'Avanzamento_access.xlsx' NON ESISTE NELLA CARTELLA!")
-
-st.divider()
-
-# --- 5. DASHBOARD ---
 data = load_data()
 if not data.empty:
     with st.sidebar:
-        c_list = sorted(data['Cliente Fornitore CD'].unique().astype(str))
-        sel_cli = st.selectbox("Seleziona Cliente:", c_list)
-        if st.button("Esci"):
-            st.session_state["authenticated"] = False
-            st.rerun()
+        st.image('Logo SAFIT.JPG', width=200) if os.path.exists('Logo SAFIT.JPG') else None
+        clienti = sorted(data['Cliente Fornitore CD'].unique().astype(str))
+        sel_cli = st.selectbox("Seleziona Cliente", clienti)
+        if st.button("Esci"): st.session_state["authenticated"] = False; st.rerun()
 
+    st.title(f"Piano Consegne: {sel_cli}")
     df_cli = data[data['Cliente Fornitore CD'] == sel_cli].copy()
-    
-    # Calcolo match
-    match_ok = df_cli[df_cli['Art_Key_Match'].notna()].shape[0]
-    st.success(f"✅ Trovata giacenza per {match_ok} righe su {len(df_cli)} totali del cliente {sel_cli}")
+    oggi = datetime.now()
 
-    articoli = sorted(df_cli['Articolo C'].unique())
-    for art in articoli:
+    for art in sorted(df_cli['Articolo C'].unique()):
         df_art = df_cli[df_cli['Articolo C'] == art].sort_values('Data_Consegna')
-        st_gia = float(df_art['Gia'].iloc[0])
-        st_lav = float(df_art['Lavorazione_Totale'].iloc[0])
         
-        with st.expander(f"📦 {art} (Giacenza: {st_gia:,.0f})"):
+        # Scorte iniziali
+        maga = float(df_art['Magazzino'].iloc[0])
+        acq = float(df_art['Acquisti'].iloc[0])
+        prod = float(df_art['Produzione'].iloc[0])
+        descr = df_art['Articolo D'].iloc[0]
+
+        with st.expander(f"📦 {art} - {descr} (Giacenza: {maga:,.0f})"):
             for _, row in df_art.iterrows():
                 qta = float(row['Qta_Effettiva'])
-                # Logica semplificata per test
-                if st_gia >= qta:
-                    st_gia -= qta
-                    st.info(f"Pronto - Consegna: {row['Data_Consegna'].strftime('%d/%m/%Y')} | Qta: {qta}")
+                dt_cons = row['Data_Consegna']
+                
+                # LOGICA DI ASSEGNAZIONE
+                if maga >= qta:
+                    maga -= qta
+                    status, nota, css = dt_cons, "PRONTO A MAGAZZINO", "on-time-row"
+                elif (maga + acq) >= qta:
+                    # Se usiamo gli acquisti, ipotizziamo 10gg per l'arrivo
+                    acq -= (qta - maga); maga = 0
+                    status, nota, css = oggi + timedelta(days=10), "IN ARRIVO (ACQUISTI)", "acq-row"
+                elif (maga + acq + prod) >= qta:
+                    # Se usiamo la produzione, ipotizziamo 20gg
+                    prod -= (qta - maga - acq); maga = 0; acq = 0
+                    status, nota, css = oggi + timedelta(days=20), "IN PRODUZIONE", "prod-row"
                 else:
-                    st.warning(f"Da produrre - Consegna: {row['Data_Consegna'].strftime('%d/%m/%Y')} | Qta: {qta}")
+                    # Nulla di disponibile o lanciato
+                    status, nota, css = oggi + timedelta(days=35), "DA LANCIARE / MANCANTE", "urgent-row"
+
+                st.markdown(f"""
+                    <div class="status-row {css}">
+                        <span><b>{dt_cons.strftime('%d/%m/%Y')}</b> | Q.tà: {qta:,.0f}</span>
+                        <span>{nota} (Stima: {status.strftime('%d/%m/%Y')})</span>
+                    </div>
+                """, unsafe_allow_html=True)
