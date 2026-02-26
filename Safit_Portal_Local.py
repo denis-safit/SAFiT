@@ -22,11 +22,11 @@ st.markdown(f"""
         gap: 10px;
         font-size: 14px;
     }}
-    /* COLORI LOGICA SAFIT */
-    .on-time-row {{ background-color: #f1f8e9; border-left: 6px solid #4caf50; color: #1b5e20; }} /* VERDE: Pronto in tempo */
-    .client-delay-row {{ background-color: #e3f2fd; border-left: 6px solid #2196f3; color: #0d47a1; }} /* AZZURRO: Disponibile ma non ritirato */
-    .delay-row {{ background-color: #fff8e1; border-left: 6px solid #ffc107; color: #5d4037; }} /* GIALLO: In Lavorazione/Nuova Prod */
-    .prod-delay-row {{ background-color: #ffebee; border-left: 6px solid #f44336; color: #b71c1c; }} /* ROSSO: Ritardo Produzione Grave */
+    /* COLORI LOGICA SAFIT ORIGINALE */
+    .on-time-row {{ background-color: #f1f8e9; border-left: 6px solid #4caf50; color: #1b5e20; }} 
+    .client-delay-row {{ background-color: #e3f2fd; border-left: 6px solid #2196f3; color: #0d47a1; }} 
+    .delay-row {{ background-color: #fff8e1; border-left: 6px solid #ffc107; color: #5d4037; }} 
+    .prod-delay-row {{ background-color: #ffebee; border-left: 6px solid #f44336; color: #b71c1c; }} 
     
     .stExpander div {{ height: auto !important; min-height: min-content !important; }}
     .version-tag {{ font-size: 10px; color: #999; text-align: right; }}
