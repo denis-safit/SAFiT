@@ -3,7 +3,7 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta
 
-# --- 1. CONFIGURAZIONE PAGINA E VERSIONE ---
+# --- 1. CONFIGURAZIONE PAGINA E VERSIONE  ---
 APP_VERSION = "1.0.02"
 st.set_page_config(page_title=f"Safit - Portale Avanzamento {APP_VERSION}", layout="wide")
 
@@ -47,7 +47,7 @@ def load_users():
     return {'safit_admin': ['admin2026', 'TUTTI']}
 
 USER_DB = load_users()
-st.write("Utenti caricati:", list(USER_DB.keys()))
+# st.write("Utenti caricati:", list(USER_DB.keys()))
 
 def check_password():
     if "authenticated" not in st.session_state:
