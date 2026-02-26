@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 APP_VERSION = "1.0.02"
 st.set_page_config(page_title=f"Safit - Portale Avanzamento {APP_VERSION}", layout="wide")
 
+# CSS Personalizzato
 st.markdown(f"""
     <style>
     .main {{ background-color: #fcfcfc; }}
@@ -84,33 +85,41 @@ def load_data():
         # 1. Caricamento Ordini (ARCA)
         df = pd.read_excel('righe_Ordini_ARCA.xlsx', sheet_name='Foglio1', skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
+        
+        # Pulizia codici Arca
+        if 'Articolo C' in df.columns:
+            df['Articolo C'] = df['Articolo C'].astype(str).str.strip().str.upper()
+            
         for col in ['Cliente Fornitore CD', 'Articolo C', 'Articolo D', 'Data']:
             if col in df.columns: df[col] = df[col].ffill()
+            
         df['Data_Consegna'] = pd.to_datetime(df['Data'], errors='coerce')
         col_res = 'Qta Residua' if 'Qta Residua' in df.columns else 'Qta Doc'
         df['Qta_Effettiva'] = pd.to_numeric(df[col_res], errors='coerce').fillna(0)
         df = df[df['Qta_Effettiva'] > 0]
         
-        # 2. Caricamento Magazzino (Avanzamento_access.xlsx)
+        # 2. Caricamento Magazzino (Access)
         file_tech = 'Avanzamento_access.xlsx'
         if os.path.exists(file_tech):
             df_tech = pd.read_excel(file_tech, skiprows=1) 
             df_tech.columns = [str(c).strip() for c in df_tech.columns]
             
-            # Mappatura esatta basata sulla tua immagine
             if 'Codice' in df_tech.columns:
-                # Nota: 'Gia.' con il punto come nella tua immagine
+                # Pulizia codici Access
+                df_tech['Codice'] = df_tech['Codice'].astype(str).str.strip().str.upper()
+                
+                # Rinominiamo colonne (Gia. con il punto come da immagine)
                 df_tech = df_tech.rename(columns={'Codice': 'Art_Key', 'Gia.': 'Gia'})
                 
-                # Nomi esatti delle colonne in maiuscolo come da immagine
-                campi_da_sommare = ['Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS']
-                for c in ['Gia'] + campi_da_sommare:
+                # Nomi colonne produzione (Maiuscoli)
+                campi_prod = ['Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS']
+                for c in ['Gia'] + campi_prod:
                     if c in df_tech.columns: 
                         df_tech[c] = pulisci_numero(df_tech[c])
                 
-                # Calcolo Lavorazione Totale (Evitiamo KeyError)
-                df_tech['Lavorazione_Totale'] = df_tech[campi_da_sommare].sum(axis=1)
+                df_tech['Lavorazione_Totale'] = df_tech[campi_prod].sum(axis=1)
                 
+                # Unione dei dati
                 df = pd.merge(df, df_tech[['Art_Key', 'Gia', 'Lavorazione_Totale']], 
                               left_on='Articolo C', right_on='Art_Key', how='left')
         return df
@@ -122,15 +131,15 @@ def load_data():
 data = load_data()
 oggi_dt = datetime.now()
 
-# --- 4. DIAGNOSTICA (Ora protetta) ---
+# --- 4. DIAGNOSTICA (Opzionale) ---
 if not data.empty:
-    with st.expander("🔍 DIAGNOSTICA DATI (Controlla colonne e giacenze)"):
-        st.write("Colonne finali caricate:", data.columns.tolist())
+    with st.expander("🔍 DIAGNOSTICA DATI"):
+        st.write("Colonne finali:", data.columns.tolist())
         if 'Gia' in data.columns:
-            st.success("✅ Colonna 'Gia' (ex Gia.) trovata e collegata!")
+            st.success("✅ Collegamento Magazzino OK!")
             st.write(data[['Articolo C', 'Gia', 'Lavorazione_Totale']].head(10))
         else:
-            st.error("❌ Colonna 'Gia' NON collegata. Controlla che 'Codice' e 'Articolo C' corrispondano.")
+            st.error("❌ Collegamento Magazzino FALLITO (Nessun match tra Codice e Articolo C)")
 
 # --- 5. SIDEBAR ---
 with st.sidebar:
@@ -144,13 +153,14 @@ with st.sidebar:
         sel_cli = st.selectbox("👤 Seleziona Cliente:", c_list)
     else: sel_cli = st.session_state["user_type"]
     
-    filtro_label = st.radio("Filtra per stato:", ["Mostra tutto", "Solo Disponibili", "In Lavorazione", "In Ritardo"])
+    filtro_label = st.radio("Stato ordini:", ["Mostra tutto", "Solo Disponibili", "In Lavorazione", "In Ritardo"])
     if st.button("Logout"):
         st.session_state["authenticated"] = False
         st.rerun()
 
 # --- 6. INTERFACCIA CENTRALE ---
 st.title("Portale Avanzamento Produzione")
+
 if not data.empty:
     df_cli = data[data['Cliente Fornitore CD'] == sel_cli].copy()
 
@@ -163,7 +173,7 @@ if not data.empty:
             df_art = df_cli[df_cli['Articolo C'] == art].sort_values('Data_Consegna')
             desc = df_art['Articolo D'].iloc[0] if 'Articolo D' in df_art.columns else ""
             
-            # Recupero Giacenza e Lavorazione
+            # Valori base
             st_gia = float(df_art['Gia'].iloc[0]) if 'Gia' in df_art.columns and pd.notnull(df_art['Gia'].iloc[0]) else 0.0
             st_lav = float(df_art['Lavorazione_Totale'].iloc[0]) if 'Lavorazione_Totale' in df_art.columns and pd.notnull(df_art['Lavorazione_Totale'].iloc[0]) else 0.0
 
@@ -172,6 +182,7 @@ if not data.empty:
                 qta = float(row['Qta_Effettiva'])
                 req_date = row['Data_Consegna']
                 
+                # LOGICA DISPONIBILITÀ
                 if st_gia >= qta:
                     st_gia -= qta
                     eta, nota, cat = oggi_dt, "Pronto", "DISP"
@@ -181,20 +192,21 @@ if not data.empty:
                 else:
                     eta, nota, cat = aggiungi_giorni_lavorativi(oggi_dt, 25), "Nuova Produzione", "PROD"
 
-                rit = (pd.notnull(req_date) and eta.date() > req_date.date())
+                ritardo = (pd.notnull(req_date) and eta.date() > req_date.date())
                 
+                # Colore CSS
                 if cat == "DISP":
-                    css = "on-time-row" if not rit else "client-delay-row"
+                    css = "on-time-row" if not ritardo else "client-delay-row"
                 else:
                     css = "delay-row"
 
-                # Filtro
-                ok = (filtro_label == "Mostra tutto") or \
-                     (filtro_label == "Solo Disponibili" and cat == "DISP") or \
-                     (filtro_label == "In Lavorazione" and cat == "LAV") or \
-                     (filtro_label == "In Ritardo" and rit)
+                # Filtro applicato
+                passa = (filtro_label == "Mostra tutto") or \
+                        (filtro_label == "Solo Disponibili" and cat == "DISP") or \
+                        (filtro_label == "In Lavorazione" and cat == "LAV") or \
+                        (filtro_label == "In Ritardo" and ritardo)
 
-                if ok:
+                if passa:
                     righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota})
 
             if righe_mostra:
@@ -202,4 +214,4 @@ if not data.empty:
                     for r in righe_mostra:
                         st.markdown(f'<div class="status-row {r["css"]}"><span><b>Consegna:</b> {r["date"].strftime("%d/%m/%Y") if pd.notnull(r["date"]) else "N/D"} | <b>Q.tà:</b> {r["qta"]:,.0f}</span><span><b>Stima:</b> {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span></div>', unsafe_allow_html=True)
 else:
-    st.warning("Nessun dato caricato. Controlla i file Excel!")
+    st.warning("⚠️ Nessun dato disponibile. Controlla i file Excel!")
