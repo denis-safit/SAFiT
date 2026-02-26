@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURAZIONE PAGINA E VERSIONE ---
-APP_VERSION = "1.0.08"
+APP_VERSION = "1.0.09"
 st.set_page_config(page_title=f"Safit - Portale Avanzamento {APP_VERSION}", layout="wide")
 
 st.markdown(f"""
@@ -12,17 +12,24 @@ st.markdown(f"""
     .main {{ background-color: #fcfcfc; }}
     .stApp {{ margin-top: -30px; }}
     
-    /* Pillola Ingrandita (Doppia dimensione) */
-    .pill-container {{
+    /* Container per allineare Codice e Pillola sullo stesso livello */
+    .row-header {{
         display: flex;
+        justify-content: space-between;
         align-items: center;
-        gap: 10px;
+        padding: 5px 10px;
+        background: #eeeeee;
+        border-radius: 8px 8px 0 0;
+        border: 1px solid #ccc;
+        border-bottom: none;
     }}
+
+    /* Pillola Grande (Dimensione 1.0.08) */
     .pill-bg {{
         background-color: #ddd;
         border-radius: 12px;
-        width: 160px; /* Raddoppiata */
-        height: 24px; /* Ingrandita */
+        width: 160px;
+        height: 24px;
         border: 1px solid #bbb;
         position: relative;
         flex-shrink: 0;
@@ -35,7 +42,7 @@ st.markdown(f"""
     .pill-text {{
         position: absolute;
         top: 0; left: 0; width: 100%;
-        font-size: 14px; /* Più leggibile */
+        font-size: 14px;
         font-weight: bold;
         line-height: 22px;
         text-align: center;
@@ -54,7 +61,7 @@ st.markdown(f"""
         font-size: 13px;
     }}
     
-    /* COLORI LOGICA SAFIT (BLINDATI v1.0.02) */
+    /* LOGICA FILTRI SAFIT (BLINDATA v1.0.02) */
     .on-time-row {{ background-color: #f1f8e9; border-left: 6px solid #4caf50; color: #1b5e20; }}
     .client-delay-row {{ background-color: #e3f2fd; border-left: 6px solid #2196f3; color: #0d47a1; }}
     .delay-row {{ background-color: #fff8e1; border-left: 6px solid #ffc107; color: #5d4037; }}
@@ -64,7 +71,7 @@ st.markdown(f"""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. GESTIONE UTENTI ---
+# --- 2. GESTIONE UTENTI (BLINDATA) ---
 @st.cache_data
 def load_users():
     file_u = 'utenti.xlsx'
@@ -141,7 +148,10 @@ with st.sidebar:
         clienti_list = sorted([str(x) for x in data['Cliente Fornitore CD'].unique()])
         sel_cli = st.selectbox("👤 Seleziona Cliente:", clienti_list)
     else: sel_cli = st.session_state["user_type"]
+    
+    # FILTRO RIPRISTINATO E BLINDATO
     filtro_label = st.radio("Filtra per stato:", ["Mostra tutto", "Solo Disponibili", "In Lavorazione", "In Ritardo"])
+    
     if st.button("Logout"):
         st.session_state["authenticated"] = False
         st.rerun()
@@ -166,7 +176,7 @@ if not df_cli.empty:
             qta, req_date = float(row['Qta_Effettiva']), row['Data_Consegna']
             settimane = ((req_date - oggi_dt).days / 7) if pd.notnull(req_date) else 99
 
-            # LOGICA STEP (Percentuale)
+            # LOGICA PERCENTUALE
             pct, cat_core = 10, "LAVORAZIONE"
             if st_gia >= qta: pct, cat_core = 100, "DISPONIBILE"; st_gia -= qta
             elif st_trs > 0: pct = 75
@@ -175,7 +185,6 @@ if not df_cli.empty:
             elif st_grz > 0: pct = 30
             elif settimane <= 4: pct = 20
             
-            # STIMA CONSEGNA E RITARDO
             eta = oggi_dt if pct == 100 else (aggiungi_giorni_lavorativi(oggi_dt, 10) if pct >= 50 else aggiungi_giorni_lavorativi(oggi_dt, 25))
             is_ritardo = (pd.notnull(req_date) and eta.date() > req_date.date())
             
@@ -195,22 +204,21 @@ if not df_cli.empty:
 
         if righe_mostra:
             current_pct = righe_mostra[0]['pct']
-            # Header Expander: Codice + Descrizione + Pillola Grande
-            header_label = f"📦 {art} — {desc} | {current_pct}%"
             
-            with st.expander(header_label):
-                # Visualizzazione della Pillola Grafica Grande come prima cosa dentro l'expander
-                st.markdown(f'''
-                    <div class="pill-container">
-                        <span style="font-size: 14px; font-weight: bold;">Avanzamento:</span>
-                        <div class="pill-bg">
-                            <div class="pill-fill" style="width: {current_pct}%;"></div>
-                            <div class="pill-text">{current_pct}%</div>
-                        </div>
+            # --- HEADER PERSONALIZZATO (Sopra l'expander) ---
+            # Questo garantisce che la pillola sia a fianco del codice e non dentro il dettaglio
+            st.markdown(f"""
+                <div class="row-header">
+                    <span>📦 <b>{art}</b> — <small>{desc}</small></span>
+                    <div class="pill-bg">
+                        <div class="pill-fill" style="width: {current_pct}%;"></div>
+                        <div class="pill-text">{current_pct}%</div>
                     </div>
-                    <hr style="margin: 10px 0;">
-                ''', unsafe_allow_html=True)
-                
+                </div>
+            """, unsafe_allow_html=True)
+            
+            # Expander senza etichetta (usa solo l'icona) per mostrare i dettagli
+            with st.expander("Clicca qui per i dettagli consegna"):
                 for r in righe_mostra:
                     st.markdown(f'''
                         <div class="status-row {r["css"]}">
@@ -218,3 +226,4 @@ if not df_cli.empty:
                             <span><b>Stima:</b> {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span>
                         </div>
                     ''', unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True) # Spazio tra articoli
