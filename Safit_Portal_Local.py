@@ -167,41 +167,59 @@ def load_data():
         col_res = 'Qta Residua' if 'Qta Residua' in df.columns else 'Qta Doc'
         df['Qta_Effettiva'] = pd.to_numeric(df[col_res], errors='coerce').fillna(0)
         df = df[df['Qta_Effettiva'] > 0]
+        # Normalizza chiave join: strip + uppercase
+        df['Articolo C'] = df['Articolo C'].astype(str).str.strip().str.upper()
 
         if os.path.exists(file_acc):
             df_t = pd.read_excel(file_acc, skiprows=1)
             df_t.columns = [str(c).strip() for c in df_t.columns]
-            if 'Codice' in df_t.columns:
-                df_t = df_t.rename(columns={'Codice': 'Art_Key'})
-                df_t['Art_Key'] = df_t['Art_Key'].astype(str).str.strip()
 
-                # Pulisci tutte le colonne numeriche presenti
-                campi_num = ['Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']
-                for c in campi_num:
-                    if c in df_t.columns:
-                        df_t[c] = pulisci_numero(df_t[c])
-                    else:
-                        df_t[c] = 0.0  # colonna assente → zero, evita errori nel calcolo
+            # Cerca colonna codice con nomi alternativi
+            col_codice = None
+            for possibile in ['Codice', 'CODICE', 'Cod', 'COD', 'Art_Key', 'Articolo']:
+                if possibile in df_t.columns:
+                    col_codice = possibile
+                    break
+            if col_codice is None and len(df_t.columns) > 0:
+                col_codice = df_t.columns[0]  # usa la prima colonna come fallback
 
-                # Lavorazione = somma di tutti i materiali in attesa / lavorazione
-                df_t['Lavorazione_Totale'] = (
-                    df_t['Acq'] + df_t['Lan'] + df_t['Grz'] +
-                    df_t['Tmp'] + df_t['Rwi'] + df_t['Trs']
-                )
+            df_t = df_t.rename(columns={col_codice: 'Art_Key'})
+            # Normalizza chiave join: strip + uppercase (stesso trattamento di Articolo C)
+            df_t['Art_Key'] = df_t['Art_Key'].astype(str).str.strip().str.upper()
 
-                df = pd.merge(
-                    df,
-                    df_t[['Art_Key', 'Gia', 'Lavorazione_Totale']],
-                    left_on='Articolo C', right_on='Art_Key', how='left'
-                )
+            # Pulisci tutte le colonne numeriche presenti
+            campi_num = ['Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']
+            for c in campi_num:
+                if c in df_t.columns:
+                    df_t[c] = pulisci_numero(df_t[c])
+                else:
+                    df_t[c] = 0.0
 
-                # Dopo il merge i NaN = articoli senza scheda tecnica → 0
-                df['Gia']               = df['Gia'].fillna(0)
-                df['Lavorazione_Totale'] = df['Lavorazione_Totale'].fillna(0)
+            # Lavorazione = somma di tutti i materiali in attesa / lavorazione
+            df_t['Lavorazione_Totale'] = (
+                df_t['Acq'] + df_t['Lan'] + df_t['Grz'] +
+                df_t['Tmp'] + df_t['Rwi'] + df_t['Trs']
+            )
+
+            # Salva snapshot pre-merge per debug
+            df._debug_avanzamento = df_t[['Art_Key', 'Gia', 'Lavorazione_Totale']].copy()
+            df._debug_col_codice  = col_codice
+
+            df = pd.merge(
+                df,
+                df_t[['Art_Key', 'Gia', 'Lavorazione_Totale']],
+                left_on='Articolo C', right_on='Art_Key', how='left'
+            )
+
+            # Dopo il merge i NaN = articoli senza scheda tecnica → 0
+            df['Gia']                = df['Gia'].fillna(0)
+            df['Lavorazione_Totale'] = df['Lavorazione_Totale'].fillna(0)
 
         return df
     except Exception as e:
         st.error("Errore caricamento dati: " + str(e))
+        import traceback
+        st.code(traceback.format_exc())
         return pd.DataFrame()
 
 data    = load_data()
@@ -340,25 +358,44 @@ df_cli = data[data['Cliente Fornitore CD'] == sel_cli].copy()
 
 # --- DEBUG PANEL ---
 if debug_mode:
-    st.warning("🔧 **Modalità Debug attiva** — valori letti da Avanzamento_access.xlsx")
-    if 'Gia' in data.columns and 'Articolo C' in data.columns:
-        df_debug = (
-            data[['Articolo C', 'Gia', 'Lavorazione_Totale']]
-            .drop_duplicates(subset='Articolo C')
-            .sort_values('Articolo C')
-            .reset_index(drop=True)
-        )
-        df_debug_cli = df_debug[df_debug['Articolo C'].isin(df_cli['Articolo C'].unique())]
-        st.dataframe(
-            df_debug_cli.rename(columns={
-                'Articolo C': 'Codice Articolo',
-                'Gia': 'Giacenza (letta)',
-                'Lavorazione_Totale': 'Lavorazione (letta)'
-            }),
-            use_container_width=True,
-            hide_index=True
-        )
-        st.caption("Se Giacenza letta e 0 il problema e nel formato del file Excel o nel nome colonna.")
+    st.warning("🔧 **Modalità Debug attiva**")
+
+    tab1, tab2, tab3 = st.tabs(["📋 Dopo merge (risultato)", "🔑 Chiavi Avanzamento (pre-merge)", "🔑 Chiavi Ordini (pre-merge)"])
+
+    with tab1:
+        st.caption("Valori Giacenza e Lavorazione che il portale sta usando. Se sono 0, il merge non ha trovato corrispondenza.")
+        if 'Gia' in data.columns:
+            df_dbg = (
+                data[['Articolo C', 'Gia', 'Lavorazione_Totale']]
+                .drop_duplicates(subset='Articolo C')
+                .sort_values('Articolo C')
+            )
+            df_dbg_cli = df_dbg[df_dbg['Articolo C'].isin(df_cli['Articolo C'].unique())]
+            st.dataframe(df_dbg_cli.rename(columns={
+                'Articolo C':'Codice (in ordini)',
+                'Gia':'Giacenza', 'Lavorazione_Totale':'Lavorazione'}),
+                use_container_width=True, hide_index=True)
+
+    with tab2:
+        st.caption("Codici ESATTI letti da Avanzamento_access.xlsx (dopo strip+uppercase). Devono corrispondere alla colonna a sinistra.")
+        if hasattr(data, '_debug_avanzamento'):
+            st.dataframe(data._debug_avanzamento.head(50), use_container_width=True, hide_index=True)
+            st.caption("Colonna codice usata: " + str(getattr(data, '_debug_col_codice', '?')))
+        else:
+            st.info("Dati pre-merge non disponibili (ricarica la pagina con cache pulita).")
+            files = os.listdir('.')
+            file_acc = next((f for f in files if f.lower() == 'avanzamento_access.xlsx'), None)
+            if file_acc:
+                df_raw = pd.read_excel(file_acc, skiprows=1, nrows=5)
+                df_raw.columns = [str(c).strip() for c in df_raw.columns]
+                st.write("Colonne trovate:", list(df_raw.columns))
+                st.write("Prime 5 righe grezze:")
+                st.dataframe(df_raw, use_container_width=True)
+
+    with tab3:
+        st.caption("Codici ESATTI negli ordini del cliente selezionato (dopo strip+uppercase).")
+        art_cli = sorted(df_cli['Articolo C'].unique())
+        st.write(art_cli[:30])
 
 if df_cli.empty:
     st.info("Nessun dato disponibile per il cliente selezionato.")
@@ -453,3 +490,7 @@ for art in articoli_view:
             )
             st.markdown(html_timeline(r['step_idx']), unsafe_allow_html=True)
             st.markdown('<hr class="slim">', unsafe_allow_html=True)
+
+
+
+
