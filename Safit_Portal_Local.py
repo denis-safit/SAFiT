@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURAZIONE PAGINA E VERSIONE ---
-APP_VERSION = "1.0.02"
+APP_VERSION = "1.0.01"
 st.set_page_config(page_title=f"Safit - Portale Avanzamento {APP_VERSION}", layout="wide")
 
 st.markdown(f"""
@@ -22,12 +22,9 @@ st.markdown(f"""
         gap: 10px;
         font-size: 14px;
     }}
-    /* COLORI LOGICA SAFIT */
-    .on-time-row {{ background-color: #f1f8e9; border-left: 6px solid #4caf50; color: #1b5e20; }} /* VERDE: Pronto in tempo */
-    .client-delay-row {{ background-color: #e3f2fd; border-left: 6px solid #2196f3; color: #0d47a1; }} /* AZZURRO: Disponibile ma non ritirato */
-    .delay-row {{ background-color: #fff8e1; border-left: 6px solid #ffc107; color: #5d4037; }} /* GIALLO: In Lavorazione/Nuova Prod */
-    .prod-delay-row {{ background-color: #ffebee; border-left: 6px solid #f44336; color: #b71c1c; }} /* ROSSO: Ritardo Produzione Grave */
-    
+    .delay-row {{ background-color: #fff8e1; border-left: 6px solid #ffc107; color: #5d4037; }}
+    .on-time-row {{ background-color: #f1f8e9; border-left: 6px solid #4caf50; color: #1b5e20; }}
+    .client-delay-row {{ background-color: #e3f2fd; border-left: 6px solid #2196f3; color: #0d47a1; }}
     .stExpander div {{ height: auto !important; min-height: min-content !important; }}
     .version-tag {{ font-size: 10px; color: #999; text-align: right; }}
     </style>
@@ -102,6 +99,7 @@ def load_data():
                 for c in campi_num:
                     if c in df_tech.columns: df_tech[c] = pulisci_numero(df_tech[c])
                 
+                # Somma ACQ + tutti gli step di produzione (LAN, GRZ, TMP, RWI, TRS)
                 df_tech['Lavorazione_Totale'] = df_tech.get('Acq', 0) + df_tech.get('Lan', 0) + \
                                                df_tech.get('Grz', 0) + df_tech.get('Tmp', 0) + \
                                                df_tech.get('Rwi', 0) + df_tech.get('Trs', 0)
@@ -114,7 +112,7 @@ def load_data():
 data = load_data()
 oggi_dt = datetime.now()
 
-# --- 4. SIDEBAR ---
+# --- 4. SIDEBAR E FILTRI ---
 with st.sidebar:
     if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
     st.write(f"Utente: **{st.session_state['username']}**")
@@ -125,12 +123,12 @@ with st.sidebar:
         sel_cli = st.selectbox("👤 Seleziona Cliente:", clienti_list)
     else: sel_cli = st.session_state["user_type"]
     
-    filtro_label = st.radio("Filtra per stato:", ["Mostra tutto", "Solo Disponibili", "In Lavorazione", "In Ritardo"])
+    filtro_label = st.radio("Stato ordini:", ["Mostra tutto", "Solo Disponibili", "In Lavorazione", "In Ritardo"])
     if st.button("Logout"):
         st.session_state["authenticated"] = False
         st.rerun()
 
-# --- 5. LOGICA CENTRALE ---
+# --- 5. INTERFACCIA CENTRALE ---
 st.title("🚜 Portale Avanzamento Produzione")
 df_cli = data[data['Cliente Fornitore CD'] == sel_cli].copy()
 
@@ -151,29 +149,23 @@ if not df_cli.empty:
             qta = float(row['Qta_Effettiva'])
             req_date = row['Data_Consegna']
             
-            # --- DETERMINAZIONE STATO ---
+            # --- LOGICA SAFIT ---
             if st_gia >= qta:
                 st_gia -= qta
                 eta, nota, cat_core = oggi_dt, "Pronto", "DISPONIBILE"
             elif (st_gia + st_lav) >= qta:
-                st_gia = 0
+                st_gia = 0 # la giacenza è finita
                 eta, nota, cat_core = aggiungi_giorni_lavorativi(oggi_dt, 10), "In Lavorazione", "LAVORAZIONE"
             else:
                 eta, nota, cat_core = aggiungi_giorni_lavorativi(oggi_dt, 25), "Nuova Produzione", "LAVORAZIONE"
 
             is_ritardo = (pd.notnull(req_date) and eta.date() > req_date.date())
             
-            # --- ASSEGNAZIONE COLORI E TESTI SPECIFICI ---
+            # Colore box
             if cat_core == "DISPONIBILE":
-                if is_ritardo:
-                    css, nota_display = "client-delay-row", "Pronto (Ritardo Ritiro)"
-                else:
-                    css, nota_display = "on-time-row", "Pronto"
-            else: # LAVORAZIONE o NUOVA PROD
-                if is_ritardo:
-                    css, nota_display = "prod-delay-row", f"{nota} (In Ritardo)"
-                else:
-                    css, nota_display = "delay-row", nota
+                css = "on-time-row" if not is_ritardo else "client-delay-row"
+            else:
+                css = "delay-row"
 
             # --- FILTRO ---
             passa = False
@@ -183,10 +175,9 @@ if not df_cli.empty:
             elif filtro_label == "In Ritardo" and is_ritardo: passa = True
 
             if passa:
-                righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota_display})
+                righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota})
 
         if righe_mostra:
             with st.expander(f"📦 {art} — {desc} | Residuo: {df_art['Qta_Effettiva'].sum():,.0f}"):
                 for r in righe_mostra:
                     st.markdown(f'<div class="status-row {r["css"]}"><span><b>Consegna:</b> {r["date"].strftime("%d/%m/%Y") if pd.notnull(r["date"]) else "N.D."} | <b>Q.tà:</b> {r["qta"]:,.0f}</span><span><b>Stima:</b> {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span></div>', unsafe_allow_html=True)
-
