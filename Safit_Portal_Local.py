@@ -131,14 +131,34 @@ def aggiungi_gg_lav(data_inizio, giorni):
     return d
 
 def pulisci_numero(serie):
+    """
+    Gestisce tutti i formati numerici italiani:
+    - "20.001,00" (stringa con punto migliaia e virgola decimale)
+    - "20001.00"  (float già convertito da pandas)
+    - 20001       (intero)
+    - NaN / None
+    """
+    # Se la serie è già numerica (pandas ha già fatto il parsing), ritorna direttamente
+    if pd.api.types.is_numeric_dtype(serie):
+        return serie.fillna(0)
+    # Altrimenti tratta come stringa italiana: rimuovi punto migliaia, converti virgola→punto
     return pd.to_numeric(
-        serie.astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False),
-        errors='coerce').fillna(0)
+        serie.astype(str)
+             .str.strip()
+             .str.replace('.', '', regex=False)   # rimuove separatore migliaia
+             .str.replace(',', '.', regex=False),  # virgola decimale → punto
+        errors='coerce'
+    ).fillna(0)
 
 @st.cache_data
 def load_data():
     try:
-        df = pd.read_excel('righe_Ordini_ARCA.xlsx', sheet_name='Foglio1', skiprows=2)
+        # --- Ricerca file case-insensitive (compatibile Linux/GitHub) ---
+        files = os.listdir('.')
+        file_arca = next((f for f in files if f.lower() == 'righe_ordini_arca.xlsx'), 'righe_Ordini_ARCA.xlsx')
+        file_acc  = next((f for f in files if f.lower() == 'avanzamento_access.xlsx'), 'Avanzamento_access.xlsx')
+
+        df = pd.read_excel(file_arca, sheet_name='Foglio1', skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
         for col in ['Cliente Fornitore CD', 'Articolo C', 'Articolo D', 'Data']:
             if col in df.columns:
@@ -148,21 +168,40 @@ def load_data():
         df['Qta_Effettiva'] = pd.to_numeric(df[col_res], errors='coerce').fillna(0)
         df = df[df['Qta_Effettiva'] > 0]
 
-        if os.path.exists('Avanzamento_access.xlsx'):
-            df_t = pd.read_excel('Avanzamento_access.xlsx', skiprows=1)
+        if os.path.exists(file_acc):
+            df_t = pd.read_excel(file_acc, skiprows=1)
             df_t.columns = [str(c).strip() for c in df_t.columns]
             if 'Codice' in df_t.columns:
                 df_t = df_t.rename(columns={'Codice': 'Art_Key'})
-                for c in ['Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']:
+                df_t['Art_Key'] = df_t['Art_Key'].astype(str).str.strip()
+
+                # Pulisci tutte le colonne numeriche presenti
+                campi_num = ['Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']
+                for c in campi_num:
                     if c in df_t.columns:
                         df_t[c] = pulisci_numero(df_t[c])
+                    else:
+                        df_t[c] = 0.0  # colonna assente → zero, evita errori nel calcolo
+
+                # Lavorazione = somma di tutti i materiali in attesa / lavorazione
                 df_t['Lavorazione_Totale'] = (
-                    df_t.get('Acq', 0) + df_t.get('Lan', 0) + df_t.get('Grz', 0) +
-                    df_t.get('Tmp', 0) + df_t.get('Rwi', 0) + df_t.get('Trs', 0))
-                df = pd.merge(df, df_t[['Art_Key', 'Gia', 'Lavorazione_Totale']],
-                              left_on='Articolo C', right_on='Art_Key', how='left')
+                    df_t['Acq'] + df_t['Lan'] + df_t['Grz'] +
+                    df_t['Tmp'] + df_t['Rwi'] + df_t['Trs']
+                )
+
+                df = pd.merge(
+                    df,
+                    df_t[['Art_Key', 'Gia', 'Lavorazione_Totale']],
+                    left_on='Articolo C', right_on='Art_Key', how='left'
+                )
+
+                # Dopo il merge i NaN = articoli senza scheda tecnica → 0
+                df['Gia']               = df['Gia'].fillna(0)
+                df['Lavorazione_Totale'] = df['Lavorazione_Totale'].fillna(0)
+
         return df
-    except:
+    except Exception as e:
+        st.error("Errore caricamento dati: " + str(e))
         return pd.DataFrame()
 
 data    = load_data()
@@ -289,6 +328,8 @@ with st.sidebar:
         sel_cli = st.session_state['user_type']
 
     filtro_label = st.radio("Filtra per stato:", ["Mostra tutto", "Solo Disponibili", "In Lavorazione", "In Ritardo"])
+    st.markdown("---")
+    debug_mode = st.checkbox("🔧 Debug giacenze", value=False, help="Mostra i valori grezzi letti da Avanzamento_access.xlsx")
     if st.button("Logout"):
         st.session_state['authenticated'] = False
         st.rerun()
@@ -296,6 +337,28 @@ with st.sidebar:
 # --- 7. MAIN ---
 st.title("🚜 Portale Avanzamento Produzione")
 df_cli = data[data['Cliente Fornitore CD'] == sel_cli].copy()
+
+# --- DEBUG PANEL ---
+if debug_mode:
+    st.warning("🔧 **Modalità Debug attiva** — valori letti da Avanzamento_access.xlsx")
+    if 'Gia' in data.columns and 'Articolo C' in data.columns:
+        df_debug = (
+            data[['Articolo C', 'Gia', 'Lavorazione_Totale']]
+            .drop_duplicates(subset='Articolo C')
+            .sort_values('Articolo C')
+            .reset_index(drop=True)
+        )
+        df_debug_cli = df_debug[df_debug['Articolo C'].isin(df_cli['Articolo C'].unique())]
+        st.dataframe(
+            df_debug_cli.rename(columns={
+                'Articolo C': 'Codice Articolo',
+                'Gia': 'Giacenza (letta)',
+                'Lavorazione_Totale': 'Lavorazione (letta)'
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+        st.caption("Se Giacenza letta e 0 il problema e nel formato del file Excel o nel nome colonna.")
 
 if df_cli.empty:
     st.info("Nessun dato disponibile per il cliente selezionato.")
@@ -390,5 +453,3 @@ for art in articoli_view:
             )
             st.markdown(html_timeline(r['step_idx']), unsafe_allow_html=True)
             st.markdown('<hr class="slim">', unsafe_allow_html=True)
-
-
