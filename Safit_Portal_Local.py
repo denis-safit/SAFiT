@@ -49,27 +49,22 @@ def load_users():
 USER_DB = load_users()
 
 def check_password():
-    # Inizializziamo sempre le variabili per evitare il KeyError che hai visto
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
-        st.session_state["username"] = ""
 
     if not st.session_state["authenticated"]:
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', width=300)
             st.title("Accesso Area Riservata")
-            # Usiamo .strip() per pulire l'input da tastiera
+            # Puliamo l'input da tastiera
             user_input = st.text_input("Username").strip()
             pw_input = st.text_input("Password", type="password").strip()
             
             if st.button("Accedi"):
-                # Carichiamo gli utenti e puliamo anche i dati che arrivano dal file Excel
+                # Puliamo i dati che arrivano dal file Excel (USER_DB)
                 for db_user, info in USER_DB.items():
-                    clean_db_user = str(db_user).strip()
-                    clean_db_pw = str(info[0]).strip()
-                    
-                    if clean_db_user == user_input and clean_db_pw == pw_input:
+                    if str(db_user).strip() == user_input and str(info[0]).strip() == pw_input:
                         st.session_state["authenticated"] = True
                         st.session_state["user_type"] = info[1]
                         st.session_state["username"] = user_input
@@ -78,6 +73,9 @@ def check_password():
                 st.error("Username o Password errati")
         return False
     return True
+
+# Blocca l'esecuzione qui se non loggato
+if not check_password(): st.stop()
 
 # --- 4. SIDEBAR (Ora è protetta dal KeyError) ---
 with st.sidebar:
