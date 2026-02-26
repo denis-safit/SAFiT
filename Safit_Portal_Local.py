@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURAZIONE PAGINA E VERSIONE ---
-APP_VERSION = "1.0.03"
+APP_VERSION = "1.0.02"
 st.set_page_config(page_title=f"Safit - Portale Avanzamento {APP_VERSION}", layout="wide")
 
 st.markdown(f"""
@@ -22,16 +22,18 @@ st.markdown(f"""
         gap: 10px;
         font-size: 14px;
     }}
-    .on-time-row {{ background-color: #f1f8e9; border-left: 6px solid #4caf50; color: #1b5e20; }} 
-    .client-delay-row {{ background-color: #e3f2fd; border-left: 6px solid #2196f3; color: #0d47a1; }} 
-    .delay-row {{ background-color: #fff8e1; border-left: 6px solid #ffc107; color: #5d4037; }} 
-    .prod-delay-row {{ background-color: #ffebee; border-left: 6px solid #f44336; color: #b71c1c; }} 
+    /* COLORI LOGICA SAFIT */
+    .on-time-row {{ background-color: #f1f8e9; border-left: 6px solid #4caf50; color: #1b5e20; }} /* VERDE: Pronto in tempo */
+    .client-delay-row {{ background-color: #e3f2fd; border-left: 6px solid #2196f3; color: #0d47a1; }} /* AZZURRO: Disponibile ma non ritirato */
+    .delay-row {{ background-color: #fff8e1; border-left: 6px solid #ffc107; color: #5d4037; }} /* GIALLO: In Lavorazione/Nuova Prod */
+    .prod-delay-row {{ background-color: #ffebee; border-left: 6px solid #f44336; color: #b71c1c; }} /* ROSSO: Ritardo Produzione Grave */
+    
     .stExpander div {{ height: auto !important; min-height: min-content !important; }}
     .version-tag {{ font-size: 10px; color: #999; text-align: right; }}
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. GESTIONE UTENTI (Versione Protetta) ---
+# --- 2. GESTIONE UTENTI ---
 @st.cache_data
 def load_users():
     file_u = 'utenti.xlsx'
@@ -45,7 +47,6 @@ def load_users():
     return {'safit_admin': ['admin2026', 'TUTTI']}
 
 USER_DB = load_users()
-# st.write("Utenti caricati:", list(USER_DB.keys())) # Rimuovi # per debug
 
 def check_password():
     if "authenticated" not in st.session_state:
@@ -55,28 +56,27 @@ def check_password():
         with col2:
             if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', width=300)
             st.title("Accesso Area Riservata")
-            u_in = st.text_input("Username").strip()
-            p_in = st.text_input("Password", type="password").strip()
+            user = st.text_input("Username")
+            pw = st.text_input("Password", type="password")
             if st.button("Accedi"):
-                for db_u, info in USER_DB.items():
-                    if str(db_u).strip() == u_in and str(info[0]).strip() == p_in:
-                        st.session_state["authenticated"] = True
-                        st.session_state["user_type"] = info[1]
-                        st.session_state["username"] = u_in
-                        st.rerun()
-                st.error("Username o Password errati")
+                if user in USER_DB and str(USER_DB[user][0]) == pw:
+                    st.session_state["authenticated"] = True
+                    st.session_state["user_type"] = USER_DB[user][1]
+                    st.session_state["username"] = user
+                    st.rerun()
+                else: st.error("Username o Password errati")
         return False
     return True
 
 if not check_password(): st.stop()
 
 # --- 3. FUNZIONI TECNICHE ---
-def aggiungi_giorni_lavorativi(start_date, days):
-    curr = start_date
-    while days > 0:
-        curr += timedelta(days=1)
-        if curr.weekday() < 5: days -= 1
-    return curr
+def aggiungi_giorni_lavorativi(data_inizio, giorni):
+    data_corrente = data_inizio
+    while giorni > 0:
+        data_corrente += timedelta(days=1)
+        if data_corrente.weekday() < 5: giorni -= 1
+    return data_corrente
 
 def pulisci_numero(serie):
     return pd.to_numeric(serie.astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False), errors='coerce').fillna(0)
@@ -89,89 +89,103 @@ def load_data():
         for col in ['Cliente Fornitore CD', 'Articolo C', 'Articolo D', 'Data']:
             if col in df.columns: df[col] = df[col].ffill()
         df['Data_Consegna'] = pd.to_datetime(df['Data'], errors='coerce')
-        c_res = 'Qta Residua' if 'Qta Residua' in df.columns else 'Qta Doc'
-        df['Qta_Effettiva'] = pd.to_numeric(df[c_res], errors='coerce').fillna(0)
+        col_res = 'Qta Residua' if 'Qta Residua' in df.columns else 'Qta Doc'
+        df['Qta_Effettiva'] = pd.to_numeric(df[col_res], errors='coerce').fillna(0)
         df = df[df['Qta_Effettiva'] > 0]
         
         if os.path.exists('Avanzamento_access.xlsx'):
-            df_t = pd.read_excel('Avanzamento_access.xlsx', skiprows=1) 
-            df_t.columns = [str(c).strip() for c in df_t.columns]
-            if 'Codice' in df_t.columns:
-                df_t = df_t.rename(columns={'Codice': 'Art_Key'})
-                for c in ['Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']:
-                    if c in df_t.columns: df_t[c] = pulisci_numero(df_t[c])
-                df_t['Lav_Tot'] = df_t.get('Acq', 0) + df_t.get('Lan', 0) + df_t.get('Grz', 0) + \
-                                 df_t.get('Tmp', 0) + df_t.get('Rwi', 0) + df_t.get('Trs', 0)
-                df = pd.merge(df, df_t[['Art_Key', 'Gia', 'Lav_Tot']], left_on='Articolo C', right_on='Art_Key', how='left')
+            df_tech = pd.read_excel('Avanzamento_access.xlsx', skiprows=1) 
+            df_tech.columns = [str(c).strip() for c in df_tech.columns]
+            if 'Codice' in df_tech.columns:
+                df_tech = df_tech.rename(columns={'Codice': 'Art_Key'})
+                campi_num = ['Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']
+                for c in campi_num:
+                    if c in df_tech.columns: df_tech[c] = pulisci_numero(df_tech[c])
+                
+                df_tech['Lavorazione_Totale'] = df_tech.get('Acq', 0) + df_tech.get('Lan', 0) + \
+                                               df_tech.get('Grz', 0) + df_tech.get('Tmp', 0) + \
+                                               df_tech.get('Rwi', 0) + df_tech.get('Trs', 0)
+                
+                df = pd.merge(df, df_tech[['Art_Key', 'Gia', 'Lavorazione_Totale']], 
+                              left_on='Articolo C', right_on='Art_Key', how='left')
         return df
     except: return pd.DataFrame()
 
 data = load_data()
-oggi = datetime.now()
+oggi_dt = datetime.now()
 
 # --- 4. SIDEBAR ---
 with st.sidebar:
     if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
-    if st.session_state.get("username"):
-        st.write(f"Utente: **{st.session_state['username']}**")
+    st.write(f"Utente: **{st.session_state['username']}**")
     st.markdown(f'<p class="version-tag">Versione: {APP_VERSION}</p>', unsafe_allow_html=True)
     
     if st.session_state["user_type"] == "TUTTI":
-        c_list = sorted([str(x) for x in data['Cliente Fornitore CD'].unique()])
-        sel_cli = st.selectbox("👤 Seleziona Cliente:", c_list)
+        clienti_list = sorted([str(x) for x in data['Cliente Fornitore CD'].unique()])
+        sel_cli = st.selectbox("👤 Seleziona Cliente:", clienti_list)
     else: sel_cli = st.session_state["user_type"]
     
-    f_label = st.radio("Filtra per stato:", ["Mostra tutto", "Solo Disponibili", "In Lavorazione", "In Ritardo"])
+    filtro_label = st.radio("Filtra per stato:", ["Mostra tutto", "Solo Disponibili", "In Lavorazione", "In Ritardo"])
     if st.button("Logout"):
         st.session_state["authenticated"] = False
         st.rerun()
 
 # --- 5. LOGICA CENTRALE ---
-st.title("Portale Avanzamento Produzione")
+st.title("🚜 Portale Avanzamento Produzione")
 df_cli = data[data['Cliente Fornitore CD'] == sel_cli].copy()
 
 if not df_cli.empty:
-    articoli = sorted([str(x) for x in df_cli['Articolo C'].unique()])
-    sel_art = st.selectbox("🔍 Cerca Codice Prodotto:", ["Tutti i prodotti"] + articoli)
-    a_view = articoli if sel_art == "Tutti i prodotti" else [sel_art]
+    articoli_dis = sorted([str(x) for x in df_cli['Articolo C'].unique()])
+    sel_art = st.selectbox("🔍 Cerca Codice Prodotto:", ["Tutti i prodotti"] + articoli_dis)
+    articoli_view = articoli_dis if sel_art == "Tutti i prodotti" else [sel_art]
 
-    for art in a_view:
+    for art in articoli_view:
         df_art = df_cli[df_cli['Articolo C'] == art].sort_values('Data_Consegna')
         desc = df_art['Articolo D'].iloc[0] if 'Articolo D' in df_art.columns else ""
-        gia = float(df_art['Gia'].iloc[0]) if 'Gia' in df_art.columns and pd.notnull(df_art['Gia'].iloc[0]) else 0.0
-        lav = float(df_art['Lav_Tot'].iloc[0]) if 'Lav_Tot' in df_art.columns and pd.notnull(df_art['Lav_Tot'].iloc[0]) else 0.0
+        
+        st_gia = float(df_art['Gia'].iloc[0]) if 'Gia' in df_art.columns and pd.notnull(df_art['Gia'].iloc[0]) else 0.0
+        st_lav = float(df_art['Lavorazione_Totale'].iloc[0]) if 'Lavorazione_Totale' in df_art.columns and pd.notnull(df_art['Lavorazione_Totale'].iloc[0]) else 0.0
 
-        mostra = []
+        righe_mostra = []
         for _, row in df_art.iterrows():
-            q = float(row['Qta_Effettiva'])
-            d = row['Data_Consegna']
+            qta = float(row['Qta_Effettiva'])
+            req_date = row['Data_Consegna']
             
-            if gia >= q:
-                gia -= q
-                eta, nota, cat = oggi, "Pronto", "DISP"
-            elif (gia + lav) >= q:
-                gia = 0
-                eta, nota, cat = aggiungi_giorni_lavorativi(oggi, 10), "In Lavorazione", "LAV"
+            # --- DETERMINAZIONE STATO ---
+            if st_gia >= qta:
+                st_gia -= qta
+                eta, nota, cat_core = oggi_dt, "Pronto", "DISPONIBILE"
+            elif (st_gia + st_lav) >= qta:
+                st_gia = 0
+                eta, nota, cat_core = aggiungi_giorni_lavorativi(oggi_dt, 10), "In Lavorazione", "LAVORAZIONE"
             else:
-                eta, nota, cat = aggiungi_giorni_lavorativi(oggi, 25), "Nuova Produzione", "PROD"
+                eta, nota, cat_core = aggiungi_giorni_lavorativi(oggi_dt, 25), "Nuova Produzione", "LAVORAZIONE"
 
-            rit = (pd.notnull(d) and eta.date() > d.date())
+            is_ritardo = (pd.notnull(req_date) and eta.date() > req_date.date())
             
-            if cat == "DISP":
-                css, n_disp = ("client-delay-row", "Pronto (Ritardo Ritiro)") if rit else ("on-time-row", "Pronto")
-            else:
-                css, n_disp = ("prod-delay-row", f"{nota} (In Ritardo)") if rit else ("delay-row", nota)
+            # --- ASSEGNAZIONE COLORI E TESTI SPECIFICI ---
+            if cat_core == "DISPONIBILE":
+                if is_ritardo:
+                    css, nota_display = "client-delay-row", "Pronto (Ritardo Ritiro)"
+                else:
+                    css, nota_display = "on-time-row", "Pronto"
+            else: # LAVORAZIONE o NUOVA PROD
+                if is_ritardo:
+                    css, nota_display = "prod-delay-row", f"{nota} (In Ritardo)"
+                else:
+                    css, nota_display = "delay-row", nota
 
-            # Filtro Corretto
-            ok = (f_label == "Mostra tutto") or \
-                 (f_label == "Solo Disponibili" and cat == "DISP") or \
-                 (f_label == "In Lavorazione" and (cat == "LAV" or cat == "PROD") and not rit) or \
-                 (f_label == "In Ritardo" and rit)
+            # --- FILTRO ---
+            passa = False
+            if filtro_label == "Mostra tutto": passa = True
+            elif filtro_label == "Solo Disponibili" and cat_core == "DISPONIBILE": passa = True
+            elif filtro_label == "In Lavorazione" and cat_core == "LAVORAZIONE": passa = True
+            elif filtro_label == "In Ritardo" and is_ritardo: passa = True
 
-            if ok:
-                mostra.append({'css': css, 'd': d, 'q': q, 'eta': eta, 'n': n_disp})
+            if passa:
+                righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota_display})
 
-        if mostra:
+        if righe_mostra:
             with st.expander(f"📦 {art} — {desc} | Residuo: {df_art['Qta_Effettiva'].sum():,.0f}"):
-                for r in mostra:
-                    st.markdown(f'<div class="status-row {r["css"]}"><span><b>Consegna:</b> {r["d"].strftime("%d/%m/%Y") if pd.notnull(r["d"]) else "N.D."} | <b>Q.tà:</b> {r["q"]:,.0f}</span><span><b>Stima:</b> {r["eta"].strftime("%d/%m/%Y")} ({r["n"]})</span></div>', unsafe_allow_html=True)
+                for r in righe_mostra:
+                    st.markdown(f'<div class="status-row {r["css"]}"><span><b>Consegna:</b> {r["date"].strftime("%d/%m/%Y") if pd.notnull(r["date"]) else "N.D."} | <b>Q.tà:</b> {r["qta"]:,.0f}</span><span><b>Stima:</b> {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span></div>', unsafe_allow_html=True)
