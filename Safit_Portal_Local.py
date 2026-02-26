@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 APP_VERSION = "1.0.02"
 st.set_page_config(page_title=f"Safit - Portale Avanzamento {APP_VERSION}", layout="wide")
 
-# CSS Personalizzato
 st.markdown(f"""
     <style>
     .main {{ background-color: #fcfcfc; }}
@@ -79,16 +78,19 @@ def aggiungi_giorni_lavorativi(data_inizio, giorni):
 def pulisci_numero(serie):
     return pd.to_numeric(serie.astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False), errors='coerce').fillna(0)
 
+def standardizza_codice(serie):
+    """Rimuove ogni tipo di spazio e rende tutto maiuscolo"""
+    return serie.astype(str).str.replace(r'\s+', '', regex=True).str.strip().str.upper()
+
 @st.cache_data
 def load_data():
     try:
-        # 1. Caricamento Ordini (ARCA)
+        # 1. Caricamento Ordini (ARCA) -
         df = pd.read_excel('righe_Ordini_ARCA.xlsx', sheet_name='Foglio1', skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
         
-        # Pulizia codici Arca
         if 'Articolo C' in df.columns:
-            df['Articolo C'] = df['Articolo C'].astype(str).str.strip().str.upper()
+            df['Articolo C'] = standardizza_codice(df['Articolo C'])
             
         for col in ['Cliente Fornitore CD', 'Articolo C', 'Articolo D', 'Data']:
             if col in df.columns: df[col] = df[col].ffill()
@@ -98,28 +100,28 @@ def load_data():
         df['Qta_Effettiva'] = pd.to_numeric(df[col_res], errors='coerce').fillna(0)
         df = df[df['Qta_Effettiva'] > 0]
         
-        # 2. Caricamento Magazzino (Access)
+        # 2. Caricamento Magazzino (Access) -
         file_tech = 'Avanzamento_access.xlsx'
         if os.path.exists(file_tech):
             df_tech = pd.read_excel(file_tech, skiprows=1) 
             df_tech.columns = [str(c).strip() for c in df_tech.columns]
             
             if 'Codice' in df_tech.columns:
-                # Pulizia codici Access
-                df_tech['Codice'] = df_tech['Codice'].astype(str).str.strip().str.upper()
+                df_tech['Codice'] = standardizza_codice(df_tech['Codice'])
                 
-                # Rinominiamo colonne (Gia. con il punto come da immagine)
-                df_tech = df_tech.rename(columns={'Codice': 'Art_Key', 'Gia.': 'Gia'})
+                # Nomi esatti da immagine: Gia, Acq, Lan, GRZ, TMP, RWI, TRS
+                # Rinominiamo solo 'Codice' in 'Art_Key' per il merge
+                df_tech = df_tech.rename(columns={'Codice': 'Art_Key'})
                 
-                # Nomi colonne produzione (Maiuscoli)
-                campi_prod = ['Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS']
-                for c in ['Gia'] + campi_prod:
+                campi_num = ['Gia', 'Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS']
+                for c in campi_num:
                     if c in df_tech.columns: 
                         df_tech[c] = pulisci_numero(df_tech[c])
                 
-                df_tech['Lavorazione_Totale'] = df_tech[campi_prod].sum(axis=1)
+                # Calcolo Avanzamento (Escluso Gia)
+                df_tech['Lavorazione_Totale'] = df_tech[['Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS']].sum(axis=1)
                 
-                # Unione dei dati
+                # Unione
                 df = pd.merge(df, df_tech[['Art_Key', 'Gia', 'Lavorazione_Totale']], 
                               left_on='Articolo C', right_on='Art_Key', how='left')
         return df
@@ -127,19 +129,20 @@ def load_data():
         st.error(f"Errore tecnico nel caricamento: {e}")
         return pd.DataFrame()
 
-# ESECUZIONE CARICAMENTO
+# ESECUZIONE
 data = load_data()
 oggi_dt = datetime.now()
 
-# --- 4. DIAGNOSTICA (Opzionale) ---
+# --- 4. DIAGNOSTICA ---
 if not data.empty:
     with st.expander("🔍 DIAGNOSTICA DATI"):
-        st.write("Colonne finali:", data.columns.tolist())
         if 'Gia' in data.columns:
-            st.success("✅ Collegamento Magazzino OK!")
-            st.write(data[['Articolo C', 'Gia', 'Lavorazione_Totale']].head(10))
+            match_ok = data['Gia'].notna().sum()
+            st.success(f"✅ Collegamento Magazzino riuscito su {match_ok} righe.")
+            st.write("Esempio dati uniti (Primi 5):")
+            st.write(data[['Articolo C', 'Gia', 'Lavorazione_Totale']].head(5))
         else:
-            st.error("❌ Collegamento Magazzino FALLITO (Nessun match tra Codice e Articolo C)")
+            st.error("❌ Colonna 'Gia' non trovata dopo il merge.")
 
 # --- 5. SIDEBAR ---
 with st.sidebar:
@@ -166,14 +169,13 @@ if not data.empty:
 
     if not df_cli.empty:
         articoli_dis = sorted([str(x) for x in df_cli['Articolo C'].unique()])
-        sel_art = st.selectbox("🔍 Cerca Prodotto:", ["Tutti"] + articoli_dis)
-        articoli_view = articoli_dis if sel_art == "Tutti" else [sel_art]
+        sel_art = st.selectbox("🔍 Cerca Prodotto:", ["Tutti i prodotti"] + articoli_dis)
+        articoli_view = articoli_dis if sel_art == "Tutti i prodotti" else [sel_art]
 
         for art in articoli_view:
             df_art = df_cli[df_cli['Articolo C'] == art].sort_values('Data_Consegna')
             desc = df_art['Articolo D'].iloc[0] if 'Articolo D' in df_art.columns else ""
             
-            # Valori base
             st_gia = float(df_art['Gia'].iloc[0]) if 'Gia' in df_art.columns and pd.notnull(df_art['Gia'].iloc[0]) else 0.0
             st_lav = float(df_art['Lavorazione_Totale'].iloc[0]) if 'Lavorazione_Totale' in df_art.columns and pd.notnull(df_art['Lavorazione_Totale'].iloc[0]) else 0.0
 
@@ -182,7 +184,6 @@ if not data.empty:
                 qta = float(row['Qta_Effettiva'])
                 req_date = row['Data_Consegna']
                 
-                # LOGICA DISPONIBILITÀ
                 if st_gia >= qta:
                     st_gia -= qta
                     eta, nota, cat = oggi_dt, "Pronto", "DISP"
@@ -192,26 +193,26 @@ if not data.empty:
                 else:
                     eta, nota, cat = aggiungi_giorni_lavorativi(oggi_dt, 25), "Nuova Produzione", "PROD"
 
-                ritardo = (pd.notnull(req_date) and eta.date() > req_date.date())
+                rit = (pd.notnull(req_date) and eta.date() > req_date.date())
                 
-                # Colore CSS
+                # Colori
                 if cat == "DISP":
-                    css = "on-time-row" if not ritardo else "client-delay-row"
+                    css = "on-time-row" if not rit else "client-delay-row"
                 else:
                     css = "delay-row"
 
-                # Filtro applicato
-                passa = (filtro_label == "Mostra tutto") or \
-                        (filtro_label == "Solo Disponibili" and cat == "DISP") or \
-                        (filtro_label == "In Lavorazione" and cat == "LAV") or \
-                        (filtro_label == "In Ritardo" and ritardo)
+                # Filtro
+                ok = (filtro_label == "Mostra tutto") or \
+                     (filtro_label == "Solo Disponibili" and cat == "DISP") or \
+                     (filtro_label == "In Lavorazione" and cat == "LAV") or \
+                     (filtro_label == "In Ritardo" and rit)
 
-                if passa:
+                if ok:
                     righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota})
 
             if righe_mostra:
-                with st.expander(f"📦 {art} — {desc} | Tot: {df_art['Qta_Effettiva'].sum():,.0f}"):
+                with st.expander(f"📦 {art} — {desc} | Residuo: {df_art['Qta_Effettiva'].sum():,.0f}"):
                     for r in righe_mostra:
                         st.markdown(f'<div class="status-row {r["css"]}"><span><b>Consegna:</b> {r["date"].strftime("%d/%m/%Y") if pd.notnull(r["date"]) else "N/D"} | <b>Q.tà:</b> {r["qta"]:,.0f}</span><span><b>Stima:</b> {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span></div>', unsafe_allow_html=True)
 else:
-    st.warning("⚠️ Nessun dato disponibile. Controlla i file Excel!")
+    st.warning("Nessun dato caricato. Controlla i file Excel.")
