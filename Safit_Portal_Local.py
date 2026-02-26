@@ -48,36 +48,36 @@ def load_users():
 
 USER_DB = load_users()
 
-# --- 2. GESTIONE UTENTI (Modificata per essere più robusta) ---
 def check_password():
+    # Inizializziamo sempre le variabili per evitare il KeyError che hai visto
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
-        st.session_state["username"] = ""  # Inizializziamo per evitare il KeyError
+        st.session_state["username"] = ""
 
     if not st.session_state["authenticated"]:
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', width=300)
             st.title("Accesso Area Riservata")
-            # .strip() elimina spazi invisibili battuti per errore
+            # Usiamo .strip() per pulire l'input da tastiera
             user_input = st.text_input("Username").strip()
             pw_input = st.text_input("Password", type="password").strip()
             
             if st.button("Accedi"):
-                # Controlliamo nel DB utenti
-                for db_user, data in USER_DB.items():
-                    # Puliamo i dati dal file Excel con .strip() per Nikola
-                    if str(db_user).strip() == user_input and str(data[0]).strip() == pw_input:
+                # Carichiamo gli utenti e puliamo anche i dati che arrivano dal file Excel
+                for db_user, info in USER_DB.items():
+                    clean_db_user = str(db_user).strip()
+                    clean_db_pw = str(info[0]).strip()
+                    
+                    if clean_db_user == user_input and clean_db_pw == pw_input:
                         st.session_state["authenticated"] = True
-                        st.session_state["user_type"] = data[1]
+                        st.session_state["user_type"] = info[1]
                         st.session_state["username"] = user_input
                         st.rerun()
                 
                 st.error("Username o Password errati")
         return False
     return True
-
-if not check_password(): st.stop()
 
 # --- 4. SIDEBAR (Ora è protetta dal KeyError) ---
 with st.sidebar:
