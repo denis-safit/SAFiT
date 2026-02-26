@@ -81,6 +81,18 @@ def pulisci_numero(serie):
 
 @st.cache_data
 def load_data():
+    # --- ISPEZIONE DATI LIVE ---
+if not data.empty:
+    st.write("### 🔍 DIAGNOSTICA DATI")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("Colonne trovate:", data.columns.tolist())
+    with col2:
+        st.write("Esempio Giacenze (Gia):", data['Gia'].head())
+    
+    # Verifica se 'Gia' è numerico
+    if not pd.api.types.is_numeric_dtype(data['Gia']):
+        st.error("❌ ATTENZIONE: La colonna 'Gia' è letta come TESTO, non come NUMERO!")
     try:
         df = pd.read_excel('righe_Ordini_ARCA.xlsx', sheet_name='Foglio1', skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
