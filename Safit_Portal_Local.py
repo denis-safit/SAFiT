@@ -48,36 +48,48 @@ def load_users():
 
 USER_DB = load_users()
 
+# --- 2. GESTIONE UTENTI (Modificata per essere più robusta) ---
 def check_password():
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
+        st.session_state["username"] = ""  # Inizializziamo per evitare il KeyError
+
     if not st.session_state["authenticated"]:
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', width=300)
             st.title("Accesso Area Riservata")
-            # Usiamo .strip() per pulire l'input dell'utente
-            user = st.text_input("Username").strip()
-            pw = st.text_input("Password", type="password").strip()
+            # .strip() elimina spazi invisibili battuti per errore
+            user_input = st.text_input("Username").strip()
+            pw_input = st.text_input("Password", type="password").strip()
             
             if st.button("Accedi"):
-                # Puliamo anche i dati che arrivano dal file Excel (.strip())
-                # e trasformiamo tutto in stringa per sicurezza
-                user_found = False
+                # Controlliamo nel DB utenti
                 for db_user, data in USER_DB.items():
-                    if str(db_user).strip() == user:
-                        if str(data[0]).strip() == pw:
-                            st.session_state["authenticated"] = True
-                            st.session_state["user_type"] = data[1]
-                            st.session_state["username"] = user
-                            st.rerun()
-                        user_found = True
+                    # Puliamo i dati dal file Excel con .strip() per Nikola
+                    if str(db_user).strip() == user_input and str(data[0]).strip() == pw_input:
+                        st.session_state["authenticated"] = True
+                        st.session_state["user_type"] = data[1]
+                        st.session_state["username"] = user_input
+                        st.rerun()
                 
-                if not st.session_state["authenticated"]:
-                    st.error("Username o Password errati")
+                st.error("Username o Password errati")
         return False
     return True
 
+if not check_password(): st.stop()
+
+# --- 4. SIDEBAR (Ora è protetta dal KeyError) ---
+with st.sidebar:
+    if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
+    # Mostriamo l'utente solo se esiste nel session_state
+    if st.session_state.get("username"):
+        st.write(f"Utente: **{st.session_state['username']}**")
+    
+    st.markdown(f'<p class="version-tag">Versione: {APP_VERSION}</p>', unsafe_allow_html=True)
+    
+    # ... resto del codice sidebar ...
+    
 # --- 3. FUNZIONI TECNICHE ---
 def aggiungi_giorni_lavorativi(data_inizio, giorni):
     data_corrente = data_inizio
