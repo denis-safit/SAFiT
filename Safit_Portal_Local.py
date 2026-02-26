@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURAZIONE PAGINA E VERSIONE ---
-APP_VERSION = "1.0.09"
+APP_VERSION = "1.0.10"
 st.set_page_config(page_title=f"Safit - Portale Avanzamento {APP_VERSION}", layout="wide")
 
 st.markdown(f"""
@@ -12,19 +12,17 @@ st.markdown(f"""
     .main {{ background-color: #fcfcfc; }}
     .stApp {{ margin-top: -30px; }}
     
-    /* Container per allineare Codice e Pillola sullo stesso livello */
     .row-header {{
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 5px 10px;
-        background: #eeeeee;
-        border-radius: 8px 8px 0 0;
-        border: 1px solid #ccc;
-        border-bottom: none;
+        padding: 8px 12px;
+        background: #f0f2f6;
+        border-radius: 8px;
+        border: 1px solid #ddd;
+        margin-bottom: 2px;
     }}
 
-    /* Pillola Grande (Dimensione 1.0.08) */
     .pill-bg {{
         background-color: #ddd;
         border-radius: 12px;
@@ -53,25 +51,21 @@ st.markdown(f"""
         display: flex;
         justify-content: space-between;
         align-items: center;
-        flex-wrap: wrap; 
         padding: 10px 15px;
         border-radius: 8px;
         margin-bottom: 5px;
-        gap: 10px;
         font-size: 13px;
     }}
     
-    /* LOGICA FILTRI SAFIT (BLINDATA v1.0.02) */
+    /* COLORI ORIGINALI 1.0.02 */
     .on-time-row {{ background-color: #f1f8e9; border-left: 6px solid #4caf50; color: #1b5e20; }}
     .client-delay-row {{ background-color: #e3f2fd; border-left: 6px solid #2196f3; color: #0d47a1; }}
     .delay-row {{ background-color: #fff8e1; border-left: 6px solid #ffc107; color: #5d4037; }}
     .prod-delay-row {{ background-color: #ffebee; border-left: 6px solid #f44336; color: #b71c1c; }}
-    
-    .version-tag {{ font-size: 10px; color: #999; text-align: right; }}
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. GESTIONE UTENTI (BLINDATA) ---
+# --- 2. GESTIONE UTENTI (BACK TO 1.0.02) ---
 @st.cache_data
 def load_users():
     file_u = 'utenti.xlsx'
@@ -90,7 +84,6 @@ def check_password():
     if not st.session_state["authenticated"]:
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', width=300)
             st.title("Accesso Area Riservata")
             user, pw = st.text_input("Username"), st.text_input("Password", type="password")
             if st.button("Accedi"):
@@ -103,7 +96,7 @@ def check_password():
 
 if not check_password(): st.stop()
 
-# --- 3. FUNZIONI TECNICHE ---
+# --- 3. FUNZIONI TECNICHE (BACK TO 1.0.02) ---
 def aggiungi_giorni_lavorativi(data_inizio, giorni):
     data_corrente = data_inizio
     while giorni > 0:
@@ -125,6 +118,7 @@ def load_data():
         col_res = 'Qta Residua' if 'Qta Residua' in df.columns else 'Qta Doc'
         df['Qta_Effettiva'] = pd.to_numeric(df[col_res], errors='coerce').fillna(0)
         df = df[df['Qta_Effettiva'] > 0]
+        
         if os.path.exists('Avanzamento_access.xlsx'):
             df_tech = pd.read_excel('Avanzamento_access.xlsx', skiprows=1) 
             df_tech.columns = [str(c).strip() for c in df_tech.columns]
@@ -141,17 +135,12 @@ oggi_dt = datetime.now()
 
 # --- 4. SIDEBAR ---
 with st.sidebar:
-    if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
     st.write(f"Utente: **{st.session_state['username']}**")
-    st.markdown(f'<p class="version-tag">Versione: {APP_VERSION}</p>', unsafe_allow_html=True)
     if st.session_state["user_type"] == "TUTTI":
         clienti_list = sorted([str(x) for x in data['Cliente Fornitore CD'].unique()])
         sel_cli = st.selectbox("👤 Seleziona Cliente:", clienti_list)
     else: sel_cli = st.session_state["user_type"]
-    
-    # FILTRO RIPRISTINATO E BLINDATO
     filtro_label = st.radio("Filtra per stato:", ["Mostra tutto", "Solo Disponibili", "In Lavorazione", "In Ritardo"])
-    
     if st.button("Logout"):
         st.session_state["authenticated"] = False
         st.rerun()
@@ -161,34 +150,32 @@ st.title("🚜 Portale Avanzamento Produzione")
 df_cli = data[data['Cliente Fornitore CD'] == sel_cli].copy()
 
 if not df_cli.empty:
-    articoli_dis = sorted([str(x) for x in df_cli['Articolo C'].unique()])
-    sel_art = st.selectbox("🔍 Cerca Codice Prodotto:", ["Tutti i prodotti"] + articoli_dis)
-    articoli_view = articoli_dis if sel_art == "Tutti i prodotti" else [sel_art]
-
+    articoli_view = sorted([str(x) for x in df_cli['Articolo C'].unique()])
+    
     for art in articoli_view:
         df_art = df_cli[df_cli['Articolo C'] == art].sort_values('Data_Consegna')
-        desc = df_art['Articolo D'].iloc[0] if 'Articolo D' in df_art.columns else ""
+        desc = df_art['Articolo D'].iloc[0]
         row_t = df_art.iloc[0]
-        st_gia, st_acq, st_lan, st_grz, st_tmp, st_rwi, st_trs = [float(row_t.get(k, 0)) for k in ['Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']]
         
-        righe_mostra = []
+        # Recupero dati tecnici per PERCENTUALE
+        st_gia = float(row_t.get('Gia', 0))
+        st_trs, st_rwi, st_acq, st_tmp, st_lan, st_grz = [float(row_t.get(k, 0)) for k in ['Trs','Rwi','Acq','Tmp','Lan','Grz']]
+
+        righe_per_articolo = []
         for _, row in df_art.iterrows():
             qta, req_date = float(row['Qta_Effettiva']), row['Data_Consegna']
-            settimane = ((req_date - oggi_dt).days / 7) if pd.notnull(req_date) else 99
-
-            # LOGICA PERCENTUALE
-            pct, cat_core = 10, "LAVORAZIONE"
-            if st_gia >= qta: pct, cat_core = 100, "DISPONIBILE"; st_gia -= qta
-            elif st_trs > 0: pct = 75
-            elif st_rwi > 0 or st_acq > 0: pct = 60
-            elif st_tmp > 0 or st_lan > 0: pct = 50
-            elif st_grz > 0: pct = 30
-            elif settimane <= 4: pct = 20
             
-            eta = oggi_dt if pct == 100 else (aggiungi_giorni_lavorativi(oggi_dt, 10) if pct >= 50 else aggiungi_giorni_lavorativi(oggi_dt, 25))
+            # --- LOGICA CATEGORIA (RIPRISTINO 1.0.02) ---
+            cat_core = "LAVORAZIONE"
+            if st_gia >= qta:
+                cat_core = "DISPONIBILE"
+                st_gia -= qta
+            
+            # CALCOLO ETA
+            eta = oggi_dt if cat_core == "DISPONIBILE" else (aggiungi_giorni_lavorativi(oggi_dt, 10) if (st_trs+st_rwi+st_acq+st_tmp+st_lan) > 0 else aggiungi_giorni_lavorativi(oggi_dt, 25))
             is_ritardo = (pd.notnull(req_date) and eta.date() > req_date.date())
-            
-            # FILTRO BLINDATO v1.0.02
+
+            # --- FILTRO BLINDATO ---
             passa = False
             if filtro_label == "Mostra tutto": passa = True
             elif filtro_label == "Solo Disponibili" and cat_core == "DISPONIBILE": passa = True
@@ -196,17 +183,26 @@ if not df_cli.empty:
             elif filtro_label == "In Ritardo" and is_ritardo: passa = True
 
             if passa:
+                # --- CALCOLO PERCENTUALE DENIS (SOLO VISIVA) ---
+                settimane = ((req_date - oggi_dt).days / 7) if pd.notnull(req_date) else 99
+                pct = 10
+                if cat_core == "DISPONIBILE": pct = 100
+                elif st_trs > 0: pct = 75
+                elif st_rwi > 0 or st_acq > 0: pct = 60
+                elif st_tmp > 0 or st_lan > 0: pct = 50
+                elif st_grz > 0: pct = 30
+                elif settimane <= 4: pct = 20
+                
                 if cat_core == "DISPONIBILE":
                     css, nota = ("client-delay-row", "Ritardo Ritiro") if is_ritardo else ("on-time-row", "Pronto")
                 else:
                     css, nota = ("prod-delay-row", "In Ritardo") if is_ritardo else ("delay-row", "In Lavorazione")
-                righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota, 'pct': pct})
+                
+                righe_per_articolo.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota, 'pct': pct})
 
-        if righe_mostra:
-            current_pct = righe_mostra[0]['pct']
-            
-            # --- HEADER PERSONALIZZATO (Sopra l'expander) ---
-            # Questo garantisce che la pillola sia a fianco del codice e non dentro il dettaglio
+        if righe_per_articolo:
+            # Header con Pillola
+            current_pct = righe_per_articolo[0]['pct']
             st.markdown(f"""
                 <div class="row-header">
                     <span>📦 <b>{art}</b> — <small>{desc}</small></span>
@@ -217,13 +213,6 @@ if not df_cli.empty:
                 </div>
             """, unsafe_allow_html=True)
             
-            # Expander senza etichetta (usa solo l'icona) per mostrare i dettagli
-            with st.expander("Clicca qui per i dettagli consegna"):
-                for r in righe_mostra:
-                    st.markdown(f'''
-                        <div class="status-row {r["css"]}">
-                            <span><b>Consegna:</b> {r["date"].strftime("%d/%m/%Y") if pd.notnull(r["date"]) else "N.D."} | <b>Q.tà:</b> {r["qta"]:,.0f}</span>
-                            <span><b>Stima:</b> {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span>
-                        </div>
-                    ''', unsafe_allow_html=True)
-            st.markdown("<br>", unsafe_allow_html=True) # Spazio tra articoli
+            with st.expander("Dettagli ordini"):
+                for r in righe_per_articolo:
+                    st.markdown(f'<div class="status-row {r["css"]}"><span><b>Consegna:</b> {r["date"].strftime("%d/%m/%Y") if pd.notnull(r["date"]) else "N.D."} | <b>Q.tà:</b> {r["qta"]:,.0f}</span><span><b>Stima:</b> {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span></div>', unsafe_allow_html=True)
