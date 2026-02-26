@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURAZIONE PAGINA E VERSIONE ---
-APP_VERSION = "1.0.07"
+APP_VERSION = "1.0.08"
 st.set_page_config(page_title=f"Safit - Portale Avanzamento {APP_VERSION}", layout="wide")
 
 st.markdown(f"""
@@ -12,24 +12,36 @@ st.markdown(f"""
     .main {{ background-color: #fcfcfc; }}
     .stApp {{ margin-top: -30px; }}
     
-    /* Container per la pillola dentro la riga */
-    .pill-inline {{
-        display: inline-block;
+    /* Pillola Ingrandita (Doppia dimensione) */
+    .pill-container {{
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }}
+    .pill-bg {{
         background-color: #ddd;
-        border-radius: 8px;
-        width: 60px;
-        height: 12px;
+        border-radius: 12px;
+        width: 160px; /* Raddoppiata */
+        height: 24px; /* Ingrandita */
         border: 1px solid #bbb;
-        vertical-align: middle;
         position: relative;
-        margin-left: 10px;
+        flex-shrink: 0;
     }}
     .pill-fill {{
         background-color: #4caf50;
         height: 100%;
-        border-radius: 8px;
+        border-radius: 12px;
     }}
-    
+    .pill-text {{
+        position: absolute;
+        top: 0; left: 0; width: 100%;
+        font-size: 14px; /* Più leggibile */
+        font-weight: bold;
+        line-height: 22px;
+        text-align: center;
+        color: #000;
+    }}
+
     .status-row {{
         display: flex;
         justify-content: space-between;
@@ -42,7 +54,7 @@ st.markdown(f"""
         font-size: 13px;
     }}
     
-    /* FILTRI BLINDATI - COLORI v1.0.02 */
+    /* COLORI LOGICA SAFIT (BLINDATI v1.0.02) */
     .on-time-row {{ background-color: #f1f8e9; border-left: 6px solid #4caf50; color: #1b5e20; }}
     .client-delay-row {{ background-color: #e3f2fd; border-left: 6px solid #2196f3; color: #0d47a1; }}
     .delay-row {{ background-color: #fff8e1; border-left: 6px solid #ffc107; color: #5d4037; }}
@@ -52,7 +64,7 @@ st.markdown(f"""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. GESTIONE UTENTI (BLINDATA) ---
+# --- 2. GESTIONE UTENTI ---
 @st.cache_data
 def load_users():
     file_u = 'utenti.xlsx'
@@ -154,24 +166,19 @@ if not df_cli.empty:
             qta, req_date = float(row['Qta_Effettiva']), row['Data_Consegna']
             settimane = ((req_date - oggi_dt).days / 7) if pd.notnull(req_date) else 99
 
-            # DETERMINAZIONE STEP
-            pct, step_nome, cat_core = 10, "Conferma Ordine", "LAVORAZIONE"
-            if st_gia >= qta: pct, step_nome, cat_core = 100, "Disponibile", "DISPONIBILE"; st_gia -= qta
-            elif st_trs > 0: pct, step_nome = 75, "In preparazione"
-            elif st_rwi > 0: pct, step_nome = 60, "Lav. Esterna"
-            elif st_acq > 0: pct, step_nome = 60, "Acquisto"
-            elif st_tmp > 0 or st_lan > 0: pct, step_nome = 50, "Semilavorato"
-            elif st_grz > 0: pct, step_nome = 30, "Grezzo"
-            elif settimane <= 4: pct, step_nome = 20, "Mat. Prima"
+            # LOGICA STEP (Percentuale)
+            pct, cat_core = 10, "LAVORAZIONE"
+            if st_gia >= qta: pct, cat_core = 100, "DISPONIBILE"; st_gia -= qta
+            elif st_trs > 0: pct = 75
+            elif st_rwi > 0 or st_acq > 0: pct = 60
+            elif st_tmp > 0 or st_lan > 0: pct = 50
+            elif st_grz > 0: pct = 30
+            elif settimane <= 4: pct = 20
             
+            # STIMA CONSEGNA E RITARDO
             eta = oggi_dt if pct == 100 else (aggiungi_giorni_lavorativi(oggi_dt, 10) if pct >= 50 else aggiungi_giorni_lavorativi(oggi_dt, 25))
             is_ritardo = (pd.notnull(req_date) and eta.date() > req_date.date())
             
-            if cat_core == "DISPONIBILE":
-                css, nota_display = ("client-delay-row", "Ritardo Ritiro") if is_ritardo else ("on-time-row", "Pronto")
-            else:
-                css, nota_display = ("prod-delay-row", f"{step_nome} (Ritardo)") if is_ritardo else ("delay-row", step_nome)
-
             # FILTRO BLINDATO v1.0.02
             passa = False
             if filtro_label == "Mostra tutto": passa = True
@@ -180,20 +187,34 @@ if not df_cli.empty:
             elif filtro_label == "In Ritardo" and is_ritardo: passa = True
 
             if passa:
-                righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota_display, 'pct': pct})
+                if cat_core == "DISPONIBILE":
+                    css, nota = ("client-delay-row", "Ritardo Ritiro") if is_ritardo else ("on-time-row", "Pronto")
+                else:
+                    css, nota = ("prod-delay-row", "In Ritardo") if is_ritardo else ("delay-row", "In Lavorazione")
+                righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota, 'pct': pct})
 
         if righe_mostra:
-            # Layout pulito: Titolo semplice + Barra visualizzata subito sotto o di fianco
             current_pct = righe_mostra[0]['pct']
+            # Header Expander: Codice + Descrizione + Pillola Grande
+            header_label = f"📦 {art} — {desc} | {current_pct}%"
             
-            # Usiamo colonne per mettere Titolo e Pillola vicini
-            col_tit, col_pill = st.columns([0.85, 0.15])
-            with col_tit:
-                st.markdown(f"📦 **{art}** — <small>{desc}</small>", unsafe_allow_html=True)
-            with col_pill:
-                st.markdown(f'''<div class="pill-inline"><div class="pill-fill" style="width: {current_pct}%;"></div></div> <span style="font-size:10px; font-weight:bold;">{current_pct}%</span>''', unsafe_allow_html=True)
-            
-            with st.expander("Dettaglio Ordini"):
+            with st.expander(header_label):
+                # Visualizzazione della Pillola Grafica Grande come prima cosa dentro l'expander
+                st.markdown(f'''
+                    <div class="pill-container">
+                        <span style="font-size: 14px; font-weight: bold;">Avanzamento:</span>
+                        <div class="pill-bg">
+                            <div class="pill-fill" style="width: {current_pct}%;"></div>
+                            <div class="pill-text">{current_pct}%</div>
+                        </div>
+                    </div>
+                    <hr style="margin: 10px 0;">
+                ''', unsafe_allow_html=True)
+                
                 for r in righe_mostra:
-                    st.markdown(f'<div class="status-row {r["css"]}"><span><b>Consegna:</b> {r["date"].strftime("%d/%m/%Y") if pd.notnull(r["date"]) else "N.D."} | <b>Q.tà:</b> {r["qta"]:,.0f}</span><span><b>Stima:</b> {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span></div>', unsafe_allow_html=True)
-            st.divider()
+                    st.markdown(f'''
+                        <div class="status-row {r["css"]}">
+                            <span><b>Consegna:</b> {r["date"].strftime("%d/%m/%Y") if pd.notnull(r["date"]) else "N.D."} | <b>Q.tà:</b> {r["qta"]:,.0f}</span>
+                            <span><b>Stima:</b> {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span>
+                        </div>
+                    ''', unsafe_allow_html=True)
