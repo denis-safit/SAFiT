@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime, timedelta
+st.error("⚠️ TEST DI SINCRONIZZAZIONE ATTIVO ⚠️")
 
 # --- 1. CONFIGURAZIONE PAGINA E VERSIONE ---
 APP_VERSION = "1.0.01"
