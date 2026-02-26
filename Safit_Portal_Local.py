@@ -131,7 +131,8 @@ with st.sidebar:
         st.rerun()
 
 # --- 5. LOGICA CENTRALE ---
-st.title("🚜 Portale Avanzamento Produzione")
+# Rimossa icona trattore come richiesto
+st.title("Portale Avanzamento Produzione")
 df_cli = data[data['Cliente Fornitore CD'] == sel_cli].copy()
 
 if not df_cli.empty:
