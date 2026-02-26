@@ -4,31 +4,69 @@ import os
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURAZIONE PAGINA E VERSIONE ---
-APP_VERSION = "1.0.02"
+APP_VERSION = "1.0.04"
 st.set_page_config(page_title=f"Safit - Portale Avanzamento {APP_VERSION}", layout="wide")
 
 st.markdown(f"""
     <style>
     .main {{ background-color: #fcfcfc; }}
     .stApp {{ margin-top: -30px; }}
+    
+    /* Layout riga ordine con pillola */
+    .order-header {{
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        width: 100%;
+        padding: 5px 0;
+    }}
+    
+    .pill-container {{
+        min-width: 120px;
+        background-color: #e0e0e0;
+        border-radius: 12px;
+        height: 18px;
+        margin-left: 15px;
+        position: relative;
+        overflow: hidden;
+        border: 1px solid #ccc;
+    }}
+    
+    .pill-fill {{
+        height: 100%;
+        background-color: #4caf50;
+        transition: width 0.5s;
+    }}
+    
+    .pill-text {{
+        position: absolute;
+        width: 100%;
+        text-align: center;
+        font-size: 10px;
+        font-weight: bold;
+        line-height: 16px;
+        color: #000;
+        top: 0;
+    }}
+
     .status-row {{
         display: flex;
         justify-content: space-between;
         align-items: center;
         flex-wrap: wrap; 
-        padding: 12px 15px;
+        padding: 10px 15px;
         border-radius: 8px;
-        margin-bottom: 8px;
+        margin-bottom: 5px;
         gap: 10px;
-        font-size: 14px;
+        font-size: 13px;
     }}
-    /* COLORI LOGICA SAFIT ORIGINALE */
-    .on-time-row {{ background-color: #f1f8e9; border-left: 6px solid #4caf50; color: #1b5e20; }} 
-    .client-delay-row {{ background-color: #e3f2fd; border-left: 6px solid #2196f3; color: #0d47a1; }} 
-    .delay-row {{ background-color: #fff8e1; border-left: 6px solid #ffc107; color: #5d4037; }} 
-    .prod-delay-row {{ background-color: #ffebee; border-left: 6px solid #f44336; color: #b71c1c; }} 
     
-    .stExpander div {{ height: auto !important; min-height: min-content !important; }}
+    /* COLORI LOGICA SAFIT */
+    .on-time-row {{ background-color: #f1f8e9; border-left: 6px solid #4caf50; color: #1b5e20; }}
+    .client-delay-row {{ background-color: #e3f2fd; border-left: 6px solid #2196f3; color: #0d47a1; }}
+    .delay-row {{ background-color: #fff8e1; border-left: 6px solid #ffc107; color: #5d4037; }}
+    .prod-delay-row {{ background-color: #ffebee; border-left: 6px solid #f44336; color: #b71c1c; }}
+    
     .version-tag {{ font-size: 10px; color: #999; text-align: right; }}
     </style>
     """, unsafe_allow_html=True)
@@ -42,27 +80,22 @@ def load_users():
             df_u = pd.read_excel(file_u)
             df_u.columns = [str(c).strip() for c in df_u.columns]
             return df_u.set_index('username')[['password', 'cliente_arca']].T.to_dict('list')
-        except:
-            return {'safit_admin': ['admin2026', 'TUTTI']}
+        except: return {'safit_admin': ['admin2026', 'TUTTI']}
     return {'safit_admin': ['admin2026', 'TUTTI']}
 
 USER_DB = load_users()
 
 def check_password():
-    if "authenticated" not in st.session_state:
-        st.session_state["authenticated"] = False
+    if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
     if not st.session_state["authenticated"]:
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', width=300)
             st.title("Accesso Area Riservata")
-            user = st.text_input("Username")
-            pw = st.text_input("Password", type="password")
+            user, pw = st.text_input("Username"), st.text_input("Password", type="password")
             if st.button("Accedi"):
                 if user in USER_DB and str(USER_DB[user][0]) == pw:
-                    st.session_state["authenticated"] = True
-                    st.session_state["user_type"] = USER_DB[user][1]
-                    st.session_state["username"] = user
+                    st.session_state["authenticated"], st.session_state["user_type"], st.session_state["username"] = True, USER_DB[user][1], user
                     st.rerun()
                 else: st.error("Username o Password errati")
         return False
@@ -98,16 +131,9 @@ def load_data():
             df_tech.columns = [str(c).strip() for c in df_tech.columns]
             if 'Codice' in df_tech.columns:
                 df_tech = df_tech.rename(columns={'Codice': 'Art_Key'})
-                campi_num = ['Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']
-                for c in campi_num:
+                for c in ['Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']:
                     if c in df_tech.columns: df_tech[c] = pulisci_numero(df_tech[c])
-                
-                df_tech['Lavorazione_Totale'] = df_tech.get('Acq', 0) + df_tech.get('Lan', 0) + \
-                                               df_tech.get('Grz', 0) + df_tech.get('Tmp', 0) + \
-                                               df_tech.get('Rwi', 0) + df_tech.get('Trs', 0)
-                
-                df = pd.merge(df, df_tech[['Art_Key', 'Gia', 'Lavorazione_Totale']], 
-                              left_on='Articolo C', right_on='Art_Key', how='left')
+                df = pd.merge(df, df_tech[['Art_Key', 'Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']], left_on='Articolo C', right_on='Art_Key', how='left')
         return df
     except: return pd.DataFrame()
 
@@ -131,8 +157,7 @@ with st.sidebar:
         st.rerun()
 
 # --- 5. LOGICA CENTRALE ---
-# Rimossa icona trattore come richiesto
-st.title("Portale Avanzamento Produzione")
+st.title("🚜 Portale Avanzamento Produzione")
 df_cli = data[data['Cliente Fornitore CD'] == sel_cli].copy()
 
 if not df_cli.empty:
@@ -144,39 +169,36 @@ if not df_cli.empty:
         df_art = df_cli[df_cli['Articolo C'] == art].sort_values('Data_Consegna')
         desc = df_art['Articolo D'].iloc[0] if 'Articolo D' in df_art.columns else ""
         
-        st_gia = float(df_art['Gia'].iloc[0]) if 'Gia' in df_art.columns and pd.notnull(df_art['Gia'].iloc[0]) else 0.0
-        st_lav = float(df_art['Lavorazione_Totale'].iloc[0]) if 'Lavorazione_Totale' in df_art.columns and pd.notnull(df_art['Lavorazione_Totale'].iloc[0]) else 0.0
-
+        # Dati tecnici
+        row_t = df_art.iloc[0]
+        st_gia, st_acq, st_lan, st_grz, st_tmp, st_rwi, st_trs = [float(row_t.get(k, 0)) for k in ['Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']]
+        
         righe_mostra = []
         for _, row in df_art.iterrows():
-            qta = float(row['Qta_Effettiva'])
-            req_date = row['Data_Consegna']
-            
-            # --- DETERMINAZIONE STATO ---
-            if st_gia >= qta:
-                st_gia -= qta
-                eta, nota, cat_core = oggi_dt, "Pronto", "DISPONIBILE"
-            elif (st_gia + st_lav) >= qta:
-                st_gia = 0
-                eta, nota, cat_core = aggiungi_giorni_lavorativi(oggi_dt, 10), "In Lavorazione", "LAVORAZIONE"
-            else:
-                eta, nota, cat_core = aggiungi_giorni_lavorativi(oggi_dt, 25), "Nuova Produzione", "LAVORAZIONE"
+            qta, req_date = float(row['Qta_Effettiva']), row['Data_Consegna']
+            settimane = ((req_date - oggi_dt).days / 7) if pd.notnull(req_date) else 99
 
+            # --- DETERMINAZIONE STEP E FILTRO (Ripristino v1.02) ---
+            pct, step_nome, cat_core = 10, "Conferma Ordine", "LAVORAZIONE"
+            
+            if st_gia >= qta: pct, step_nome, cat_core = 100, "Disponibile", "DISPONIBILE"; st_gia -= qta
+            elif st_trs > 0: pct, step_nome = 75, "In preparazione"
+            elif st_rwi > 0: pct, step_nome = 60, "Lav. Esterna"
+            elif st_acq > 0: pct, step_nome = 60, "Acquisto"
+            elif st_tmp > 0 or st_lan > 0: pct, step_nome = 50, "Semilavorato"
+            elif st_grz > 0: pct, step_nome = 30, "Grezzo"
+            elif settimane <= 4: pct, step_nome = 20, "Mat. Prima"
+            
+            eta = oggi_dt if pct == 100 else (aggiungi_giorni_lavorativi(oggi_dt, 10) if pct >= 50 else aggiungi_giorni_lavorativi(oggi_dt, 25))
             is_ritardo = (pd.notnull(req_date) and eta.date() > req_date.date())
             
-            # --- ASSEGNAZIONE COLORI E TESTI SPECIFICI ---
+            # --- ASSEGNAZIONE COLORI (v1.02) ---
             if cat_core == "DISPONIBILE":
-                if is_ritardo:
-                    css, nota_display = "client-delay-row", "Pronto (Ritardo Ritiro)"
-                else:
-                    css, nota_display = "on-time-row", "Pronto"
-            else: # LAVORAZIONE o NUOVA PROD
-                if is_ritardo:
-                    css, nota_display = "prod-delay-row", f"{nota} (In Ritardo)"
-                else:
-                    css, nota_display = "delay-row", nota
+                css, nota_display = ("client-delay-row", "Ritardo Ritiro") if is_ritardo else ("on-time-row", "Pronto")
+            else:
+                css, nota_display = ("prod-delay-row", f"{step_nome} (Ritardo)") if is_ritardo else ("delay-row", step_nome)
 
-            # --- FILTRO ---
+            # --- FILTRO RIPRISTINATO ---
             passa = False
             if filtro_label == "Mostra tutto": passa = True
             elif filtro_label == "Solo Disponibili" and cat_core == "DISPONIBILE": passa = True
@@ -184,9 +206,24 @@ if not df_cli.empty:
             elif filtro_label == "In Ritardo" and is_ritardo: passa = True
 
             if passa:
-                righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota_display})
+                righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota_display, 'pct': pct})
 
         if righe_mostra:
-            with st.expander(f"📦 {art} — {desc} | Residuo: {df_art['Qta_Effettiva'].sum():,.0f}"):
+            # Creazione testata con PILLOLA sempre visibile
+            label_header = f"""
+            <div class="order-header">
+                <span>📦 <b>{art}</b> — {desc}</span>
+                <div class="pill-container">
+                    <div class="pill-fill" style="width: {righe_mostra[0]['pct']}%;"></div>
+                    <div class="pill-text">{righe_mostra[0]['pct']}%</div>
+                </div>
+            </div>
+            """
+            with st.expander(label_header, expanded=False):
                 for r in righe_mostra:
-                    st.markdown(f'<div class="status-row {r["css"]}"><span><b>Consegna:</b> {r["date"].strftime("%d/%m/%Y") if pd.notnull(r["date"]) else "N.D."} | <b>Q.tà:</b> {r["qta"]:,.0f}</span><span><b>Stima:</b> {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span></div>', unsafe_allow_html=True)
+                    st.markdown(f'''
+                        <div class="status-row {r["css"]}">
+                            <span><b>Consegna:</b> {r["date"].strftime("%d/%m/%Y") if pd.notnull(r["date"]) else "N.D."} | <b>Q.tà:</b> {r["qta"]:,.0f}</span>
+                            <span><b>Stima:</b> {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span>
+                        </div>
+                    ''', unsafe_allow_html=True)
