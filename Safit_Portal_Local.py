@@ -4,28 +4,24 @@ import os
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURAZIONE E STILE ---
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.7"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
-st.markdown(f"""
+st.markdown("""
     <style>
-    .main {{ background-color: #f8f9fa; }}
-    .status-row {{
-        display: flex; justify-content: space-between; align-items: center;
-        padding: 12px 18px; border-radius: 10px; margin-bottom: 8px; font-size: 14px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }}
-    .on-time-row {{ background-color: #e8f5e9; border-left: 8px solid #4caf50; color: #2e7d32; }} 
-    .acq-row {{ background-color: #e3f2fd; border-left: 8px solid #2196f3; color: #1565c0; }}    
-    .prod-row {{ background-color: #fffde7; border-left: 8px solid #fbc02d; color: #f57f17; }}   
-    .urgent-row {{ background-color: #ffebee; border-left: 8px solid #f44336; color: #c62828; }} 
-    .version-tag {{ font-size: 10px; color: #999; text-align: right; margin-top: 30px; }}
+    .status-row { display: flex; justify-content: space-between; padding: 12px; border-radius: 10px; margin-bottom: 8px; border: 1px solid #ddd; }
+    .on-time-row { background-color: #e8f5e9; border-left: 8px solid #4caf50; color: #1b5e20; } 
+    .acq-row { background-color: #e3f2fd; border-left: 8px solid #2196f3; color: #0d47a1; }    
+    .prod-row { background-color: #fffde7; border-left: 8px solid #fbc02d; color: #5d4037; }   
+    .urgent-row { background-color: #ffebee; border-left: 8px solid #f44336; color: #b71c1c; } 
+    .debug-box { background-color: #f8f9fa; padding: 10px; border-radius: 5px; border: 1px dashed #ccc; margin-bottom: 10px; font-family: monospace; font-size: 13px; }
+    .sidebar .sidebar-content { background-color: #f8f9fa; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. GESTIONE UTENTI (LOGIN) ---
+# --- 2. GESTIONE UTENTI ---
 @st.cache_data
-def load_users():
+def get_user_db():
     if os.path.exists('utenti.xlsx'):
         try:
             df_u = pd.read_excel('utenti.xlsx')
@@ -34,16 +30,14 @@ def load_users():
         except: pass
     return {'safit_admin': ['admin2026', 'TUTTI']}
 
-USER_DB = load_users()
-
-if "authenticated" not in st.session_state: 
-    st.session_state["authenticated"] = False
+USER_DB = get_user_db()
+if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
 
 if not st.session_state["authenticated"]:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', width=300)
-        st.title("Login Safit Portal")
+        st.title("Safit Portal - Login")
         u = st.text_input("Username").strip()
         p = st.text_input("Password", type="password").strip()
         if st.button("Accedi"):
@@ -53,145 +47,115 @@ if not st.session_state["authenticated"]:
             else: st.error("Credenziali errate")
     st.stop()
 
-# --- 3. FUNZIONI TECNICHE DI SUPPORTO ---
+# --- 3. MOTORE DATI ---
 def clean_num(serie):
-    """Pulisce i numeri da formati Excel sporchi"""
-    return pd.to_numeric(serie.astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False), errors='coerce').fillna(0)
+    s = serie.astype(str).str.replace(' ', '').str.replace('\xa0', '')
+    def fix_val(val):
+        if val == 'nan' or val == '': return '0'
+        if ',' in val and '.' in val: return val.replace('.', '').replace(',', '.')
+        elif ',' in val: return val.replace(',', '.')
+        return val
+    s = s.apply(fix_val)
+    return pd.to_numeric(s, errors='coerce').fillna(0)
 
 def find_col(df, targets):
-    """Trova il nome esatto della colonna basandosi su parole chiave"""
     for c in df.columns:
-        if any(t.upper() in str(c).upper() for t in targets):
-            return c
+        if any(t.upper() in str(c).upper() for t in targets): return c
     return None
 
-def smart_load_excel(filename, sheet=0):
-    """Cerca la riga corretta dove iniziano i titoli della Pivot"""
-    df_preview = pd.read_excel(filename, sheet_name=sheet, header=None, nrows=15)
-    header_row = 0
-    for i, row in df_preview.iterrows():
-        row_str = " ".join([str(x) for x in row.values])
-        if "Articolo" in row_str or "Cliente" in row_str or "Data" in row_str:
-            header_row = i
-            break
-    df = pd.read_excel(filename, sheet_name=sheet, skiprows=header_row)
+def smart_load(filename):
+    df_p = pd.read_excel(filename, header=None, nrows=15)
+    h_row = 0
+    for i, row in df_p.iterrows():
+        row_s = " ".join([str(x) for x in row.values])
+        if any(k in row_s for k in ["Articolo", "Cliente", "Data"]):
+            h_row = i; break
+    df = pd.read_excel(filename, skiprows=h_row)
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
-# --- 4. CARICAMENTO DATI ---
 @st.cache_data
-def load_all_data():
+def load_all():
     try:
-        # A. ARCA (Ordini Clienti)
-        file_arca = 'righe_Ordini_ARCA.xlsx'
-        df_a = smart_load_excel(file_arca)
-        
-        c_cli = find_col(df_a, ['Cliente Fornitore', 'CD'])
-        c_art = find_col(df_a, ['Articolo C', 'Cod. Art'])
-        c_des = find_col(df_a, ['Articolo D', 'Descriz'])
-        c_dat = find_col(df_a, ['Data'])
-        c_qta = find_col(df_a, ['Qta Residua', 'Qta Doc', 'Residua'])
-
-        if not c_art:
-            st.error(f"Colonna Articolo non trovata in Arca. Colonne: {list(df_a.columns)}")
-            return pd.DataFrame()
-
-        # Gestione Pivot: Trascina i valori verso il basso
+        # ARCA
+        df_a = smart_load('righe_Ordini_ARCA.xlsx')
+        c_cli, c_art, c_des = find_col(df_a, ['Cliente Fornitore', 'CD']), find_col(df_a, ['Articolo C', 'Cod. Art']), find_col(df_a, ['Articolo D', 'Descriz'])
+        c_dat, c_qta = find_col(df_a, ['Data']), find_col(df_a, ['Qta Residua', 'Qta Doc'])
         for col in [c_cli, c_art, c_des]:
             if col: df_a[col] = df_a[col].ffill()
-        
+        df_a = df_a[~df_a[c_art].astype(str).str.contains('TOTALE|TOTAL', case=False, na=False)]
         df_a = df_a.dropna(subset=[c_art])
-        # CORREZIONE ERRORE: aggiunta di .str prima di .upper()
-        df_a['Art_Match'] = df_a[c_art].astype(str).str.strip().str.upper()
+        df_a['Art_Key'] = df_a[c_art].astype(str).str.strip().str.upper()
         df_a['Data_Dt'] = pd.to_datetime(df_a[c_dat], errors='coerce')
         df_a['Qta_Res'] = clean_num(df_a[c_qta])
-        df_a = df_a[df_a['Qta_Res'] > 0]
-
-        # B. ACCESS (Giacenze e Fasi)
-        file_acc = 'Avanzamento_access.xlsx'
-        if os.path.exists(file_acc):
-            df_t = smart_load_excel(file_acc)
+        # ACCESS
+        if os.path.exists('Avanzamento_access.xlsx'):
+            df_t = smart_load('Avanzamento_access.xlsx')
             c_code = find_col(df_t, ['Codice', 'Articolo'])
             if c_code:
                 df_t['Key_Acc'] = df_t[c_code].astype(str).str.strip().str.upper()
-                df_t['GIA_VAL'] = clean_num(df_t[find_col(df_t, ['Gia']) or df_t.columns[0]])
-                df_t['ACQ_VAL'] = clean_num(df_t[find_col(df_t, ['Acq']) or df_t.columns[0]])
-                
-                # Somma fasi produzione (LAN + GRZ + TMP + RWI + TRS)
-                p_cols = ['Lan', 'GRZ', 'TMP', 'RWI', 'TRS']
-                df_t['PROD_TOT'] = 0
-                for p in p_cols:
-                    cp = find_col(df_t, [p])
-                    if cp: df_t['PROD_TOT'] += clean_num(df_t[cp])
-
-                df_merged = pd.merge(df_a, df_t[['Key_Acc', 'GIA_VAL', 'ACQ_VAL', 'PROD_TOT']], 
-                                    left_on='Art_Match', right_on='Key_Acc', how='left')
-                return df_merged.fillna(0)
+                df_t['GIA_V'] = clean_num(df_t[find_col(df_t, ['Gia'])])
+                df_t['ACQ_V'] = clean_num(df_t[find_col(df_t, ['Acq'])])
+                df_t['PROD_V'] = 0
+                for f in ['Lan', 'GRZ', 'TMP', 'RWI', 'TRS']:
+                    cf = find_col(df_t, [f])
+                    if cf: df_t['PROD_V'] += clean_num(df_t[cf])
+                return pd.merge(df_a, df_t[['Key_Acc', 'GIA_V', 'ACQ_V', 'PROD_V']], left_on='Art_Key', right_on='Key_Acc', how='left').fillna(0)
         return df_a
     except Exception as e:
-        st.error(f"Errore tecnico nel caricamento: {e}")
-        return pd.DataFrame()
+        st.error(f"Errore: {e}"); return pd.DataFrame()
 
-# --- 5. INTERFACCIA E LOGICA DI CALCOLO ---
-data = load_all_data()
-sel_cli = "Seleziona..." 
-
+# --- 4. CALCOLO E FILTRI ---
+data = load_all()
 if not data.empty:
     with st.sidebar:
         if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
-        st.write(f"👤 Utente: **{st.session_state['username']}**")
-        
+        st.markdown("### 🛠️ Pannello di Controllo")
         c_cli_n = find_col(data, ['Cliente Fornitore'])
-        if st.session_state["user_type"] == "TUTTI":
-            clist = sorted(data[c_cli_n].unique().astype(str))
-            sel_cli = st.selectbox("Seleziona Cliente:", clist)
-        else:
-            sel_cli = st.session_state["user_type"]
+        sel_cli = st.selectbox("Seleziona Cliente:", sorted(data[c_cli_n].unique().astype(str))) if st.session_state["user_type"] == "TUTTI" else st.session_state["user_type"]
+        search_art = st.text_input("🔍 Cerca Articolo:").upper()
         
-        if st.button("Logout"):
-            st.session_state["authenticated"] = False
-            st.rerun()
-
-    st.title(f"Avanzamento Ordini: {sel_cli}")
-    
-    # Filtro e calcolo a cascata per il cliente selezionato
-    df_c = data[data[c_cli_n] == sel_cli].copy()
-    oggi = datetime.now()
-    
-    c_art_n = find_col(df_c, ['Articolo C'])
-    c_des_n = find_col(df_c, ['Articolo D'])
-
-    for art in sorted(df_c[c_art_n].unique()):
-        df_art = df_c[df_c[c_art_n] == art].sort_values('Data_Dt')
+        st.markdown("---")
+        st.markdown("#### 📡 Stato Disponibilità")
+        f_disp = st.checkbox("🟢 Magazzino (Disponibile)", value=True)
+        f_acq = st.checkbox("🔵 Acquisti (In Arrivo)", value=True)
+        f_prod = st.checkbox("🟡 Produzione (In Lavoro)", value=True)
+        f_manc = st.checkbox("🔴 Mancante (Da Lanciare)", value=True)
         
-        # Giacenze iniziali (da Access)
-        m_stock = float(df_art['GIA_VAL'].iloc[0])
-        a_stock = float(df_art['ACQ_VAL'].iloc[0])
-        p_stock = float(df_art['PROD_TOT'].iloc[0])
-        descr = df_art[c_des_n].iloc[0]
+        if st.button("Esci"): st.session_state["authenticated"] = False; st.rerun()
 
-        with st.expander(f"📦 {art} — {descr} (Disp: {m_stock:,.0f})"):
-            for _, row in df_art.iterrows():
-                q = float(row['Qta_Res'])
-                dt = row['Data_Dt']
-                
-                # Calcolo disponibilità sequenziale
-                if m_stock >= q:
-                    m_stock -= q; msg, css, est = "PRONTO (Magazzino)", "on-time-row", dt
-                elif (m_stock + a_stock) >= q:
-                    a_stock -= (q - m_stock); m_stock = 0; msg, css, est = "IN ARRIVO (Acquisto)", "acq-row", oggi + timedelta(days=12)
-                elif (m_stock + a_stock + p_stock) >= q:
-                    p_stock -= (q - m_stock - a_stock); m_stock = 0; a_stock = 0; msg, css, est = "IN PRODUZIONE", "prod-row", oggi + timedelta(days=22)
-                else:
-                    msg, css, est = "MANCANTE (Da lanciare)", "urgent-row", oggi + timedelta(days=40)
+    # Logica ATP
+    df_cli = data[data[c_cli_n] == sel_cli].copy()
+    results = []
+    for art in df_cli['Art_Key'].unique():
+        df_art = df_cli[df_cli['Art_Key'] == art].sort_values('Data_Dt')
+        m, a, p = float(df_art['GIA_V'].iloc[0]), float(df_art['ACQ_V'].iloc[0]), float(df_art['PROD_V'].iloc[0])
+        for _, r in df_art.iterrows():
+            q, oggi = float(r['Qta_Res']), datetime.now()
+            if m >= q: m -= q; s, c, d = "DISPONIBILE", "on-time-row", r['Data_Dt']
+            elif (m+a) >= q: a -= (q-m); m=0; s, c, d = "ACQUISTO", "acq-row", oggi+timedelta(12)
+            elif (m+a+p) >= q: p -= (q-m-a); m=0; a=0; s, c, d = "PRODUZIONE", "prod-row", oggi+timedelta(22)
+            else: s, c, d = "MANCANTE", "urgent-row", oggi+timedelta(40)
+            res = r.to_dict(); res.update({'st': s, 'cs': c, 'dt_e': d}); results.append(res)
+    
+    df_f = pd.DataFrame(results)
+    if search_art: df_f = df_f[df_f['Art_Key'].str.contains(search_art)]
+    
+    allowed = []
+    if f_disp: allowed.append("DISPONIBILE")
+    if f_acq: allowed.append("ACQUISTO")
+    if f_prod: allowed.append("PRODUZIONE")
+    if f_manc: allowed.append("MANCANTE")
+    
+    df_show = df_f[df_f['st'].isin(allowed)]
 
-                st.markdown(f"""
-                    <div class="status-row {css}">
-                        <span>📅 <b>{dt.strftime('%d/%m/%Y')}</b> | Q.tà: {q:,.0f}</span>
-                        <span>{msg} (Est: {est.strftime('%d/%m/%Y')})</span>
-                    </div>
-                """, unsafe_allow_html=True)
-else:
-    st.warning("Nessun dato caricato. Controlla che i file Excel siano presenti e correttamente formattati.")
-
-st.markdown(f'<p class="version-tag">Safit Portal Engine v{APP_VERSION}</p>', unsafe_allow_html=True)
+    st.title(f"Piano Consegne: {sel_cli}")
+    for art in sorted(df_show['Art_Key'].unique()):
+        df_sub = df_show[df_show['Art_Key'] == art]
+        with st.expander(f"📦 {art} - {df_sub[find_col(df_sub, ['Articolo D'])].iloc[0]}"):
+            st.markdown(f'<div class="debug-box">Giacenza: {df_sub["GIA_V"].iloc[0]:,.0f} | In Acquisto: {df_sub["ACQ_V"].iloc[0]:,.0f} | In Lavorazione: {df_sub["PROD_V"].iloc[0]:,.0f}</div>', unsafe_allow_html=True)
+            for _, r in df_sub.iterrows():
+                st.markdown(f"""<div class="status-row {r['cs']}">
+                    <span>📅 <b>{r['Data_Dt'].strftime('%d/%m/%Y')}</b> | Q.tà: {r['Qta_Res']:,.0f}</span>
+                    <span><b>{r['st']}</b> (Est: {r['dt_e'].strftime('%d/%m/%Y')})</span>
+                </div>""", unsafe_allow_html=True)
