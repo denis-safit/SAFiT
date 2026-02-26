@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURAZIONE PAGINA E VERSIONE ---
-APP_VERSION = "1.0.03"
+APP_VERSION = "1.0.04"
 st.set_page_config(page_title=f"Safit - Portale Avanzamento {APP_VERSION}", layout="wide")
 
 st.markdown(f"""
@@ -87,89 +87,73 @@ def load_data():
         # 1. Caricamento ARCA
         df = pd.read_excel('righe_Ordini_ARCA.xlsx', sheet_name='Foglio1', skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
-        if 'Articolo C' in df.columns:
-            df['Articolo C'] = standardizza_codice(df['Articolo C'])
+        
+        # Pulizia: ffill e poi dropna su Articolo C per evitare i "NAN"
         for col in ['Cliente Fornitore CD', 'Articolo C', 'Articolo D', 'Data']:
             if col in df.columns: df[col] = df[col].ffill()
+        
+        df = df.dropna(subset=['Articolo C'])
+        df['Articolo C'] = standardizza_codice(df['Articolo C'])
+        df = df[df['Articolo C'] != 'NAN'] # Ulteriore filtro sicurezza
+        
         df['Data_Consegna'] = pd.to_datetime(df['Data'], errors='coerce')
         col_res = 'Qta Residua' if 'Qta Residua' in df.columns else 'Qta Doc'
         df['Qta_Effettiva'] = pd.to_numeric(df[col_res], errors='coerce').fillna(0)
         df = df[df['Qta_Effettiva'] > 0]
         
-        # 2. Caricamento ACCESS (Logica per Posizione Colonne)
+        # 2. Caricamento ACCESS
         file_tech = 'Avanzamento_access.xlsx'
         if os.path.exists(file_tech):
-            # Carichiamo TUTTO il file senza saltare righe per vedere cosa c'è dentro
-            df_tech = pd.read_excel(file_tech)
+            df_tech = pd.read_excel(file_tech, skiprows=1)
+            df_tech.columns = [str(c).strip() for c in df_tech.columns]
             
-            # Se il file ha almeno 2 colonne, proviamo a forzare i nomi
-            if df_tech.shape[1] >= 2:
-                # Cerchiamo la riga dove iniziano i dati (spesso c'è sporcizia sopra)
-                # Proviamo a rinominare le colonne in base a quello che troviamo
-                df_tech.columns = [str(c).strip() for c in df_tech.columns]
-                
-                # Se non troviamo 'Codice', prendiamo la prima colonna che somiglia a un codice
-                col_codice = 'Codice' if 'Codice' in df_tech.columns else df_tech.columns[0]
-                col_gia = 'Gia' if 'Gia' in df_tech.columns else (df_tech.columns[1] if df_tech.shape[1] > 1 else None)
-                
-                df_tech = df_tech.rename(columns={col_codice: 'Art_Key', col_gia: 'Gia'})
-                df_tech['Art_Key'] = standardizza_codice(df_tech['Art_Key'])
-                
-                # Pulizia numeri
-                for c in ['Gia', 'Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS']:
-                    if c in df_tech.columns: df_tech[c] = pulisci_numero(df_tech[c])
-                
-                # Somma lavorazioni
-                lavoraz_cols = [c for c in ['Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS'] if c in df_tech.columns]
-                df_tech['Lavorazione_Totale'] = df_tech[lavoraz_cols].sum(axis=1) if lavoraz_cols else 0
-                
-                # Merge
-                df = pd.merge(df, df_tech[['Art_Key', 'Gia', 'Lavorazione_Totale']], 
-                              left_on='Articolo C', right_on='Art_Key', how='left')
-            else:
-                st.error("Il file Access sembra quasi vuoto (meno di 2 colonne)")
-        else:
-            st.error("File Avanzamento_access.xlsx NON TROVATO sul server!")
+            # Identificazione Colonne
+            col_codice = 'Codice' if 'Codice' in df_tech.columns else df_tech.columns[0]
+            col_gia = 'Gia' if 'Gia' in df_tech.columns else (df_tech.columns[1] if df_tech.shape[1] > 1 else None)
             
+            df_tech = df_tech.rename(columns={col_codice: 'Art_Key', col_gia: 'Gia'})
+            df_tech['Art_Key'] = standardizza_codice(df_tech['Art_Key'])
+            
+            # Pulizia numerica
+            for c in ['Gia', 'Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS']:
+                if c in df_tech.columns: df_tech[c] = pulisci_numero(df_tech[c])
+            
+            campi_lav = [c for c in ['Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS'] if c in df_tech.columns]
+            df_tech['Lavorazione_Totale'] = df_tech[campi_lav].sum(axis=1) if campi_lav else 0
+            
+            df = pd.merge(df, df_tech[['Art_Key', 'Gia', 'Lavorazione_Totale']], 
+                          left_on='Articolo C', right_on='Art_Key', how='left')
         return df
-    except Exception as e:
-        st.error(f"Errore caricamento: {e}")
+    except:
         return pd.DataFrame()
 
 data = load_data()
 oggi_dt = datetime.now()
 
-# --- 4. DIAGNOSTICA DI EMERGENZA ---
-if not data.empty:
-    with st.expander("🔍 DIAGNOSTICA DI EMERGENZA"):
-        st.write("File caricati correttamente. Colonne presenti:", data.columns.tolist())
-        match_trouvati = data['Gia'].notna().sum() if 'Gia' in data.columns else 0
-        st.write(f"Righe con giacenza collegata: {match_trouvati} su {len(data)}")
-        if match_trouvati == 0:
-            st.warning("⚠️ ATTENZIONE: Nessun codice articolo di Arca corrisponde a quelli di Access.")
-            st.write("Esempio codici Arca:", data['Articolo C'].head(3).tolist())
-
-# --- 5. SIDEBAR ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
     if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
     st.write(f"Utente: **{st.session_state.get('username')}**")
     st.markdown(f'<p class="version-tag">Versione: {APP_VERSION}</p>', unsafe_allow_html=True)
     
-    if st.session_state["user_type"] == "TUTTI":
-        c_list = sorted([str(x) for x in data['Cliente Fornitore CD'].unique()]) if not data.empty else []
-        sel_cli = st.selectbox("👤 Seleziona Cliente:", c_list)
-    else: sel_cli = st.session_state["user_type"]
+    if not data.empty:
+        if st.session_state["user_type"] == "TUTTI":
+            c_list = sorted([str(x) for x in data['Cliente Fornitore CD'].unique()])
+            sel_cli = st.selectbox("👤 Seleziona Cliente:", c_list)
+        else: sel_cli = st.session_state["user_type"]
     
     filtro_label = st.radio("Stato ordini:", ["Mostra tutto", "Solo Disponibili", "In Lavorazione", "In Ritardo"])
+    
     if st.button("Logout"):
         st.session_state["authenticated"] = False
         st.rerun()
 
-# --- 6. INTERFACCIA CENTRALE ---
+# --- 5. INTERFACCIA CENTRALE ---
 st.title("Portale Avanzamento Produzione")
 
 if not data.empty:
     df_cli = data[data['Cliente Fornitore CD'] == sel_cli].copy()
+    
     if not df_cli.empty:
         articoli_view = sorted([str(x) for x in df_cli['Articolo C'].unique()])
         sel_art = st.selectbox("🔍 Cerca Prodotto:", ["Tutti i prodotti"] + articoli_view)
@@ -187,7 +171,10 @@ if not data.empty:
                 qta = float(row['Qta_Effettiva'])
                 req_date = row['Data_Consegna']
                 
-                if st_gia >= qta:
+                # Calcolo disponibilità
+                if pd.isna(row['Gia']):
+                    eta, nota, cat = aggiungi_giorni_lavorativi(oggi_dt, 25), "Nuova Produzione", "PROD"
+                elif st_gia >= qta:
                     st_gia -= qta
                     eta, nota, cat = oggi_dt, "Pronto", "DISP"
                 elif (st_gia + st_lav) >= qta:
@@ -197,14 +184,25 @@ if not data.empty:
                     eta, nota, cat = aggiungi_giorni_lavorativi(oggi_dt, 25), "Nuova Produzione", "PROD"
 
                 rit = (pd.notnull(req_date) and eta.date() > req_date.date())
-                css = "on-time-row" if cat == "DISP" and not rit else ("client-delay-row" if cat == "DISP" else "delay-row")
+                
+                if cat == "DISP":
+                    css = "on-time-row" if not rit else "client-delay-row"
+                else:
+                    css = "delay-row"
 
-                ok = (filtro_label == "Mostra tutto") or (filtro_label == "Solo Disponibili" and cat == "DISP") or (filtro_label == "In Lavorazione" and cat == "LAV") or (filtro_label == "In Ritardo" and rit)
-                if ok: righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota})
+                # Filtro applicato
+                ok = (filtro_label == "Mostra tutto") or \
+                     (filtro_label == "Solo Disponibili" and cat == "DISP") or \
+                     (filtro_label == "In Lavorazione" and cat == "LAV") or \
+                     (filtro_label == "In Ritardo" and rit)
+
+                if ok:
+                    righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota})
 
             if righe_mostra:
-                with st.expander(f"📦 {art} — {desc} | Residuo: {df_art['Qta_Effettiva'].sum():,.0f}"):
+                # Intestazione compatta per articolo
+                with st.expander(f"📦 {art} — {desc} | Tot: {df_art['Qta_Effettiva'].sum():,.0f}"):
                     for r in righe_mostra:
                         st.markdown(f'<div class="status-row {r["css"]}"><span><b>Consegna:</b> {r["date"].strftime("%d/%m/%Y") if pd.notnull(r["date"]) else "N/D"} | <b>Q.tà:</b> {r["qta"]:,.0f}</span><span><b>Stima:</b> {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span></div>', unsafe_allow_html=True)
 else:
-    st.warning("Nessun dato caricato. Controlla i file Excel.")
+    st.warning("Seleziona un cliente o verifica i file Excel.")
