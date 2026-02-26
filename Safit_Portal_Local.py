@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURAZIONE PAGINA E VERSIONE ---
-APP_VERSION = "1.0.02"
+APP_VERSION = "1.0.03"
 st.set_page_config(page_title=f"Safit - Portale Avanzamento {APP_VERSION}", layout="wide")
 
 st.markdown(f"""
@@ -79,76 +79,80 @@ def pulisci_numero(serie):
     return pd.to_numeric(serie.astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False), errors='coerce').fillna(0)
 
 def standardizza_codice(serie):
-    """Rimuove ogni tipo di spazio e rende tutto maiuscolo"""
     return serie.astype(str).str.replace(r'\s+', '', regex=True).str.strip().str.upper()
 
 @st.cache_data
 def load_data():
     try:
-        # 1. Caricamento Ordini (ARCA) -
+        # 1. Caricamento ARCA
         df = pd.read_excel('righe_Ordini_ARCA.xlsx', sheet_name='Foglio1', skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
-        
         if 'Articolo C' in df.columns:
             df['Articolo C'] = standardizza_codice(df['Articolo C'])
-            
         for col in ['Cliente Fornitore CD', 'Articolo C', 'Articolo D', 'Data']:
             if col in df.columns: df[col] = df[col].ffill()
-            
         df['Data_Consegna'] = pd.to_datetime(df['Data'], errors='coerce')
         col_res = 'Qta Residua' if 'Qta Residua' in df.columns else 'Qta Doc'
         df['Qta_Effettiva'] = pd.to_numeric(df[col_res], errors='coerce').fillna(0)
         df = df[df['Qta_Effettiva'] > 0]
         
-        # 2. Caricamento Magazzino (Access) -
+        # 2. Caricamento ACCESS (Logica per Posizione Colonne)
         file_tech = 'Avanzamento_access.xlsx'
         if os.path.exists(file_tech):
-            df_tech = pd.read_excel(file_tech, skiprows=1) 
-            df_tech.columns = [str(c).strip() for c in df_tech.columns]
+            # Carichiamo TUTTO il file senza saltare righe per vedere cosa c'è dentro
+            df_tech = pd.read_excel(file_tech)
             
-            if 'Codice' in df_tech.columns:
-                df_tech['Codice'] = standardizza_codice(df_tech['Codice'])
+            # Se il file ha almeno 2 colonne, proviamo a forzare i nomi
+            if df_tech.shape[1] >= 2:
+                # Cerchiamo la riga dove iniziano i dati (spesso c'è sporcizia sopra)
+                # Proviamo a rinominare le colonne in base a quello che troviamo
+                df_tech.columns = [str(c).strip() for c in df_tech.columns]
                 
-                # Nomi esatti da immagine: Gia, Acq, Lan, GRZ, TMP, RWI, TRS
-                # Rinominiamo solo 'Codice' in 'Art_Key' per il merge
-                df_tech = df_tech.rename(columns={'Codice': 'Art_Key'})
+                # Se non troviamo 'Codice', prendiamo la prima colonna che somiglia a un codice
+                col_codice = 'Codice' if 'Codice' in df_tech.columns else df_tech.columns[0]
+                col_gia = 'Gia' if 'Gia' in df_tech.columns else (df_tech.columns[1] if df_tech.shape[1] > 1 else None)
                 
-                campi_num = ['Gia', 'Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS']
-                for c in campi_num:
-                    if c in df_tech.columns: 
-                        df_tech[c] = pulisci_numero(df_tech[c])
+                df_tech = df_tech.rename(columns={col_codice: 'Art_Key', col_gia: 'Gia'})
+                df_tech['Art_Key'] = standardizza_codice(df_tech['Art_Key'])
                 
-                # Calcolo Avanzamento (Escluso Gia)
-                df_tech['Lavorazione_Totale'] = df_tech[['Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS']].sum(axis=1)
+                # Pulizia numeri
+                for c in ['Gia', 'Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS']:
+                    if c in df_tech.columns: df_tech[c] = pulisci_numero(df_tech[c])
                 
-                # Unione
+                # Somma lavorazioni
+                lavoraz_cols = [c for c in ['Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS'] if c in df_tech.columns]
+                df_tech['Lavorazione_Totale'] = df_tech[lavoraz_cols].sum(axis=1) if lavoraz_cols else 0
+                
+                # Merge
                 df = pd.merge(df, df_tech[['Art_Key', 'Gia', 'Lavorazione_Totale']], 
                               left_on='Articolo C', right_on='Art_Key', how='left')
+            else:
+                st.error("Il file Access sembra quasi vuoto (meno di 2 colonne)")
+        else:
+            st.error("File Avanzamento_access.xlsx NON TROVATO sul server!")
+            
         return df
     except Exception as e:
-        st.error(f"Errore tecnico nel caricamento: {e}")
+        st.error(f"Errore caricamento: {e}")
         return pd.DataFrame()
 
-# ESECUZIONE
 data = load_data()
 oggi_dt = datetime.now()
 
-# --- 4. DIAGNOSTICA ---
+# --- 4. DIAGNOSTICA DI EMERGENZA ---
 if not data.empty:
-    with st.expander("🔍 DIAGNOSTICA DATI"):
-        if 'Gia' in data.columns:
-            match_ok = data['Gia'].notna().sum()
-            st.success(f"✅ Collegamento Magazzino riuscito su {match_ok} righe.")
-            st.write("Esempio dati uniti (Primi 5):")
-            st.write(data[['Articolo C', 'Gia', 'Lavorazione_Totale']].head(5))
-        else:
-            st.error("❌ Colonna 'Gia' non trovata dopo il merge.")
+    with st.expander("🔍 DIAGNOSTICA DI EMERGENZA"):
+        st.write("File caricati correttamente. Colonne presenti:", data.columns.tolist())
+        match_trouvati = data['Gia'].notna().sum() if 'Gia' in data.columns else 0
+        st.write(f"Righe con giacenza collegata: {match_trouvati} su {len(data)}")
+        if match_trouvati == 0:
+            st.warning("⚠️ ATTENZIONE: Nessun codice articolo di Arca corrisponde a quelli di Access.")
+            st.write("Esempio codici Arca:", data['Articolo C'].head(3).tolist())
 
 # --- 5. SIDEBAR ---
 with st.sidebar:
     if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
-    if st.session_state.get("username"):
-        st.write(f"Utente: **{st.session_state['username']}**")
+    st.write(f"Utente: **{st.session_state.get('username')}**")
     st.markdown(f'<p class="version-tag">Versione: {APP_VERSION}</p>', unsafe_allow_html=True)
     
     if st.session_state["user_type"] == "TUTTI":
@@ -166,13 +170,12 @@ st.title("Portale Avanzamento Produzione")
 
 if not data.empty:
     df_cli = data[data['Cliente Fornitore CD'] == sel_cli].copy()
-
     if not df_cli.empty:
-        articoli_dis = sorted([str(x) for x in df_cli['Articolo C'].unique()])
-        sel_art = st.selectbox("🔍 Cerca Prodotto:", ["Tutti i prodotti"] + articoli_dis)
-        articoli_view = articoli_dis if sel_art == "Tutti i prodotti" else [sel_art]
+        articoli_view = sorted([str(x) for x in df_cli['Articolo C'].unique()])
+        sel_art = st.selectbox("🔍 Cerca Prodotto:", ["Tutti i prodotti"] + articoli_view)
+        lista_art = articoli_view if sel_art == "Tutti i prodotti" else [sel_art]
 
-        for art in articoli_view:
+        for art in lista_art:
             df_art = df_cli[df_cli['Articolo C'] == art].sort_values('Data_Consegna')
             desc = df_art['Articolo D'].iloc[0] if 'Articolo D' in df_art.columns else ""
             
@@ -194,21 +197,10 @@ if not data.empty:
                     eta, nota, cat = aggiungi_giorni_lavorativi(oggi_dt, 25), "Nuova Produzione", "PROD"
 
                 rit = (pd.notnull(req_date) and eta.date() > req_date.date())
-                
-                # Colori
-                if cat == "DISP":
-                    css = "on-time-row" if not rit else "client-delay-row"
-                else:
-                    css = "delay-row"
+                css = "on-time-row" if cat == "DISP" and not rit else ("client-delay-row" if cat == "DISP" else "delay-row")
 
-                # Filtro
-                ok = (filtro_label == "Mostra tutto") or \
-                     (filtro_label == "Solo Disponibili" and cat == "DISP") or \
-                     (filtro_label == "In Lavorazione" and cat == "LAV") or \
-                     (filtro_label == "In Ritardo" and rit)
-
-                if ok:
-                    righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota})
+                ok = (filtro_label == "Mostra tutto") or (filtro_label == "Solo Disponibili" and cat == "DISP") or (filtro_label == "In Lavorazione" and cat == "LAV") or (filtro_label == "In Ritardo" and rit)
+                if ok: righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota})
 
             if righe_mostra:
                 with st.expander(f"📦 {art} — {desc} | Residuo: {df_art['Qta_Effettiva'].sum():,.0f}"):
