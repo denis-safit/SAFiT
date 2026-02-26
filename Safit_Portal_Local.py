@@ -84,6 +84,7 @@ def pulisci_numero(serie):
 @st.cache_data
 def load_data():
     try:
+        # 1. Caricamento Ordini (ARCA)
         df = pd.read_excel('righe_Ordini_ARCA.xlsx', sheet_name='Foglio1', skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
         for col in ['Cliente Fornitore CD', 'Articolo C', 'Articolo D', 'Data']:
@@ -93,26 +94,38 @@ def load_data():
         df['Qta_Effettiva'] = pd.to_numeric(df[col_res], errors='coerce').fillna(0)
         df = df[df['Qta_Effettiva'] > 0]
         
-        if os.path.exists('Avanzamento_access.xlsx'):
-            df_tech = pd.read_excel('Avanzamento_access.xlsx', skiprows=1) 
+        # 2. Caricamento Magazzino (Avanzamento_access.xlsx)
+        file_tech = 'Avanzamento_access.xlsx'
+        if os.path.exists(file_tech):
+            # skiprows=1 perché vedo che le intestazioni sono sulla seconda riga
+            df_tech = pd.read_excel(file_tech, skiprows=1) 
             df_tech.columns = [str(c).strip() for c in df_tech.columns]
+            
+            # Mappatura esatta basata sulla tua immagine
+            # 'Codice' -> Articolo, 'Gia.' -> Giacenza
             if 'Codice' in df_tech.columns:
-                df_tech = df_tech.rename(columns={'Codice': 'Art_Key'})
-                campi_num = ['Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']
-                for c in campi_num:
-                    if c in df_tech.columns: df_tech[c] = pulisci_numero(df_tech[c])
+                df_tech = df_tech.rename(columns={'Codice': 'Art_Key', 'Gia.': 'Gia'})
                 
-                df_tech['Lavorazione_Totale'] = df_tech.get('Acq', 0) + df_tech.get('Lan', 0) + \
-                                               df_tech.get('Grz', 0) + df_tech.get('Tmp', 0) + \
-                                               df_tech.get('Rwi', 0) + df_tech.get('Trs', 0)
+                # Pulizia colonne numeriche con i nomi esatti dell'immagine
+                campi_da_sommare = ['Acq', 'Lan', 'GRZ', 'TMP', 'RWI', 'TRS']
+                for c in ['Gia'] + campi_da_sommare:
+                    if c in df_tech.columns: 
+                        df_tech[c] = pulisci_numero(df_tech[c])
                 
+                # Calcolo Lavorazione Totale
+                df_tech['Lavorazione_Totale'] = df_tech[campi_da_sommare].sum(axis=1)
+                
+                # Unione dei dati
                 df = pd.merge(df, df_tech[['Art_Key', 'Gia', 'Lavorazione_Totale']], 
                               left_on='Articolo C', right_on='Art_Key', how='left')
+            else:
+                st.error("⚠️ Non trovo la colonna 'Codice' nel file Avanzamento_access.xlsx")
+        
         return df
-    except: return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Errore tecnico: {e}")
+        return pd.DataFrame()
 
-data = load_data()
-oggi_dt = datetime.now()
 
 # --- 4. DIAGNOSTICA DATI (Esegui dopo caricamento) ---
 if not data.empty:
