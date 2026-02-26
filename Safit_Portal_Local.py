@@ -47,6 +47,7 @@ def load_users():
     return {'safit_admin': ['admin2026', 'TUTTI']}
 
 USER_DB = load_users()
+st.write("Utenti caricati:", list(USER_DB.keys()))
 
 def check_password():
     if "authenticated" not in st.session_state:
