@@ -83,7 +83,7 @@ with st.sidebar:
     if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
     # Mostriamo l'utente solo se esiste nel session_state
     if st.session_state.get("username"):
-        st.write(f"Utente: **{st.session_state['username']}**")
+#        st.write(f"Utente: **{st.session_state['username']}**")
     
     st.markdown(f'<p class="version-tag">Versione: {APP_VERSION}</p>', unsafe_allow_html=True)
     
