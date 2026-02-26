@@ -4,15 +4,15 @@ import os
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURAZIONE PAGINA E VERSIONE ---
-APP_VERSION = "1.0.05"
+APP_VERSION = "1.0.06"
 st.set_page_config(page_title=f"Safit - Portale Avanzamento {APP_VERSION}", layout="wide")
 
+# Corretta la sintassi CSS per evitare l'errore f-string
 st.markdown(f"""
     <style>
     .main {{ background-color: #fcfcfc; }}
     .stApp {{ margin-top: -30px; }}
     
-    /* Layout Intestazione con Pillola */
     .header-container {{
         display: flex;
         align-items: center;
@@ -24,12 +24,12 @@ st.markdown(f"""
     .pill-bg {{
         background-color: #ddd;
         border-radius: 10px;
-        width: 100px;
-        height: 14px;
+        width: 80px;
+        height: 16px;
         border: 1px solid #bbb;
         position: relative;
-        flex-shrink: 0; /* Impedisce alla barra di rimpicciolirsi troppo */
-    }
+        flex-shrink: 0;
+    }}
     
     .pill-fill {{
         background-color: #4caf50;
@@ -40,9 +40,9 @@ st.markdown(f"""
     .pill-text {{
         position: absolute;
         top: 0; left: 0; width: 100%;
-        font-size: 9px;
+        font-size: 10px;
         font-weight: bold;
-        line-height: 12px;
+        line-height: 14px;
         text-align: center;
         color: #000;
     }}
@@ -59,7 +59,6 @@ st.markdown(f"""
         font-size: 13px;
     }}
     
-    /* COLORI LOGICA SAFIT (BLINDATI) */
     .on-time-row {{ background-color: #f1f8e9; border-left: 6px solid #4caf50; color: #1b5e20; }}
     .client-delay-row {{ background-color: #e3f2fd; border-left: 6px solid #2196f3; color: #0d47a1; }}
     .delay-row {{ background-color: #fff8e1; border-left: 6px solid #ffc107; color: #5d4037; }}
@@ -69,7 +68,7 @@ st.markdown(f"""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. GESTIONE UTENTI (INVARIATA) ---
+# --- 2. GESTIONE UTENTI ---
 @st.cache_data
 def load_users():
     file_u = 'utenti.xlsx'
@@ -101,7 +100,7 @@ def check_password():
 
 if not check_password(): st.stop()
 
-# --- 3. FUNZIONI TECNICHE (INVARIATE) ---
+# --- 3. FUNZIONI TECNICHE ---
 def aggiungi_giorni_lavorativi(data_inizio, giorni):
     data_corrente = data_inizio
     while giorni > 0:
@@ -172,7 +171,7 @@ if not df_cli.empty:
             qta, req_date = float(row['Qta_Effettiva']), row['Data_Consegna']
             settimane = ((req_date - oggi_dt).days / 7) if pd.notnull(req_date) else 99
 
-            # --- DETERMINAZIONE STEP (Logica 1.0.03) ---
+            # --- DETERMINAZIONE STEP ---
             pct, step_nome, cat_core = 10, "Conferma Ordine", "LAVORAZIONE"
             if st_gia >= qta: pct, step_nome, cat_core = 100, "Disponibile", "DISPONIBILE"; st_gia -= qta
             elif st_trs > 0: pct, step_nome = 75, "In preparazione"
@@ -201,10 +200,9 @@ if not df_cli.empty:
                 righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota_display, 'pct': pct})
 
         if righe_mostra:
-            # --- NUOVO LAYOUT INTESTAZIONE CON PILLOLA ---
             header_html = f"""
             <div class="header-container">
-                <span style="flex-grow: 1;">📦 <b>{art}</b> — <small>{desc}</small></span>
+                <span style="flex-grow: 1; text-align: left;">📦 <b>{art}</b> — <small>{desc}</small></span>
                 <div class="pill-bg">
                     <div class="pill-fill" style="width: {righe_mostra[0]['pct']}%;"></div>
                     <div class="pill-text">{righe_mostra[0]['pct']}%</div>
