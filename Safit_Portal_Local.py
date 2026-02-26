@@ -55,4 +55,141 @@ def check_password():
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', width=300)
-            st.title("Accesso Area Ris
+            st.title("Accesso Area Riservata")
+            user = st.text_input("Username").strip()
+            pw = st.text_input("Password", type="password").strip()
+            if st.button("Accedi"):
+                if user in USER_DB and str(USER_DB[user][0]) == pw:
+                    st.session_state["authenticated"] = True
+                    st.session_state["user_type"] = USER_DB[user][1]
+                    st.session_state["username"] = user
+                    st.rerun()
+                else: st.error("Username o Password errati")
+        return False
+    return True
+
+if not check_password(): st.stop()
+
+# --- 3. FUNZIONI TECNICHE ---
+def aggiungi_giorni_lavorativi(data_inizio, giorni):
+    data_corrente = data_inizio
+    while giorni > 0:
+        data_corrente += timedelta(days=1)
+        if data_corrente.weekday() < 5: giorni -= 1
+    return data_corrente
+
+def pulisci_numero(serie):
+    return pd.to_numeric(serie.astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False), errors='coerce').fillna(0)
+
+@st.cache_data
+def load_data():
+    try:
+        df = pd.read_excel('righe_Ordini_ARCA.xlsx', sheet_name='Foglio1', skiprows=2)
+        df.columns = [str(c).strip() for c in df.columns]
+        for col in ['Cliente Fornitore CD', 'Articolo C', 'Articolo D', 'Data']:
+            if col in df.columns: df[col] = df[col].ffill()
+        df['Data_Consegna'] = pd.to_datetime(df['Data'], errors='coerce')
+        col_res = 'Qta Residua' if 'Qta Residua' in df.columns else 'Qta Doc'
+        df['Qta_Effettiva'] = pd.to_numeric(df[col_res], errors='coerce').fillna(0)
+        df = df[df['Qta_Effettiva'] > 0]
+        
+        if os.path.exists('Avanzamento_access.xlsx'):
+            df_tech = pd.read_excel('Avanzamento_access.xlsx', skiprows=1) 
+            df_tech.columns = [str(c).strip() for c in df_tech.columns]
+            if 'Codice' in df_tech.columns:
+                df_tech = df_tech.rename(columns={'Codice': 'Art_Key'})
+                campi_num = ['Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']
+                for c in campi_num:
+                    if c in df_tech.columns: df_tech[c] = pulisci_numero(df_tech[c])
+                
+                df_tech['Lavorazione_Totale'] = df_tech.get('Acq', 0) + df_tech.get('Lan', 0) + \
+                                               df_tech.get('Grz', 0) + df_tech.get('Tmp', 0) + \
+                                               df_tech.get('Rwi', 0) + df_tech.get('Trs', 0)
+                
+                df = pd.merge(df, df_tech[['Art_Key', 'Gia', 'Lavorazione_Totale']], 
+                              left_on='Articolo C', right_on='Art_Key', how='left')
+        return df
+    except: return pd.DataFrame()
+
+data = load_data()
+oggi_dt = datetime.now()
+
+# --- 4. DIAGNOSTICA DATI (Esegui dopo caricamento) ---
+if not data.empty:
+    with st.expander("🔍 DIAGNOSTICA DATI (Clicca per espandere)"):
+        st.write("### Colonne trovate:", data.columns.tolist())
+        if 'Gia' in data.columns:
+            st.write("### Esempio Giacenze (Gia):", data[['Articolo C', 'Gia']].head())
+            if not pd.api.types.is_numeric_dtype(data['Gia']):
+                st.error("❌ ATTENZIONE: La colonna 'Gia' è letta come TESTO!")
+        else:
+            st.error("❌ Colonna 'Gia' NON TROVATA nel file!")
+
+# --- 5. SIDEBAR E FILTRI ---
+with st.sidebar:
+    if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
+    if st.session_state.get("username"):
+        st.write(f"Utente: **{st.session_state['username']}**")
+    st.markdown(f'<p class="version-tag">Versione: {APP_VERSION}</p>', unsafe_allow_html=True)
+    
+    if st.session_state["user_type"] == "TUTTI":
+        clienti_list = sorted([str(x) for x in data['Cliente Fornitore CD'].unique()])
+        sel_cli = st.selectbox("👤 Seleziona Cliente:", clienti_list)
+    else: sel_cli = st.session_state["user_type"]
+    
+    filtro_label = st.radio("Stato ordini:", ["Mostra tutto", "Solo Disponibili", "In Lavorazione", "In Ritardo"])
+    if st.button("Logout"):
+        st.session_state["authenticated"] = False
+        st.rerun()
+
+# --- 6. INTERFACCIA CENTRALE ---
+st.title("Portale Avanzamento Produzione")
+df_cli = data[data['Cliente Fornitore CD'] == sel_cli].copy()
+
+if not df_cli.empty:
+    articoli_dis = sorted([str(x) for x in df_cli['Articolo C'].unique()])
+    sel_art = st.selectbox("🔍 Cerca Codice Prodotto:", ["Tutti i prodotti"] + articoli_dis)
+    articoli_view = articoli_dis if sel_art == "Tutti i prodotti" else [sel_art]
+
+    for art in articoli_view:
+        df_art = df_cli[df_cli['Articolo C'] == art].sort_values('Data_Consegna')
+        desc = df_art['Articolo D'].iloc[0] if 'Articolo D' in df_art.columns else ""
+        
+        st_gia = float(df_art['Gia'].iloc[0]) if 'Gia' in df_art.columns and pd.notnull(df_art['Gia'].iloc[0]) else 0.0
+        st_lav = float(df_art['Lavorazione_Totale'].iloc[0]) if 'Lavorazione_Totale' in df_art.columns and pd.notnull(df_art['Lavorazione_Totale'].iloc[0]) else 0.0
+
+        righe_mostra = []
+        for _, row in df_art.iterrows():
+            qta = float(row['Qta_Effettiva'])
+            req_date = row['Data_Consegna']
+            
+            # --- LOGICA SAFIT ---
+            if st_gia >= qta:
+                st_gia -= qta
+                eta, nota, cat_core = oggi_dt, "Pronto", "DISPONIBILE"
+            elif (st_gia + st_lav) >= qta:
+                st_gia = 0
+                eta, nota, cat_core = aggiungi_giorni_lavorativi(oggi_dt, 10), "In Lavorazione", "LAVORAZIONE"
+            else:
+                eta, nota, cat_core = aggiungi_giorni_lavorativi(oggi_dt, 25), "Nuova Produzione", "LAVORAZIONE"
+
+            is_ritardo = (pd.notnull(req_date) and eta.date() > req_date.date())
+            
+            if cat_core == "DISPONIBILE":
+                css = "on-time-row" if not is_ritardo else "client-delay-row"
+            else:
+                css = "delay-row"
+
+            passa = False
+            if filtro_label == "Mostra tutto": passa = True
+            elif filtro_label == "Solo Disponibili" and cat_core == "DISPONIBILE": passa = True
+            elif filtro_label == "In Lavorazione" and cat_core == "LAVORAZIONE": passa = True
+            elif filtro_label == "In Ritardo" and is_ritardo: passa = True
+
+            if passa:
+                righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota})
+
+        if righe_mostra:
+            with st.expander(f"📦 {art} — {desc} | Residuo: {df_art['Qta_Effettiva'].sum():,.0f}"):
+                for r in righe_mostra:
+                    st.markdown(f'<div class="status-row {r["css"]}"><span><b>Consegna:</b> {r["date"].strftime("%d/%m/%Y") if pd.notnull(r["date"]) else "N.D."} | <b>Q.tà:</b> {r["qta"]:,.0f}</span><span><b>Stima:</b> {r["eta"].strftime("%d/%m/%Y")} ({r["nota"]})</span></div>', unsafe_allow_html=True)
