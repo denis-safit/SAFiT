@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURAZIONE PAGINA ---
-APP_VERSION = "1.0.12"
+APP_VERSION = "1.0.13"
 st.set_page_config(page_title=f"Safit - Portale Avanzamento {APP_VERSION}", layout="wide")
 
 st.markdown(f"""
@@ -62,7 +62,7 @@ st.markdown(f"""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. GESTIONE UTENTI ---
+# --- 2. GESTIONE UTENTI (COL LOGO) ---
 @st.cache_data
 def load_users():
     file_u = 'utenti.xlsx'
@@ -94,7 +94,7 @@ def check_password():
 
 if not check_password(): st.stop()
 
-# --- 3. FUNZIONI TECNICHE ---
+# --- 3. CARICAMENTO DATI (SISTEMATO MERGE) ---
 def aggiungi_giorni_lavorativi(data_inizio, giorni):
     data_corrente = data_inizio
     while giorni > 0:
@@ -108,34 +108,31 @@ def pulisci_numero(serie):
 @st.cache_data
 def load_data():
     try:
-        # Carico ordini
         df = pd.read_excel('righe_Ordini_ARCA.xlsx', sheet_name='Foglio1', skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
         for col in ['Cliente Fornitore CD', 'Articolo C', 'Articolo D', 'Data']:
             if col in df.columns: df[col] = df[col].ffill()
+        df['Articolo C'] = df['Articolo C'].astype(str).str.strip() # Pulizia codice
         df['Data_Consegna'] = pd.to_datetime(df['Data'], errors='coerce')
         col_res = 'Qta Residua' if 'Qta Residua' in df.columns else 'Qta Doc'
         df['Qta_Effettiva'] = pd.to_numeric(df[col_res], errors='coerce').fillna(0)
         df = df[df['Qta_Effettiva'] > 0]
         
-        # Carico magazzino e avanzamento
         if os.path.exists('Avanzamento_access.xlsx'):
             df_tech = pd.read_excel('Avanzamento_access.xlsx', skiprows=1) 
             df_tech.columns = [str(c).strip() for c in df_tech.columns]
-            # Cerco la colonna del codice (può essere 'Codice' o 'Art_Key')
             cod_col = 'Codice' if 'Codice' in df_tech.columns else ('Art_Key' if 'Art_Key' in df_tech.columns else None)
             
             if cod_col:
+                df_tech[cod_col] = df_tech[cod_col].astype(str).str.strip() # Pulizia codice
                 for c in ['Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']:
                     if c in df_tech.columns: df_tech[c] = pulisci_numero(df_tech[c])
                 
-                # Merge esatto sui codici articolo
+                # Merge blindato sui codici puliti
                 df = pd.merge(df, df_tech[[cod_col, 'Gia', 'Acq', 'Lan', 'Grz', 'Tmp', 'Rwi', 'Trs']], 
                               left_on='Articolo C', right_on=cod_col, how='left')
         return df
-    except Exception as e:
-        st.error(f"Errore caricamento: {e}")
-        return pd.DataFrame()
+    except: return pd.DataFrame()
 
 data = load_data()
 oggi_dt = datetime.now()
@@ -166,24 +163,25 @@ if not df_cli.empty:
         desc = df_art['Articolo D'].iloc[0]
         row_t = df_art.iloc[0]
         
-        # Giacenza totale per questo articolo (usiamo il valore del merge)
+        # Giacenza reale letta dal file
         st_gia = float(row_t.get('Gia', 0))
         st_trs, st_rwi, st_acq, st_tmp, st_lan, st_grz = [float(row_t.get(k, 0)) for k in ['Trs','Rwi','Acq','Tmp','Lan','Grz']]
 
         righe_mostra = []
         for _, row in df_art.iterrows():
-            qta, req_date = float(row['Qta_Effettiva']), row['Data_Consegna']
+            qta = float(row['Qta_Effettiva'])
+            req_date = row['Data_Consegna']
             
-            # --- LOGICA BLINDATA DISPONIBILITÀ ---
+            # --- PRIORITÀ ASSOLUTA ALLA GIACENZA ---
             cat_core = "LAVORAZIONE"
             if st_gia >= qta:
                 cat_core = "DISPONIBILE"
-                st_gia -= qta # Scalo la giacenza per l'ordine successivo dello stesso articolo
+                st_gia -= qta 
             
             eta = oggi_dt if cat_core == "DISPONIBILE" else (aggiungi_giorni_lavorativi(oggi_dt, 10) if (st_trs+st_rwi+st_acq+st_tmp+st_lan) > 0 else aggiungi_giorni_lavorativi(oggi_dt, 25))
             is_ritardo = (pd.notnull(req_date) and eta.date() > req_date.date())
 
-            # FILTRO (RIPRISTINO 1.0.02)
+            # FILTRO 1.0.02
             passa = False
             if filtro_label == "Mostra tutto": passa = True
             elif filtro_label == "Solo Disponibili" and cat_core == "DISPONIBILE": passa = True
@@ -191,14 +189,7 @@ if not df_cli.empty:
             elif filtro_label == "In Ritardo" and is_ritardo: passa = True
 
             if passa:
-                # Percentuale corretta basata sulla disponibilità reale
-                pct = 10
-                if cat_core == "DISPONIBILE": pct = 100
-                elif st_trs > 0: pct = 75
-                elif st_rwi > 0 or st_acq > 0: pct = 60
-                elif st_tmp > 0 or st_lan > 0: pct = 50
-                elif st_grz > 0: pct = 30
-                
+                pct = 100 if cat_core == "DISPONIBILE" else (75 if st_trs > 0 else (60 if st_rwi > 0 or st_acq > 0 else (50 if st_tmp > 0 or st_lan > 0 else 20)))
                 css = "on-time-row" if (cat_core == "DISPONIBILE" and not is_ritardo) else ("prod-delay-row" if is_ritardo else "delay-row")
                 nota = "Pronto" if cat_core == "DISPONIBILE" else "In Lavorazione"
                 righe_mostra.append({'css': css, 'date': req_date, 'qta': qta, 'eta': eta, 'nota': nota, 'pct': pct})
