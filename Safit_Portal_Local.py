@@ -56,19 +56,27 @@ def check_password():
         with col2:
             if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', width=300)
             st.title("Accesso Area Riservata")
-            user = st.text_input("Username")
-            pw = st.text_input("Password", type="password")
+            # Usiamo .strip() per pulire l'input dell'utente
+            user = st.text_input("Username").strip()
+            pw = st.text_input("Password", type="password").strip()
+            
             if st.button("Accedi"):
-                if user in USER_DB and str(USER_DB[user][0]) == pw:
-                    st.session_state["authenticated"] = True
-                    st.session_state["user_type"] = USER_DB[user][1]
-                    st.session_state["username"] = user
-                    st.rerun()
-                else: st.error("Username o Password errati")
+                # Puliamo anche i dati che arrivano dal file Excel (.strip())
+                # e trasformiamo tutto in stringa per sicurezza
+                user_found = False
+                for db_user, data in USER_DB.items():
+                    if str(db_user).strip() == user:
+                        if str(data[0]).strip() == pw:
+                            st.session_state["authenticated"] = True
+                            st.session_state["user_type"] = data[1]
+                            st.session_state["username"] = user
+                            st.rerun()
+                        user_found = True
+                
+                if not st.session_state["authenticated"]:
+                    st.error("Username o Password errati")
         return False
     return True
-
-if not check_password(): st.stop()
 
 # --- 3. FUNZIONI TECNICHE ---
 def aggiungi_giorni_lavorativi(data_inizio, giorni):
