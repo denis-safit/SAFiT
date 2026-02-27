@@ -1,5 +1,5 @@
 @echo off
-title Aggiornamento Portale SAFIT - DEFINITIVO
+title Aggiornamento Portale SAFIT - DEFINITIVO + APERTURA WEB
 color 0B
 cls
 
@@ -14,11 +14,10 @@ echo ============================================================
 echo            FASE 1: ESTRAZIONE DATI ACCESS
 echo ============================================================
 
-echo [1/7] Pulizia file Excel precedente...
+echo [1/8] Pulizia file Excel precedente...
 if exist "%EXCEL_FILE%" del /f /q "%EXCEL_FILE%"
 
-echo [2/7] Lancio Access (Macro Vai_Safit)...
-:: Lancio Access in background
+echo [2/8] Lancio Access (Macro Vai_Safit)...
 start "" "msaccess.exe" "%DB_PONTE%" /x Vai_Safit
 
 echo In attesa che Access generi il nuovo file...
@@ -35,32 +34,38 @@ echo ============================================================
 echo            FASE 2: AGGIORNAMENTO ARCA E GIT
 echo ============================================================
 
-echo [3/7] Aggiornamento Pivot ARCA...
+echo [3/8] Aggiornamento Pivot ARCA...
 if exist refresh_arca.vbs (
     cscript //nologo refresh_arca.vbs
-) else (
-    echo Salto Pivot: refresh_arca.vbs non trovato.
 )
 
-echo [4/7] Preparazione file per GitHub...
+echo [4/8] Preparazione file per GitHub...
 git add --all
 git commit -m "Auto-Update: %date% %time%"
 
-echo [5/7] Sincronizzazione con il Cloud (Rebase)...
-:: Questo risolve l'errore "unstaged changes" e allinea i dati
+echo [5/8] Sincronizzazione con il Cloud (Rebase)...
 git pull origin main --rebase
 
-echo [6/7] Controllo conflitti...
+echo [6/8] Controllo conflitti...
 git checkout --ours .
 git add --all
 git rebase --continue 2>nul
 
-echo [7/7] Invio finale al Portale Online...
+echo [7/8] Invio finale al Portale Online...
 git push origin main --force
 
 echo.
 echo ============================================================
-echo    AGGIORNAMENTO COMPLETATO! IL PORTALE E' ONLINE.
+echo    FASE 3: APERTURA PORTALE SAFIT
+echo ============================================================
+echo [8/8] Apertura Browser...
+
+:: LANCIO DEL PORTALE WEB
+start chrome.exe "https://qey2qqomzpzjmuxb8mfm5h.streamlit.app"
+
+echo.
+echo ============================================================
+echo    AGGIORNAMENTO COMPLETATO! CHIUSURA TRA 10 SECONDI...
 echo ============================================================
 timeout /t 10
 exit
