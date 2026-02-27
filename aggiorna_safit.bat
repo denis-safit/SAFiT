@@ -1,5 +1,5 @@
 @echo off
-title Aggiornamento Portale SAFIT - MODO FORZATO
+title Aggiornamento Portale SAFIT - AUTOMAZIONE TOTALE
 color 0B
 cls
 
@@ -8,40 +8,49 @@ echo            CARICAMENTO DATI SAFIT SU GITHUB
 echo ============================================================
 echo.
 
-:: 1. Entra nella cartella corretta
-cd /d "C:\Users\Venezian.Denis\Desktop\python_access_sql\git-files"
+:: 1. DEFINIZIONE PERCORSI (Verifica che il DB PONTE sia sul Desktop)
+set DIR_GIT=C:\Users\Venezian.Denis\Desktop\python_access_sql\git-files
+set DB_PONTE=%USERPROFILE%\Desktop\Estrattore_Safit.accdb
 
-echo [1/5] Congelamento dati locali...
-:: Prima di tutto diciamo a Git che i tuoi file nuovi sono quelli buoni
-git add --all
-git commit -m "Aggiornamento dati locale %date% %time%"
+cd /d "%DIR_GIT%"
+
+echo [1/7] Estrazione dati da ACCESS (Tramite file Ponte)...
+:: Apre Access, lancia la macro e aspetta che finisca
+start /wait "" "msaccess.exe" "%DB_PONTE%" /x Vai_Safit
 
 echo.
-echo [2/5] Allineamento con il Cloud (Senza sovrascrivere)...
-:: Usiamo 'rebase' invece di 'pull' semplice per mettere i tuoi dati "sopra" quelli vecchi
+echo [2/7] Aggiornamento Pivot ARCA (Refresh Silenzioso)...
+:: Lancia lo script VBScript che abbiamo creato per la Pivot
+cscript //nologo refresh_arca.vbs
+
+echo.
+echo [3/7] Congelamento dati locali...
+git add --all
+git commit -m "Auto-Update: %date% %time%"
+
+echo.
+echo [4/7] Allineamento con il Cloud (Rebase)...
 git pull origin main --rebase
 
 echo.
-echo [3/5] Risoluzione conflitti automatica...
-:: Se Git ha dubbi, gli diciamo di tenere i TUOI file (ours)
+echo [5/7] Risoluzione conflitti automatica (Keep Ours)...
 git checkout --ours .
 git add --all
-:: Se il rebase è in corso lo finiamo, altrimenti andiamo avanti
 git rebase --continue 2>nul
 
 echo.
-echo [4/5] Invio dati finale...
+echo [6/7] Invio dati finale al Portale...
 git push origin main --force
 
 echo.
 echo ============================================================
-echo    DATI INVIATI! IL TUO PC HA SOVRASCRITTO IL CLOUD.
+echo    AGGIORNAMENTO COMPLETATO! APERTURA PORTALE...
 echo ============================================================
 
-:: Apertura portale pubblico
+:: Apre il portale per controllare il risultato
 start chrome.exe "https://qey2qqomzpzjmuxb8mfm5h.streamlit.app"
 
 echo.
-echo Operazione completata. 
-timeout /t 5
+echo Il sistema si chiudera tra 10 secondi.
+timeout /t 10
 exit
