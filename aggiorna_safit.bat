@@ -1,50 +1,66 @@
 @echo off
-title Aggiornamento Portale SAFIT - AUTOMAZIONE TOTALE
+title Aggiornamento Portale SAFIT - DEFINITIVO
 color 0B
 cls
 
-:: 1. DEFINIZIONE PERCORSI (Tutto nella stessa cartella)
+:: 1. IMPOSTAZIONE PERCORSI
 set DIR_GIT=C:\Users\Venezian.Denis\Desktop\python_access_sql\git-files
-:: Ora il database è cercato direttamente nella cartella git-files
 set DB_PONTE=%DIR_GIT%\Estrattore_Safit.accdb
+set EXCEL_FILE=%DIR_GIT%\Avanzamento_access.xlsx
 
 cd /d "%DIR_GIT%"
 
-echo [1/7] Estrazione dati da ACCESS (File Ponte in locale)...
-if exist "%DB_PONTE%" (
-    start /wait "" "msaccess.exe" "%DB_PONTE%" /x Vai_Safit
+echo ============================================================
+echo            FASE 1: ESTRAZIONE DATI ACCESS
+echo ============================================================
+
+echo [1/7] Pulizia file Excel precedente...
+if exist "%EXCEL_FILE%" del /f /q "%EXCEL_FILE%"
+
+echo [2/7] Lancio Access (Macro Vai_Safit)...
+:: Lancio Access in background
+start "" "msaccess.exe" "%DB_PONTE%" /x Vai_Safit
+
+echo In attesa che Access generi il nuovo file...
+:loop
+timeout /t 2 >nul
+if not exist "%EXCEL_FILE%" (
+    echo ...sto ancora lavorando... attendere...
+    goto loop
+)
+echo [OK] File Excel creato con successo!
+
+echo.
+echo ============================================================
+echo            FASE 2: AGGIORNAMENTO ARCA E GIT
+echo ============================================================
+
+echo [3/7] Aggiornamento Pivot ARCA...
+if exist refresh_arca.vbs (
+    cscript //nologo refresh_arca.vbs
 ) else (
-    echo ERRORE: File %DB_PONTE% non trovato!
-    pause
-    exit
+    echo Salto Pivot: refresh_arca.vbs non trovato.
 )
 
-echo.
-echo [2/7] Aggiornamento Pivot ARCA...
-cscript //nologo refresh_arca.vbs
-
-echo.
-echo [3/7] Congelamento dati locali...
+echo [4/7] Preparazione file per GitHub...
 git add --all
 git commit -m "Auto-Update: %date% %time%"
 
-echo.
-echo [4/7] Allineamento con il Cloud (Rebase)...
+echo [5/7] Sincronizzazione con il Cloud (Rebase)...
+:: Questo risolve l'errore "unstaged changes" e allinea i dati
 git pull origin main --rebase
 
-echo.
-echo [5/7] Risoluzione conflitti (Keep Ours)...
+echo [6/7] Controllo conflitti...
 git checkout --ours .
 git add --all
 git rebase --continue 2>nul
 
-echo.
-echo [6/7] Invio dati finale al Portale...
+echo [7/7] Invio finale al Portale Online...
 git push origin main --force
 
 echo.
 echo ============================================================
-echo    AGGIORNAMENTO COMPLETATO!
+echo    AGGIORNAMENTO COMPLETATO! IL PORTALE E' ONLINE.
 echo ============================================================
 timeout /t 10
 exit
