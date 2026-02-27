@@ -1,5 +1,5 @@
 @echo off
-title Aggiornamento Portale SAFIT
+title Aggiornamento Portale SAFIT - MODO FORZATO
 color 0B
 cls
 
@@ -11,27 +11,31 @@ echo.
 :: 1. Entra nella cartella corretta
 cd /d "C:\Users\Venezian.Denis\Desktop\python_access_sql\git-files"
 
-echo [1/4] Controllo aggiornamenti remoti...
-git pull origin main
-
-echo.
-echo [2/4] Forzatura scansione file modificati...
-:: Questo comando forza Git a ricontrollare i timestamp dei file
-git update-index --refresh > nul
-
-echo.
-echo [3/4] Preparazione file Excel...
+echo [1/5] Congelamento dati locali...
+:: Prima di tutto diciamo a Git che i tuoi file nuovi sono quelli buoni
 git add --all
-:: Rimosso --quiet per vedere cosa sta salvando effettivamente
-git commit -m "Aggiornamento dati %date% %time%"
+git commit -m "Aggiornamento dati locale %date% %time%"
 
 echo.
-echo [4/4] Invio dati al portale online...
-git push origin main
+echo [2/5] Allineamento con il Cloud (Senza sovrascrivere)...
+:: Usiamo 'rebase' invece di 'pull' semplice per mettere i tuoi dati "sopra" quelli vecchi
+git pull origin main --rebase
+
+echo.
+echo [3/5] Risoluzione conflitti automatica...
+:: Se Git ha dubbi, gli diciamo di tenere i TUOI file (ours)
+git checkout --ours .
+git add --all
+:: Se il rebase è in corso lo finiamo, altrimenti andiamo avanti
+git rebase --continue 2>nul
+
+echo.
+echo [4/5] Invio dati finale...
+git push origin main --force
 
 echo.
 echo ============================================================
-echo    DATI INVIATI! APERTURA PORTALE IN CORSO...
+echo    DATI INVIATI! IL TUO PC HA SOVRASCRITTO IL CLOUD.
 echo ============================================================
 
 :: Apertura portale pubblico
