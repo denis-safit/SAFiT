@@ -2,9 +2,10 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime, timedelta
+from io import BytesIO
 
-# --- 1. CONFIGURAZIONE ---
-APP_VERSION = "1.2.8"
+# --- 1. CONFIGURAZIONE E STILE ---
+APP_VERSION = "1.3.1"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
@@ -46,7 +47,7 @@ if not st.session_state["authenticated"]:
             else: st.error("Credenziali errate")
     st.stop()
 
-# --- 3. MOTORE DATI ---
+# --- 3. MOTORE DI PULIZIA E CARICAMENTO ---
 def clean_num(serie):
     s = serie.astype(str).str.replace(' ', '').str.replace('\xa0', '')
     def fix_val(val):
@@ -54,8 +55,7 @@ def clean_num(serie):
         if ',' in val and '.' in val: return val.replace('.', '').replace(',', '.')
         elif ',' in val: return val.replace(',', '.')
         return val
-    s = s.apply(fix_val)
-    return pd.to_numeric(s, errors='coerce').fillna(0)
+    return pd.to_numeric(s.apply(fix_val), errors='coerce').fillna(0)
 
 def find_col(df, targets):
     for c in df.columns:
@@ -76,23 +76,20 @@ def smart_load(filename):
 @st.cache_data
 def load_all():
     try:
+        # Caricamento ARCA
         df_a = smart_load('righe_Ordini_ARCA.xlsx')
         c_cli, c_art, c_des = find_col(df_a, ['Cliente Fornitore', 'CD']), find_col(df_a, ['Articolo C', 'Cod. Art']), find_col(df_a, ['Articolo D', 'Descriz'])
         c_dat, c_qta = find_col(df_a, ['Data']), find_col(df_a, ['Qta Residua', 'Qta Doc'])
         for col in [c_cli, c_art, c_des]:
             if col: df_a[col] = df_a[col].ffill()
-        
-        # Filtro Righe Vuote e Totali
-        df_a = df_a.dropna(subset=[c_art, c_dat]) 
+        df_a = df_a.dropna(subset=[c_art, c_dat])
         df_a = df_a[~df_a[c_art].astype(str).str.contains('TOTALE|TOTAL', case=False, na=False)]
-        
         df_a['Art_Key'] = df_a[c_art].astype(str).str.strip().str.upper()
-        # CONVERSIONE DATA SICURA
         df_a['Data_Dt'] = pd.to_datetime(df_a[c_dat], errors='coerce')
-        df_a = df_a.dropna(subset=['Data_Dt']) # Rimuove righe con date impossibili
-        
+        df_a = df_a.dropna(subset=['Data_Dt'])
         df_a['Qta_Res'] = clean_num(df_a[c_qta])
 
+        # Caricamento ACCESS
         if os.path.exists('Avanzamento_access.xlsx'):
             df_t = smart_load('Avanzamento_access.xlsx')
             c_code = find_col(df_t, ['Codice', 'Articolo'])
@@ -107,68 +104,71 @@ def load_all():
                 return pd.merge(df_a, df_t[['Key_Acc', 'GIA_V', 'ACQ_V', 'PROD_V']], left_on='Art_Key', right_on='Key_Acc', how='left').fillna(0)
         return df_a
     except Exception as e:
-        st.error(f"Errore Caricamento: {e}"); return pd.DataFrame()
+        st.error(f"Errore: {e}"); return pd.DataFrame()
 
-# --- 4. CALCOLO E FILTRI ---
+# --- 4. FUNZIONE EXPORT EXCEL ---
+def to_excel_full(df):
+    output = BytesIO()
+    cols_export = {
+        'Art_Key': 'Codice Articolo', 'Articolo D': 'Descrizione', 'Data_Dt': 'Data Arca',
+        'Qta_Res': 'Quantità', 'st': 'Stato', 'dt_e': 'Consegna Stimata',
+        'GIA_V': 'Giacenza', 'ACQ_V': 'In Acquisto', 'PROD_V': 'In Produzione'
+    }
+    df_exp = df[[c for c in cols_export.keys() if c in df.columns]].rename(columns=cols_export)
+    df_exp['Data Arca'] = df_exp['Data Arca'].dt.strftime('%d/%m/%Y')
+    df_exp['Consegna Stimata'] = df_exp['Consegna Stimata'].dt.strftime('%d/%m/%Y')
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df_exp.to_excel(writer, index=False, sheet_name='Report')
+    return output.getvalue()
+
+# --- 5. INTERFACCIA ---
 data = load_all()
 if not data.empty:
     with st.sidebar:
         if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
-        st.markdown("### 🛠️ Pannello di Controllo")
+        st.markdown("### 🛠️ Pannello Controllo")
         c_cli_n = find_col(data, ['Cliente Fornitore'])
         sel_cli = st.selectbox("Seleziona Cliente:", sorted(data[c_cli_n].unique().astype(str))) if st.session_state["user_type"] == "TUTTI" else st.session_state["user_type"]
         search_art = st.text_input("🔍 Cerca Articolo:").upper()
         st.markdown("---")
         st.markdown("#### 📡 Stato Disponibilità")
-        f_disp = st.checkbox("🟢 Magazzino", value=True)
-        f_acq = st.checkbox("🔵 Acquisti", value=True)
-        f_prod = st.checkbox("🟡 Produzione", value=True)
-        f_manc = st.checkbox("🔴 Mancante", value=True)
-        if st.button("Esci"): st.session_state["authenticated"] = False; st.rerun()
-
+        f_disp, f_acq, f_prod, f_manc = st.checkbox("🟢 Magazzino", True), st.checkbox("🔵 Acquisti", True), st.checkbox("🟡 Produzione", True), st.checkbox("🔴 Mancante", True)
+        
+    # Logica ATP
     df_cli = data[data[c_cli_n] == sel_cli].copy()
     results = []
-    
-    # CORREZIONE ERRORE TRACEBACK: Pulizia preventiva e gestione date
     for art in df_cli['Art_Key'].unique():
-        # Filtriamo e ordiniamo in sicurezza
-        df_art = df_cli[df_cli['Art_Key'] == art].copy()
-        df_art = df_art.sort_values(by='Data_Dt', ascending=True)
-        
+        df_art = df_cli[df_cli['Art_Key'] == art].copy().sort_values('Data_Dt')
         m, a, p = float(df_art['GIA_V'].iloc[0]), float(df_art['ACQ_V'].iloc[0]), float(df_art['PROD_V'].iloc[0])
-        
         for _, r in df_art.iterrows():
             q, oggi = float(r['Qta_Res']), datetime.now()
-            # Logica ATP
             if m >= q: m -= q; s, c, d = "DISPONIBILE", "on-time-row", r['Data_Dt']
             elif (m+a) >= q: a -= (q-m); m=0; s, c, d = "ACQUISTO", "acq-row", oggi+timedelta(12)
             elif (m+a+p) >= q: p -= (q-m-a); m=0; a=0; s, c, d = "PRODUZIONE", "prod-row", oggi+timedelta(22)
             else: s, c, d = "MANCANTE", "urgent-row", oggi+timedelta(40)
-            
-            res = r.to_dict(); res.update({'st': s, 'cs': c, 'dt_e': d})
-            results.append(res)
+            res = r.to_dict(); res.update({'st': s, 'cs': c, 'dt_e': d}); results.append(res)
     
-    if results:
-        df_f = pd.DataFrame(results)
-        if search_art: df_f = df_f[df_f['Art_Key'].str.contains(search_art)]
-        
-        allowed = []
-        if f_disp: allowed.append("DISPONIBILE")
-        if f_acq: allowed.append("ACQUISTO")
-        if f_prod: allowed.append("PRODUZIONE")
-        if f_manc: allowed.append("MANCANTE")
-        
-        df_show = df_f[df_f['st'].isin(allowed)]
+    df_f = pd.DataFrame(results)
+    if search_art: df_f = df_f[df_f['Art_Key'].str.contains(search_art)]
+    allowed = []
+    if f_disp: allowed.append("DISPONIBILE")
+    if f_acq: allowed.append("ACQUISTO")
+    if f_prod: allowed.append("PRODUZIONE")
+    if f_manc: allowed.append("MANCANTE")
+    df_show = df_f[df_f['st'].isin(allowed)]
 
-        st.title(f"Piano Consegne: {sel_cli}")
-        for art in sorted(df_show['Art_Key'].unique()):
-            df_sub = df_show[df_show['Art_Key'] == art]
-            with st.expander(f"📦 {art} - {df_sub[find_col(df_sub, ['Articolo D'])].iloc[0]}"):
-                st.markdown(f'<div class="debug-box">Giacenza: {df_sub["GIA_V"].iloc[0]:,.0f} | In Acquisto: {df_sub["ACQ_V"].iloc[0]:,.0f} | In Lavorazione: {df_sub["PROD_V"].iloc[0]:,.0f}</div>', unsafe_allow_html=True)
-                for _, r in df_sub.iterrows():
-                    st.markdown(f"""<div class="status-row {r['cs']}">
-                        <span>📅 <b>{r['Data_Dt'].strftime('%d/%m/%Y')}</b> | Q.tà: {r['Qta_Res']:,.0f}</span>
-                        <span><b>{r['st']}</b> (Est: {r['dt_e'].strftime('%d/%m/%Y')})</span>
-                    </div>""", unsafe_allow_html=True)
-    else:
-        st.warning("Nessun dato risultante per i filtri selezionati.")
+    with st.sidebar:
+        st.markdown("---")
+        if not df_show.empty:
+            st.download_button("📊 Scarica Report Excel", data=to_excel_full(df_show), file_name=f"Report_{sel_cli}.xlsx")
+
+    st.title(f"Piano Consegne: {sel_cli}")
+    for art in sorted(df_show['Art_Key'].unique()):
+        df_sub = df_show[df_show['Art_Key'] == art]
+        with st.expander(f"📦 {art} - {df_sub[find_col(df_sub, ['Articolo D'])].iloc[0]}"):
+            st.markdown(f'<div class="debug-box">Giacenza: {df_sub["GIA_V"].iloc[0]:,.0f} | In Arrivo: {df_sub["ACQ_V"].iloc[0]:,.0f} | Produzione: {df_sub["PROD_V"].iloc[0]:,.0f}</div>', unsafe_allow_html=True)
+            for _, r in df_sub.iterrows():
+                st.markdown(f"""<div class="status-row {r['cs']}">
+                    <span>📅 <b>{r['Data_Dt'].strftime('%d/%m/%Y')}</b> | Q.tà: {r['Qta_Res']:,.0f}</span>
+                    <span><b>{r['st']}</b> (Est: {r['dt_e'].strftime('%d/%m/%Y')})</span>
+                </div>""", unsafe_allow_html=True)
