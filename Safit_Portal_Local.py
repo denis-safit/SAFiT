@@ -6,7 +6,7 @@ from io import BytesIO
 import plotly.express as px
 
 # --- 1. CONFIGURAZIONE E STILE ---
-APP_VERSION = "1.6.7-Final"
+APP_VERSION = "1.6.8-Unlocked"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
@@ -47,14 +47,14 @@ def to_excel_full(df):
 
 def smart_load(filename, keywords):
     if not os.path.exists(filename): return pd.DataFrame()
-    df_p = pd.read_excel(filename, header=None, nrows=15)
+    df_p = pd.read_excel(filename, header=None, nrows=20)
     h_row = 0
     for i, row in df_p.iterrows():
         row_s = " ".join([str(x) for x in row.values])
         if any(k in row_s for k in keywords):
             h_row = i; break
     df = pd.read_excel(filename, skiprows=h_row)
-    df.columns = [str(c).strip() for c in df.columns] # PULIZIA SPAZI COLONNE
+    df.columns = [str(c).strip() for c in df.columns]
     return df
 
 # --- 3. MOTORE LOGICO ATP ---
@@ -66,11 +66,6 @@ def load_and_process():
 
         c_tipo, c_art, c_des, c_qta, c_dat, c_cli = "Codice Documento", "Articolo C", "Articolo D", "Qta Residua", "Data Consegna", "Cliente Fornitore CD"
         
-        # Check colonne critiche
-        for col in [c_tipo, c_art, c_qta, c_dat]:
-            if col not in df_full.columns:
-                st.error(f"Errore: Colonna '{col}' non trovata. Verifica l'export Arca."); return pd.DataFrame(), {}
-
         df_full[c_art] = df_full[c_art].astype(str).str.strip().str.upper()
         df_full[c_qta] = clean_num(df_full[c_qta])
         
@@ -79,48 +74,70 @@ def load_and_process():
         access_data = {}
         if not df_access.empty:
             df_access['KEY'] = df_access['CODICE'].astype(str).str.strip().str.upper()
+            cols_prod = ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS']
             for _, r in df_access.iterrows():
-                p_val = sum([clean_num(pd.Series([r[f]])).iloc[0] for f in ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS'] if f in df_access.columns])
+                p_val = 0
+                for f in cols_prod:
+                    if f in df_access.columns: p_val += clean_num(pd.Series([r[f]])).iloc[0]
                 access_data[r['KEY']] = {'GIA': clean_num(pd.Series([r['GIA']])).iloc[0], 'PROD': p_val}
 
-        # Arrivi (OFF/DCL)
+        # Arrivi OFF/DCL
         df_in = df_full[df_full[c_tipo].isin(['OFF', 'DCL'])].copy()
         df_in['DATA_DT'] = pd.to_datetime(df_in[c_dat], errors='coerce')
-        all_arrivals = {art: df_in[df_in[c_art] == art].sort_values('DATA_DT')[[c_dat, c_qta]].values.tolist() for art in df_in[c_art].unique()}
+        all_arrivals = {}
+        for art in df_in[c_art].unique():
+            all_arrivals[art] = df_in[df_in[c_art] == art].sort_values('DATA_DT')[[c_dat, c_qta]].values.tolist()
 
+        # Divisione OCI e OCA
         df_oci = df_full[df_full[c_tipo] == 'OCI'].copy().sort_values(c_dat)
         df_oca = df_full[df_full[c_tipo] == 'OCA'].copy().sort_values(c_dat)
         
-        results = []
-        def calc_atp(df_proc, is_oca):
-            for _, row in df_proc.iterrows():
-                art = row[c_art]; qta_req = row[c_qta]
-                gia = access_data.get(art, {}).get('GIA', 0); prod = access_data.get(art, {}).get('PROD', 0); arrivals = all_arrivals.get(art, [])
+        final_results = []
+
+        def process_queue(df_queue, is_oca):
+            for _, row in df_queue.iterrows():
+                art = row[c_art]
+                qta_req = row[c_qta]
+                gia = access_data.get(art, {}).get('GIA', 0)
+                prod = access_data.get(art, {}).get('PROD', 0)
+                arrivals = all_arrivals.get(art, [])
+                
                 status, color = ("MANCANTE", "urgent-row") if not is_oca else ("DA PIANIFICARE", "oca-row")
-                date_est = datetime.now() + timedelta(days=45)
+                dt_e = pd.to_datetime(row[c_dat]) if is_oca else datetime.now() + timedelta(days=45)
 
                 if gia >= qta_req:
                     gia -= qta_req
                     if art in access_data: access_data[art]['GIA'] = gia
-                    status, color, date_est = "DISPONIBILE", "on-time-row", pd.to_datetime(row[c_dat])
+                    status, color, dt_e = "DISPONIBILE", "on-time-row", pd.to_datetime(row[c_dat])
                 else:
-                    fabb = qta_req - gia; gia = 0
+                    fabb = qta_req - gia
+                    gia = 0
                     if art in access_data: access_data[art]['GIA'] = 0
+                    
+                    found_acq = False
                     for i, arr in enumerate(arrivals):
                         if arr[1] >= fabb:
-                            arrivals[i][1] -= fabb; status, color, date_est = "ACQUISTO", "acq-row", pd.to_datetime(arr[0]); fabb = 0; break
+                            arrivals[i][1] -= fabb
+                            status, color, dt_e = "ACQUISTO", "acq-row", pd.to_datetime(arr[0])
+                            found_acq = True; break
                         else: fabb -= arr[1]; arrivals[i][1] = 0
-                    if fabb > 0 and prod >= fabb:
+                    
+                    if not found_acq and prod >= fabb:
                         prod -= fabb
                         if art in access_data: access_data[art]['PROD'] = prod
-                        status, color, date_est = "PRODUZIONE", "prod-row", datetime.now() + timedelta(days=21)
+                        status, color, dt_e = "PRODUZIONE", "prod-row", datetime.now() + timedelta(days=21)
 
-                results.append({**row.to_dict(), 'ST': status, 'CS': color, 'DT_E': date_est, 'ART_KEY': art, 'CLI_NAME': str(row[c_cli])})
+                res_dict = row.to_dict()
+                res_dict.update({'ST': status, 'CS': color, 'DT_E': dt_e, 'ART_KEY': art, 'CLI_NAME': str(row[c_cli])})
+                final_results.append(res_dict)
 
-        calc_atp(df_oci, False); calc_atp(df_oca, True)
-        return pd.DataFrame(results), access_data
+        # Elabora TUTTO
+        process_queue(df_oci, False)
+        process_queue(df_oca, True)
+        
+        return pd.DataFrame(final_results), access_data
     except Exception as e:
-        st.error(f"Errore Logica: {e}"); return pd.DataFrame(), {}
+        st.error(f"Errore Elaborazione: {e}"); return pd.DataFrame(), {}
 
 # --- 4. GESTIONE UTENTI ---
 @st.cache_data
@@ -128,6 +145,7 @@ def get_user_db():
     if os.path.exists('utenti.xlsx'):
         try:
             df_u = pd.read_excel('utenti.xlsx')
+            df_u.columns = [c.strip() for c in df_u.columns]
             return df_u.set_index('username')[['password', 'cliente_arca']].T.to_dict('list')
         except: pass
     return {'safit_admin': ['admin2026', 'TUTTI']}
@@ -148,7 +166,7 @@ if not st.session_state["authenticated"]:
             else: st.error("Credenziali errate")
     st.stop()
 
-# --- 5. LOGICA DASHBOARD ---
+# --- 5. DASHBOARD ---
 df_res, stock_final = load_and_process()
 
 if not df_res.empty:
@@ -158,42 +176,54 @@ if not df_res.empty:
         if st.button("🚪 Esci", type="primary", use_container_width=True):
             st.session_state["authenticated"] = False; st.rerun()
         st.markdown("---")
+        
+        # Filtro Cliente
         if st.session_state["user_type"] == "TUTTI":
-            sel_cli = st.selectbox("Seleziona Cliente:", ["TUTTI"] + sorted(df_res['CLI_NAME'].unique()))
-        else: sel_cli = st.session_state["user_type"]
+            list_cli = ["TUTTI I CLIENTI"] + sorted(df_res['CLI_NAME'].unique().tolist())
+            sel_cli = st.selectbox("Seleziona Cliente:", list_cli)
+        else:
+            sel_cli = st.session_state["user_type"]
+        
         search_art = st.text_input("🔍 Cerca Articolo:").upper()
-        st.download_button("📊 Scarica Excel", data=to_excel_full(df_res), file_name=f"Report_Safit.xlsx", use_container_width=True)
+        
+        # Export Excel basato sul filtro corrente
+        df_exp = df_res if sel_cli == "TUTTI I CLIENTI" else df_res[df_res['CLI_NAME'] == sel_cli]
+        st.download_button("📊 Scarica Excel", data=to_excel_full(df_exp), file_name=f"Piano_Safit_{sel_cli}.xlsx", use_container_width=True)
 
-    df_filtered = df_res if sel_cli == "TUTTI" else df_res[df_res['CLI_NAME'] == sel_cli]
-
+    # Filtraggio Dati Main
+    df_filtered = df_res if sel_cli == "TUTTI I CLIENTI" else df_res[df_res['CLI_NAME'] == sel_cli]
+    
+    # Grafici solo per Admin
     if st.session_state["user_type"] == "TUTTI":
         st.title(f"Dashboard Safit: {sel_cli}")
         tot_q = df_filtered['Qta Residua'].sum()
         def get_p(s): return (df_filtered[df_filtered['ST'] == s]['Qta Residua'].sum() / tot_q * 100) if tot_q > 0 else 0
         
         k1, k2, k3, k4 = st.columns(4)
-        with k1: st.markdown(f'<div class="kpi-card"><div class="kpi-lab">Pezzi</div><div class="kpi-val">{fmt_n(tot_q)}</div></div>', unsafe_allow_html=True)
+        with k1: st.markdown(f'<div class="kpi-card"><div class="kpi-lab">Pezzi Totali</div><div class="kpi-val">{fmt_n(tot_q)}</div></div>', unsafe_allow_html=True)
         with k2: st.markdown(f'<div class="kpi-card"><div class="kpi-lab">Pronti %</div><div class="kpi-val" style="color:#4caf50">{get_p("DISPONIBILE"):.1f}%</div></div>', unsafe_allow_html=True)
         with k3: st.markdown(f'<div class="kpi-card"><div class="kpi-lab">In Prod %</div><div class="kpi-val" style="color:#fbc02d">{get_p("PRODUZIONE"):.1f}%</div></div>', unsafe_allow_html=True)
         with k4: st.markdown(f'<div class="kpi-card"><div class="kpi-lab">Mancanti %</div><div class="kpi-val" style="color:#f44336">{get_p("MANCANTE"):.1f}%</div></div>', unsafe_allow_html=True)
         
         c1, c2 = st.columns(2)
-        with c1: 
-            st.plotly_chart(px.pie(df_filtered, values='Qta Residua', names='ST', color='ST', 
-                                   color_discrete_map={'DISPONIBILE':'#4caf50','ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}), use_container_width=True)
+        with c1: st.plotly_chart(px.pie(df_filtered, values='Qta Residua', names='ST', color='ST', color_discrete_map={'DISPONIBILE':'#4caf50','ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}), use_container_width=True)
         with c2:
             df_filtered['Famiglia'] = df_filtered['Articolo D'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
             st.plotly_chart(px.pie(df_filtered.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10), values='Qta Residua', names='Famiglia', hole=0.4), use_container_width=True)
 
     st.markdown("---")
+    
+    # LISTA COMPLETA SENZA TAGLI
     df_list = df_filtered[df_filtered['ART_KEY'].str.contains(search_art)] if search_art else df_filtered
+    
+    # Ciclo su tutti gli articoli unici presenti nel dataframe filtrato
     for art in sorted(df_list['ART_KEY'].unique()):
         df_sub = df_list[df_list['ART_KEY'] == art]
-        with st.expander(f"📦 {art} - {df_sub['Articolo D'].iloc[0]}"):
+        with st.expander(f"📦 {art} - {df_sub['Articolo D'].iloc[0]} ({len(df_sub)} righe)"):
             info = stock_final.get(art, {'GIA':0, 'PROD':0})
-            st.markdown(f'<div class="debug-box"><span>GIA: <b>{fmt_n(info["GIA"])}</b></span><span>PROD: <b>{fmt_n(info["PROD"])}</b></span></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="debug-box"><span>GIA Res: <b>{fmt_n(info["GIA"])}</b></span><span>PROD Res: <b>{fmt_n(info["PROD"])}</b></span></div>', unsafe_allow_html=True)
             for _, r in df_sub.iterrows():
-                tag = "📋 [PREV]" if r['Codice Documento'] == "OCA" else "🛒 [ORD]"
-                st.markdown(f'<div class="status-row {r["CS"]}"><span>{tag} 📅 <b>{pd.to_datetime(r["Data Consegna"]).strftime("%d/%m/%Y")}</b> | Q: {fmt_n(r["Qta Residua"])}</span><span><b>{r["ST"]}</b> ({pd.to_datetime(r["DT_E"]).strftime("%d/%m/%Y")})</span></div>', unsafe_allow_html=True)
+                tag = "📋 [PREV]" if str(r['Codice Documento']) == "OCA" else "🛒 [ORD]"
+                st.markdown(f'<div class="status-row {r["CS"]}"><span>{tag} 📅 <b>{pd.to_datetime(r["Data Consegna"]).strftime("%d/%m/%Y")}</b> | Q: {fmt_n(r["Qta Residua"])} | {r["CLI_NAME"]}</span><span><b>{r["ST"]}</b></span></div>', unsafe_allow_html=True)
 else:
-    st.warning("Verifica i file Excel o carica nuovi dati.")
+    st.warning("Nessun dato trovato per i criteri selezionati.")
