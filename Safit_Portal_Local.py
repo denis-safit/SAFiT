@@ -4,8 +4,8 @@ import os
 from datetime import datetime, timedelta
 from io import BytesIO
 
-# --- 1. CONFIGURAZIONE E STILE (Invariato) ---
-APP_VERSION = "1.3.2"
+# --- 1. CONFIGURAZIONE E STILE ---
+APP_VERSION = "1.3.5"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
@@ -19,7 +19,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. GESTIONE UTENTI (Invariato) ---
+# --- 2. GESTIONE UTENTI ---
 @st.cache_data
 def get_user_db():
     if os.path.exists('utenti.xlsx'):
@@ -76,7 +76,7 @@ def smart_load(filename):
 @st.cache_data
 def load_all():
     try:
-        # Caricamento ARCA - RIPRISTINATO ORIGINALE
+        # Caricamento ARCA (Originale)
         df_a = smart_load('righe_Ordini_ARCA.xlsx')
         c_cli, c_art, c_des = find_col(df_a, ['Cliente Fornitore', 'CD']), find_col(df_a, ['Articolo C', 'Cod. Art']), find_col(df_a, ['Articolo D', 'Descriz'])
         c_dat, c_qta = find_col(df_a, ['Data']), find_col(df_a, ['Qta Residua', 'Qta Doc'])
@@ -87,71 +87,103 @@ def load_all():
         df_a['Data_Dt'] = pd.to_datetime(df_a[c_dat], errors='coerce')
         df_a['Qta_Res'] = clean_num(df_a[c_qta])
 
-        # Caricamento ACCESS - AGGIORNATO PER NUOVE COLONNE
+        # Caricamento ACCESS (Nuove colonne)
         if os.path.exists('Avanzamento_access.xlsx'):
             df_t = smart_load('Avanzamento_access.xlsx')
-            c_code = find_col(df_t, ['CODICE', 'Codice']) # Cerca 'CODICE' come da immagine
+            c_code = find_col(df_t, ['CODICE', 'Codice'])
             if c_code:
                 df_t['Key_Acc'] = df_t[c_code].astype(str).str.strip().str.upper()
-                df_t['GIA_V'] = clean_num(df_t[find_col(df_t, ['GIA'])]) # Colonna GIA
-                df_t['ACQ_V'] = clean_num(df_t[find_col(df_t, ['INACQ'])]) # Colonna INACQ
+                df_t['GIA_V'] = clean_num(df_t[find_col(df_t, ['GIA'])])
+                df_t['ACQ_V'] = clean_num(df_t[find_col(df_t, ['INACQ'])])
                 df_t['PROD_V'] = 0
-                # Somma delle nuove colonne produzione
                 for f in ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS']:
                     cf = find_col(df_t, [f])
                     if cf: df_t['PROD_V'] += clean_num(df_t[cf])
                 return pd.merge(df_a, df_t[['Key_Acc', 'GIA_V', 'ACQ_V', 'PROD_V']], left_on='Art_Key', right_on='Key_Acc', how='left').fillna(0)
         return df_a
     except Exception as e:
-        st.error(f"Errore: {e}"); return pd.DataFrame()
+        st.error(f"Errore caricamento: {e}"); return pd.DataFrame()
 
-# --- 4. INTERFACCIA ---
+# --- 4. INTERFACCIA E LOGICA ---
 data = load_all()
 if not data.empty:
+    c_cli_n = find_col(data, ['Cliente Fornitore'])
+    
     with st.sidebar:
         if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
         st.markdown("### 🛠️ Pannello Controllo")
-        c_cli_n = find_col(data, ['Cliente Fornitore']) # Ritorna al nome originale
-        sel_cli = st.selectbox("Seleziona Cliente:", sorted(data[c_cli_n].unique().astype(str))) if st.session_state["user_type"] == "TUTTI" else st.session_state["user_type"]
-        search_art = st.text_input("🔍 Cerca Articolo:").upper()
+        
+        # Selezione Cliente
+        if st.session_state["user_type"] == "TUTTI":
+            sel_cli = st.selectbox("Seleziona Cliente:", sorted(data[c_cli_n].unique().astype(str)))
+        else:
+            sel_cli = st.session_state["user_type"]
+        
+        # Filtriamo subito per cliente per creare la lista articoli corretta
+        df_cli = data[data[c_cli_n] == sel_cli].copy()
+
+        # --- RICERCA ARTICOLO PROTETTA ---
+        lista_art = sorted(df_cli['Art_Key'].unique().astype(str))
+        search_art = st.selectbox("🔍 Cerca Articolo:", ["TUTTI"] + lista_art)
+        if search_art == "TUTTI": 
+            search_art = ""
+        # --------------------------------
+
         st.markdown("---")
         st.markdown("#### 📡 Stato Disponibilità")
-        f_disp, f_acq, f_prod, f_manc = st.checkbox("🟢 Magazzino", True), st.checkbox("🔵 Acquisti", True), st.checkbox("🟡 Produzione", True), st.checkbox("🔴 Mancante", True)
-        
-    # Logica ATP (Invariata)
-    df_cli = data[data[c_cli_n] == sel_cli].copy()
+        f_disp = st.checkbox("🟢 Magazzino", True)
+        f_acq = st.checkbox("🔵 Acquisti", True)
+        f_prod = st.checkbox("🟡 Produzione", True)
+        f_manc = st.checkbox("🔴 Mancante", True)
+
+    # Logica ATP
     results = []
     for art in df_cli['Art_Key'].unique():
         df_art = df_cli[df_cli['Art_Key'] == art].copy().sort_values('Data_Dt')
+        # Valori iniziali da Access
         m, a, p = float(df_art['GIA_V'].iloc[0]), float(df_art['ACQ_V'].iloc[0]), float(df_art['PROD_V'].iloc[0])
+        
         for _, r in df_art.iterrows():
             q, oggi = float(r['Qta_Res']), datetime.now()
-            if m >= q: m -= q; s, c, d = "DISPONIBILE", "on-time-row", r['Data_Dt']
-            elif (m+a) >= q: a -= (q-m); m=0; s, c, d = "ACQUISTO", "acq-row", oggi+timedelta(12)
-            elif (m+a+p) >= q: p -= (q-m-a); m=0; a=0; s, c, d = "PRODUZIONE", "prod-row", oggi+timedelta(22)
-            else: s, c, d = "MANCANTE", "urgent-row", oggi+timedelta(40)
+            if m >= q: 
+                m -= q; s, c, d = "DISPONIBILE", "on-time-row", r['Data_Dt']
+            elif (m+a) >= q: 
+                a -= (q-m); m=0; s, c, d = "ACQUISTO", "acq-row", oggi+timedelta(12)
+            elif (m+a+p) >= q: 
+                p -= (q-m-a); m=0; a=0; s, c, d = "PRODUZIONE", "prod-row", oggi+timedelta(22)
+            else: 
+                s, c, d = "MANCANTE", "urgent-row", oggi+timedelta(40)
+            
             res = r.to_dict(); res.update({'st': s, 'cs': c, 'dt_e': d}); results.append(res)
     
     df_f = pd.DataFrame(results)
-    if search_art: df_f = df_f[df_f['Art_Key'].str.contains(search_art)]
+    
+    # Applichiamo il filtro della ricerca articolo
+    if search_art:
+        df_f = df_f[df_f['Art_Key'] == search_art]
+        
+    # Filtro stati
     allowed = []
-    if f_disp: allowed.append("DISPONIBILE"); 
-    if f_acq: allowed.append("ACQUISTO"); 
-    if f_prod: allowed.append("PRODUZIONE"); 
+    if f_disp: allowed.append("DISPONIBILE")
+    if f_acq: allowed.append("ACQUISTO")
+    if f_prod: allowed.append("PRODUZIONE")
     if f_manc: allowed.append("MANCANTE")
     df_show = df_f[df_f['st'].isin(allowed)]
 
     st.title(f"Piano Consegne: {sel_cli}")
-    for art in sorted(df_show['Art_Key'].unique()):
-        df_sub = df_show[df_show['Art_Key'] == art]
-        c_des_f = find_col(df_sub, ['Articolo D', 'Descriz'])
-        desc_val = df_sub[c_des_f].iloc[0] if c_des_f else "Descrizione non disponibile"
-        with st.expander(f"📦 {art} - {desc_val}"):
-            st.markdown(f'<div class="debug-box">Giacenza: {df_sub["GIA_V"].iloc[0]:,.0f} | In Arrivo: {df_sub["ACQ_V"].iloc[0]:,.0f} | Produzione: {df_sub["PROD_V"].iloc[0]:,.0f}</div>', unsafe_allow_html=True)
-            for _, r in df_sub.iterrows():
-                st.markdown(f"""<div class="status-row {r['cs']}">
-                    <span>📅 <b>{r['Data_Dt'].strftime('%d/%m/%Y')}</b> | Q.tà: {r['Qta_Res']:,.0f}</span>
-                    <span><b>{r['st']}</b> (Est: {r['dt_e'].strftime('%d/%m/%Y')})</span>
-                </div>""", unsafe_allow_html=True)
+    if df_show.empty:
+        st.info("Nessun articolo trovato con i filtri selezionati.")
+    else:
+        for art in sorted(df_show['Art_Key'].unique()):
+            df_sub = df_show[df_show['Art_Key'] == art]
+            c_des_f = find_col(df_sub, ['Articolo D', 'Descriz'])
+            desc_val = df_sub[c_des_f].iloc[0] if c_des_f else "N.D."
+            with st.expander(f"📦 {art} - {desc_val}"):
+                st.markdown(f'<div class="debug-box">Giacenza: {df_sub["GIA_V"].iloc[0]:,.0f} | In Arrivo: {df_sub["ACQ_V"].iloc[0]:,.0f} | Produzione: {df_sub["PROD_V"].iloc[0]:,.0f}</div>', unsafe_allow_html=True)
+                for _, r in df_sub.iterrows():
+                    st.markdown(f"""<div class="status-row {r['cs']}">
+                        <span>📅 <b>{r['Data_Dt'].strftime('%d/%m/%Y')}</b> | Q.tà: {r['Qta_Res']:,.0f}</span>
+                        <span><b>{r['st']}</b> (Est: {r['dt_e'].strftime('%d/%m/%Y')})</span>
+                    </div>""", unsafe_allow_html=True)
 else:
     st.warning("Nessun dato caricato. Controlla i file Excel.")
