@@ -3,17 +3,17 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta
 from io import BytesIO
-import plotly.express as px # Libreria per i grafici
+import plotly.express as px
 
 # --- 1. CONFIGURAZIONE E STILE ---
-APP_VERSION = "1.5.0-Beta-Admin"
+APP_VERSION = "1.5.1"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
     <style>
     .status-row { display: flex; justify-content: space-between; padding: 10px; border-radius: 8px; margin-bottom: 6px; border: 1px solid #ddd; color: #000 !important; font-size: 14px; }
     .on-time-row { background-color: #e8f5e9 !important; border-left: 6px solid #4caf50; } 
-    .acq-row { background-color: #e3f2fd !important; border-left: 6px solid #2196f3; }    
+    .acq-row { background-color: #e3f2fd !important; border-left: 8px solid #2196f3; }    
     .prod-row { background-color: #fffde7 !important; border-left: 8px solid #fbc02d; }   
     .urgent-row { background-color: #ffebee !important; border-left: 8px solid #f44336; } 
     .debug-box { background-color: #f0f2f6 !important; color: #111 !important; padding: 8px 12px; border-radius: 6px; border: 1px solid #ccc; margin-bottom: 10px; font-family: sans-serif; font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; white-space: nowrap; overflow-x: auto; }
@@ -23,7 +23,14 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. FUNZIONI UTILI ---
+# --- 2. FUNZIONI DI FORMATTAZIONE ---
+def fmt_n(val):
+    """Formatta i numeri con punto per le migliaia e zero decimali (formato europeo)"""
+    try:
+        return f"{int(round(float(val), 0)):,}".replace(",", ".")
+    except:
+        return "0"
+
 def to_excel_full(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -70,10 +77,8 @@ def load_all():
         c_des = find_col(df_a, ['Articolo D', 'Descriz'])
         c_dat = find_col(df_a, ['Data'])
         c_qta = find_col(df_a, ['Qta Residua', 'Qta Doc'])
-        
         for col in [c_cli, c_art, c_des]:
             if col: df_a[col] = df_a[col].ffill()
-        
         df_a = df_a.dropna(subset=[c_art, c_dat])
         df_a['Art_Key'] = df_a[c_art].astype(str).str.strip().str.upper()
         df_a['Desc_Full'] = df_a[c_des].astype(str).fillna("N.D.")
@@ -129,8 +134,6 @@ if not st.session_state["authenticated"]:
 data = load_all()
 if not data.empty:
     c_cli_n = find_col(data, ['Cliente Fornitore', 'CD'])
-    
-    # 1. Filtro Cliente
     if st.session_state["user_type"] == "TUTTI":
         with st.sidebar:
             st.markdown("### 🛠️ Amministrazione")
@@ -140,7 +143,6 @@ if not data.empty:
 
     df_filtered = data if sel_cli == "TUTTI I CLIENTI" else data[data[c_cli_n] == sel_cli]
 
-    # 2. Logica ATP Globale
     results = []
     for art in df_filtered['Art_Key'].unique():
         df_art = df_filtered[df_filtered['Art_Key'] == art].copy().sort_values('Data_Dt')
@@ -158,33 +160,30 @@ if not data.empty:
     # --- PARTE ADMIN: KPI & GRAFICI ---
     if st.session_state["user_type"] == "TUTTI":
         st.title(f"Dashboard Analitica: {sel_cli}")
-        
-        # Calcolo KPI
         tot_qta = df_res['Qta_Res'].sum()
         def get_perc(stato): return (df_res[df_res['st'] == stato]['Qta_Res'].sum() / tot_qta * 100) if tot_qta > 0 else 0
 
         k1, k2, k3, k4 = st.columns(4)
-        with k1: st.markdown(f'<div class="kpi-card"><div class="kpi-lab">Pezzi Ordinati</div><div class="kpi-val">{tot_qta:,.0f}</div></div>', unsafe_allow_html=True)
+        with k1: st.markdown(f'<div class="kpi-card"><div class="kpi-lab">Pezzi Ordinati</div><div class="kpi-val">{fmt_n(tot_qta)}</div></div>', unsafe_allow_html=True)
         with k2: st.markdown(f'<div class="kpi-card"><div class="kpi-lab">Pronti %</div><div class="kpi-val" style="color:#4caf50">{get_perc("DISPONIBILE"):.1f}%</div></div>', unsafe_allow_html=True)
         with k3: st.markdown(f'<div class="kpi-card"><div class="kpi-lab">In Prod %</div><div class="kpi-val" style="color:#fbc02d">{get_perc("PRODUZIONE"):.1f}%</div></div>', unsafe_allow_html=True)
         with k4: st.markdown(f'<div class="kpi-card"><div class="kpi-lab">Mancanti %</div><div class="kpi-val" style="color:#f44336">{get_perc("MANCANTE"):.1f}%</div></div>', unsafe_allow_html=True)
 
         st.markdown("---")
-        
-        # GRAFICO A TORTA RAGGRUPPATO
         col_g1, col_g2 = st.columns([1, 1])
         with col_g1:
             st.subheader("Stato Ordini (Volume)")
             fig_st = px.pie(df_res, values='Qta_Res', names='st', color='st',
                          color_discrete_map={'DISPONIBILE':'#4caf50','ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d','MANCANTE':'#f44336'})
+            fig_st.update_traces(textinfo='percent+value', texttemplate='%{percent:.1%}<br>(%{value:,.0f})'.replace(',', '.'))
             st.plotly_chart(fig_st, use_container_width=True)
 
         with col_g2:
             st.subheader("Famiglie Articoli (Top 10)")
-            # Raggruppamento per le prime 2 parole della descrizione
             df_res['Famiglia'] = df_res['Desc_Full'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
             df_fam = df_res.groupby('Famiglia')['Qta_Res'].sum().reset_index().sort_values('Qta_Res', ascending=False).head(10)
             fig_fam = px.pie(df_fam, values='Qta_Res', names='Famiglia', hole=0.4)
+            fig_fam.update_traces(textinfo='percent+value', texttemplate='%{percent:.1%}<br>(%{value:,.0f})'.replace(',', '.'))
             st.plotly_chart(fig_fam, use_container_width=True)
 
     # --- PARTE LISTA (Per tutti) ---
@@ -196,26 +195,24 @@ if not data.empty:
         if not df_res.empty:
             st.download_button("📊 Scarica Excel", data=to_excel_full(df_res), file_name=f"Report_{sel_cli}.xlsx")
 
-    # Filtri finali
     df_show = df_res.copy()
     if search_art != "TUTTI": df_show = df_show[df_show['Art_Key'] == search_art]
     allowed = [s for s, f in zip(["DISPONIBILE", "ACQUISTO", "PRODUZIONE", "MANCANTE"], [f_disp, f_acq, f_prod, f_manc]) if f]
     df_show = df_show[df_show['st'].isin(allowed)]
 
-    if st.session_state["user_type"] != "TUTTI":
-        st.title(f"Piano Consegne: {sel_cli}")
+    if st.session_state["user_type"] != "TUTTI": st.title(f"Piano Consegne: {sel_cli}")
 
     for art in sorted(df_show['Art_Key'].unique()):
         df_sub = df_show[df_show['Art_Key'] == art]
         with st.expander(f"📦 {art} - {df_sub['Desc_Full'].iloc[0]}"):
             st.markdown(f'''<div class="debug-box">
-                <span>GIA: <b>{df_sub["GIA_V"].iloc[0]:,.0f}</b></span>
-                <span>ACQ: <b>{df_sub["ACQ_V"].iloc[0]:,.0f}</b></span>
-                <span>PROD: <b>{df_sub["PROD_V"].iloc[0]:,.0f}</b></span>
+                <span>GIA: <b>{fmt_n(df_sub["GIA_V"].iloc[0])}</b></span>
+                <span>ACQ: <b>{fmt_n(df_sub["ACQ_V"].iloc[0])}</b></span>
+                <span>PROD: <b>{fmt_n(df_sub["PROD_V"].iloc[0])}</b></span>
             </div>''', unsafe_allow_html=True)
             for _, r in df_sub.iterrows():
                 st.markdown(f"""<div class="status-row {r['cs']}">
-                    <span>📅 <b>{r['Data_Dt'].strftime('%d/%m/%Y')}</b> | Q: {r['Qta_Res']:,.0f}</span>
+                    <span>📅 <b>{r['Data_Dt'].strftime('%d/%m/%Y')}</b> | Q: {fmt_n(r['Qta_Res'])}</span>
                     <span><b>{r['st']}</b> ({r['dt_e'].strftime('%d/%m/%Y')})</span>
                 </div>""", unsafe_allow_html=True)
 else:
