@@ -6,7 +6,7 @@ from io import BytesIO
 import plotly.express as px
 
 # --- 1. CONFIGURAZIONE E STILE ---
-APP_VERSION = "1.7.2-Final-Check"
+APP_VERSION = "1.7.3-Gold"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
@@ -40,7 +40,7 @@ def clean_num(serie):
 def to_excel_full(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.drop(columns=['CS'], errors='ignore').to_excel(writer, index=False, sheet_name='Piano_Consegne')
+        df.drop(columns=['CS', 'DT_E', 'ART_KEY', 'CLI_NAME', 'ST'], errors='ignore').to_excel(writer, index=False)
     return output.getvalue()
 
 def smart_load(filename, key_col):
@@ -55,7 +55,7 @@ def smart_load(filename, key_col):
     df = df.ffill() 
     return df
 
-# --- 3. MOTORE LOGICO ATP ---
+# --- 3. MOTORE LOGICO ---
 @st.cache_data(ttl=300)
 def load_and_process():
     try:
@@ -64,12 +64,10 @@ def load_and_process():
         
         c_tipo, c_art, c_des, c_qta, c_dat, c_cli = "Codice Documento", "Articolo C", "Articolo D", "Qta Residua", "Data Consegna", "Cliente Fornitore CD"
         
-        # FIX DATE: Trasforma tutto in data vera, se fallisce mette NaT e poi cancelliamo quelle righe
         df_full[c_dat] = pd.to_datetime(df_full[c_dat], errors='coerce')
         df_full = df_full.dropna(subset=[c_dat, c_art])
         df_full[c_qta] = clean_num(df_full[c_qta])
         
-        # Caricamento Access
         df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
         stock = {}
         if not df_acc.empty:
@@ -77,11 +75,9 @@ def load_and_process():
                 p = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS'] if f in df_acc.columns])
                 stock[str(r['CODICE']).strip().upper()] = {'GIA': clean_num(pd.Series([r.get('GIA', 0)])).iloc[0], 'PROD': p}
 
-        # Gestione Arrivi (OFF/DCL)
         df_in = df_full[df_full[c_tipo].isin(['OFF', 'DCL'])].copy()
         arrivals = {art: g.sort_values(c_dat)[[c_dat, c_qta]].values.tolist() for art, g in df_in.groupby(c_art)}
 
-        # Split e Ordinamento: OCI e OCA insieme, ordinati per data
         df_orders = df_full[df_full[c_tipo].isin(['OCI', 'OCA'])].sort_values([c_dat, c_tipo], ascending=[True, False])
         
         final = []
@@ -106,7 +102,8 @@ def load_and_process():
                     s['PROD'] -= fabb; st_v, col, dt_e = "PRODUZIONE", "prod-row", datetime.now() + timedelta(days=21)
 
             res = row.to_dict()
-            res.update({'ST': st_v, 'CS': col, 'DT_E': dt_e, 'ART_KEY': art, 'CLI_NAME': str(row[c_cli])})
+            # Salviamo la data pulita in una chiave sicura per la visualizzazione
+            res.update({'ST': st_v, 'CS': col, 'DT_EXP': row[c_dat], 'ART_KEY': art, 'CLI_NAME': str(row[c_cli])})
             final.append(res)
         
         return pd.DataFrame(final), stock
@@ -123,7 +120,7 @@ if not st.session_state["authenticated"]:
         u = st.text_input("Username").strip(); p = st.text_input("Password", type="password").strip()
         if st.button("Accedi", use_container_width=True):
             if (u == "safit_admin" and p == "admin2026") or u == "denis":
-                st.session_state.update({"authenticated": True, "username": u, "user_type": "TUTTI"})
+                st.session_state.update({"authenticated": True, "username": u})
                 st.rerun()
             else: st.error("Credenziali errate")
     st.stop()
@@ -146,7 +143,6 @@ if not df_res.empty:
 
     df_f = df_res if sel_cli == "TUTTI" else df_res[df_res['CLI_NAME'] == sel_cli]
     
-    # KPI E GRAFICI
     st.title(f"Dashboard Safit: {sel_cli}")
     t_q = df_f['Qta Residua'].sum()
     def get_p(s): return (df_f[df_f['ST'] == s]['Qta Residua'].sum() / t_q * 100) if t_q > 0 else 0
@@ -167,7 +163,6 @@ if not df_res.empty:
 
     st.markdown("---")
     
-    # LISTA
     df_v = df_f[df_f['ART_KEY'].str.contains(search)] if search else df_f
     for art, g in df_v.groupby('ART_KEY'):
         with st.expander(f"📦 {art} - {g['Articolo D'].iloc[0]} ({len(g)} righe)"):
@@ -175,6 +170,8 @@ if not df_res.empty:
             st.markdown(f'<div class="debug-box"><span>GIA: <b>{fmt_n(info["GIA"])}</b></span><span>PROD: <b>{fmt_n(info["PROD"])}</b></span></div>', unsafe_allow_html=True)
             for _, r in g.iterrows():
                 tag = "📋 [PREV]" if str(r['Codice Documento']) == "OCA" else "🛒 [ORD]"
-                st.markdown(f'<div class="status-row {r["CS"]}"><span>{tag} 📅 {r[c_dat].strftime("%d/%m/%Y")} | Q: {fmt_n(r["Qta Residua"])} | {r["CLI_NAME"]}</span><span><b>{r["ST"]}</b></span></div>', unsafe_allow_html=True)
+                # CORREZIONE NameError: r['DT_EXP'] invece di r[c_dat]
+                d_str = r['DT_EXP'].strftime("%d/%m/%Y") if pd.notnull(r['DT_EXP']) else "N.D."
+                st.markdown(f'<div class="status-row {r["CS"]}"><span>{tag} 📅 {d_str} | Q: {fmt_n(r["Qta Residua"])} | {r["CLI_NAME"]}</span><span><b>{r["ST"]}</b></span></div>', unsafe_allow_html=True)
 else:
     st.warning("Dati non trovati. Verifica i file Excel.")
