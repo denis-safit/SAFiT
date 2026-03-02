@@ -4,30 +4,39 @@ import os
 from datetime import datetime, timedelta
 from io import BytesIO
 
-# --- 1. CONFIGURAZIONE E STILE (Aggiornato per Dark Mode) ---
-APP_VERSION = "1.3.8"
+# --- 1. CONFIGURAZIONE E STILE (FIX TOTALE DARK MODE) ---
+APP_VERSION = "1.3.9"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
     <style>
-    /* Righe di stato: forziamo il colore del testo per evitare l'effetto invisibile */
-    .status-row { display: flex; justify-content: space-between; padding: 12px; border-radius: 10px; margin-bottom: 8px; border: 1px solid #ddd; color: #111 !important; }
-    .on-time-row { background-color: #e8f5e9; border-left: 8px solid #4caf50; } 
-    .acq-row { background-color: #e3f2fd; border-left: 8px solid #2196f3; }    
-    .prod-row { background-color: #fffde7; border-left: 8px solid #fbc02d; }   
-    .urgent-row { background-color: #ffebee; border-left: 8px solid #f44336; } 
+    /* Forziamo il contenitore principale a mantenere contrasto */
+    .status-row { 
+        display: flex; 
+        justify-content: space-between; 
+        padding: 12px; 
+        border-radius: 10px; 
+        margin-bottom: 8px; 
+        border: 1px solid #ddd; 
+        color: #000000 !important; /* Testo sempre Nero */
+    }
+    .on-time-row { background-color: #e8f5e9 !important; border-left: 8px solid #4caf50; } 
+    .acq-row { background-color: #e3f2fd !important; border-left: 8px solid #2196f3; }    
+    .prod-row { background-color: #fffde7 !important; border-left: 8px solid #fbc02d; }   
+    .urgent-row { background-color: #ffebee !important; border-left: 8px solid #f44336; } 
     
-    /* Box Dettagli (Giacenza, ecc.): forziamo sfondo chiaro e testo scuro */
+    /* Box Dettagli (Giacenza, ecc.): FIX DEFINITIVO PER IPHONE */
     .debug-box { 
-        background-color: #eeeeee !important; 
-        color: #333333 !important; 
-        padding: 10px; 
-        border-radius: 5px; 
-        border: 1px dashed #999; 
-        margin-bottom: 10px; 
-        font-family: monospace; 
-        font-size: 14px;
-        font-weight: bold;
+        background-color: #f0f2f6 !important; /* Grigio chiaro Streamlit standard */
+        color: #111111 !important;            /* Nero quasi assoluto */
+        padding: 15px; 
+        border-radius: 8px; 
+        border: 1px solid #ccc; 
+        margin-bottom: 12px; 
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        font-size: 15px;
+        font-weight: 700 !important;          /* Testo molto in grassetto */
+        line-height: 1.5;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -178,16 +187,16 @@ if not data.empty:
         c_des_f = find_col(df_sub, ['Articolo D', 'Descriz'])
         desc_val = df_sub[c_des_f].iloc[0] if c_des_f else "N.D."
         with st.expander(f"📦 {art} - {desc_val}"):
-            # Qui forziamo i colori nel testo della debug-box tramite style inline per sicurezza extra
+            # Per sicurezza estrema, usiamo tag <span> con colore nero fisso all'interno della div
             st.markdown(f'''<div class="debug-box">
-                Giacenza (GIA): {df_sub["GIA_V"].iloc[0]:,.0f} | 
-                In Arrivo: {df_sub["ACQ_V"].iloc[0]:,.0f} | 
-                Produzione: {df_sub["PROD_V"].iloc[0]:,.0f}
+                <span style="color: #111 !important;">Giacenza (GIA): <b>{df_sub["GIA_V"].iloc[0]:,.0f}</b></span><br>
+                <span style="color: #111 !important;">In Arrivo: <b>{df_sub["ACQ_V"].iloc[0]:,.0f}</b></span> | 
+                <span style="color: #111 !important;">Produzione: <b>{df_sub["PROD_V"].iloc[0]:,.0f}</b></span>
             </div>''', unsafe_allow_html=True)
             for _, r in df_sub.iterrows():
                 st.markdown(f"""<div class="status-row {r['cs']}">
-                    <span>📅 <b>{r['Data_Dt'].strftime('%d/%m/%Y')}</b> | Q.tà: {r['Qta_Res']:,.0f}</span>
-                    <span><b>{r['st']}</b> (Est: {r['dt_e'].strftime('%d/%m/%Y')})</span>
+                    <span style="color: #000 !important;">📅 <b>{r['Data_Dt'].strftime('%d/%m/%Y')}</b> | Q.tà: {r['Qta_Res']:,.0f}</span>
+                    <span style="color: #000 !important;"><b>{r['st']}</b> (Est: {r['dt_e'].strftime('%d/%m/%Y')})</span>
                 </div>""", unsafe_allow_html=True)
 else:
     st.warning("Nessun dato caricato.")
