@@ -4,39 +4,42 @@ import os
 from datetime import datetime, timedelta
 from io import BytesIO
 
-# --- 1. CONFIGURAZIONE E STILE (FIX TOTALE DARK MODE) ---
-APP_VERSION = "1.3.9"
+# --- 1. CONFIGURAZIONE E STILE (COMPATTO & DARK MODE PROOF) ---
+APP_VERSION = "1.4.0"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
     <style>
-    /* Forziamo il contenitore principale a mantenere contrasto */
     .status-row { 
         display: flex; 
         justify-content: space-between; 
-        padding: 12px; 
-        border-radius: 10px; 
-        margin-bottom: 8px; 
-        border: 1px solid #ddd; 
-        color: #000000 !important; /* Testo sempre Nero */
-    }
-    .on-time-row { background-color: #e8f5e9 !important; border-left: 8px solid #4caf50; } 
-    .acq-row { background-color: #e3f2fd !important; border-left: 8px solid #2196f3; }    
-    .prod-row { background-color: #fffde7 !important; border-left: 8px solid #fbc02d; }   
-    .urgent-row { background-color: #ffebee !important; border-left: 8px solid #f44336; } 
-    
-    /* Box Dettagli (Giacenza, ecc.): FIX DEFINITIVO PER IPHONE */
-    .debug-box { 
-        background-color: #f0f2f6 !important; /* Grigio chiaro Streamlit standard */
-        color: #111111 !important;            /* Nero quasi assoluto */
-        padding: 15px; 
+        padding: 10px; 
         border-radius: 8px; 
+        margin-bottom: 6px; 
+        border: 1px solid #ddd; 
+        color: #000000 !important;
+        font-size: 14px;
+    }
+    .on-time-row { background-color: #e8f5e9 !important; border-left: 6px solid #4caf50; } 
+    .acq-row { background-color: #e3f2fd !important; border-left: 6px solid #2196f3; }    
+    .prod-row { background-color: #fffde7 !important; border-left: 6px solid #fbc02d; }   
+    .urgent-row { background-color: #ffebee !important; border-left: 6px solid #f44336; } 
+    
+    /* Box Dettagli: COMPRESSO SU UNA RIGA */
+    .debug-box { 
+        background-color: #f0f2f6 !important; 
+        color: #111111 !important; 
+        padding: 8px 12px; 
+        border-radius: 6px; 
         border: 1px solid #ccc; 
-        margin-bottom: 12px; 
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        font-size: 15px;
-        font-weight: 700 !important;          /* Testo molto in grassetto */
-        line-height: 1.5;
+        margin-bottom: 10px; 
+        font-family: sans-serif;
+        font-size: 13px;       /* Carattere leggermente più piccolo per stare in riga */
+        font-weight: 600;
+        display: flex;
+        justify-content: space-between; /* Distribuisce i valori sui lati */
+        white-space: nowrap;   /* Impedisce di andare a capo */
+        overflow-x: auto;      /* Se lo schermo è piccolissimo, permette lo scorrimento laterale invece di rompere la riga */
     }
     </style>
     """, unsafe_allow_html=True)
@@ -187,16 +190,16 @@ if not data.empty:
         c_des_f = find_col(df_sub, ['Articolo D', 'Descriz'])
         desc_val = df_sub[c_des_f].iloc[0] if c_des_f else "N.D."
         with st.expander(f"📦 {art} - {desc_val}"):
-            # Per sicurezza estrema, usiamo tag <span> con colore nero fisso all'interno della div
+            # Versione ultra-compatta per stare in riga
             st.markdown(f'''<div class="debug-box">
-                <span style="color: #111 !important;">Giacenza (GIA): <b>{df_sub["GIA_V"].iloc[0]:,.0f}</b></span><br>
-                <span style="color: #111 !important;">In Arrivo: <b>{df_sub["ACQ_V"].iloc[0]:,.0f}</b></span> | 
-                <span style="color: #111 !important;">Produzione: <b>{df_sub["PROD_V"].iloc[0]:,.0f}</b></span>
+                <span style="color: #111 !important;">GIA: <b>{df_sub["GIA_V"].iloc[0]:,.0f}</b></span>
+                <span style="color: #111 !important;">ACQ: <b>{df_sub["ACQ_V"].iloc[0]:,.0f}</b></span>
+                <span style="color: #111 !important;">PROD: <b>{df_sub["PROD_V"].iloc[0]:,.0f}</b></span>
             </div>''', unsafe_allow_html=True)
             for _, r in df_sub.iterrows():
                 st.markdown(f"""<div class="status-row {r['cs']}">
-                    <span style="color: #000 !important;">📅 <b>{r['Data_Dt'].strftime('%d/%m/%Y')}</b> | Q.tà: {r['Qta_Res']:,.0f}</span>
-                    <span style="color: #000 !important;"><b>{r['st']}</b> (Est: {r['dt_e'].strftime('%d/%m/%Y')})</span>
+                    <span style="color: #000 !important;">📅 <b>{r['Data_Dt'].strftime('%d/%m/%Y')}</b> | Q: {r['Qta_Res']:,.0f}</span>
+                    <span style="color: #000 !important;"><b>{r['st']}</b> ({r['dt_e'].strftime('%d/%m/%Y')})</span>
                 </div>""", unsafe_allow_html=True)
 else:
     st.warning("Nessun dato caricato.")
