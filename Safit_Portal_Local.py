@@ -76,35 +76,55 @@ def smart_load(filename):
 @st.cache_data
 def load_all():
     try:
-        # Caricamento ARCA
+        # 1. Caricamento ARCA (Invariato)
         df_a = smart_load('righe_Ordini_ARCA.xlsx')
-        c_cli, c_art, c_des = find_col(df_a, ['Cliente Fornitore', 'CD']), find_col(df_a, ['Articolo C', 'Cod. Art']), find_col(df_a, ['Articolo D', 'Descriz'])
-        c_dat, c_qta = find_col(df_a, ['Data']), find_col(df_a, ['Qta Residua', 'Qta Doc'])
-        for col in [c_cli, c_art, c_des]:
+        c_cli = find_col(df_a, ['Cliente Fornitore', 'CD'])
+        c_art = find_col(df_a, ['Articolo C', 'Cod. Art'])
+        c_dat = find_col(df_a, ['Data'])
+        c_qta = find_col(df_a, ['Qta Residua', 'Qta Doc'])
+        
+        for col in [c_cli, c_art]:
             if col: df_a[col] = df_a[col].ffill()
+            
         df_a = df_a.dropna(subset=[c_art, c_dat])
-        df_a = df_a[~df_a[c_art].astype(str).str.contains('TOTALE|TOTAL', case=False, na=False)]
         df_a['Art_Key'] = df_a[c_art].astype(str).str.strip().str.upper()
         df_a['Data_Dt'] = pd.to_datetime(df_a[c_dat], errors='coerce')
-        df_a = df_a.dropna(subset=['Data_Dt'])
         df_a['Qta_Res'] = clean_num(df_a[c_qta])
 
-        # Caricamento ACCESS
+        # 2. Caricamento ACCESS con mappatura nuove colonne
         if os.path.exists('Avanzamento_access.xlsx'):
             df_t = smart_load('Avanzamento_access.xlsx')
-            c_code = find_col(df_t, ['Codice', 'Articolo'])
-            if c_code:
-                df_t['Key_Acc'] = df_t[c_code].astype(str).str.strip().str.upper()
-                df_t['GIA_V'] = clean_num(df_t[find_col(df_t, ['Gia'])])
-                df_t['ACQ_V'] = clean_num(df_t[find_col(df_t, ['Acq'])])
-                df_t['PROD_V'] = 0
-                for f in ['Lan', 'GRZ', 'TMP', 'RWI', 'TRS']:
-                    cf = find_col(df_t, [f])
-                    if cf: df_t['PROD_V'] += clean_num(df_t[cf])
-                return pd.merge(df_a, df_t[['Key_Acc', 'GIA_V', 'ACQ_V', 'PROD_V']], left_on='Art_Key', right_on='Key_Acc', how='left').fillna(0)
+            
+            # Mappatura basata sull'immagine image_34fafc.png
+            col_map = {
+                'Key_Acc': 'CODICE',
+                'GIA_V': 'GIA',
+                'ACQ_V': 'INACQ'
+            }
+            
+            # Identificazione colonne produzione
+            prod_cols = ['GRZ', 'TMP', 'RWI', 'TRS', 'LANCIATI']
+            
+            # Creazione dataframe pulito per il merge
+            df_clean = pd.DataFrame()
+            if 'CODICE' in df_t.columns:
+                df_clean['Key_Acc'] = df_t['CODICE'].astype(str).str.strip().str.upper()
+                df_clean['GIA_V'] = clean_num(df_t['GIA']) if 'GIA' in df_t.columns else 0
+                df_clean['ACQ_V'] = clean_num(df_t['INACQ']) if 'INACQ' in df_t.columns else 0
+                
+                # Somma dinamica della produzione
+                df_clean['PROD_V'] = 0
+                for pc in prod_cols:
+                    if pc in df_t.columns:
+                        df_clean['PROD_V'] += clean_num(df_t[pc])
+                
+                return pd.merge(df_a, df_clean, left_on='Art_Key', right_on='Key_Acc', how='left').fillna(0)
+        
         return df_a
     except Exception as e:
-        st.error(f"Errore: {e}"); return pd.DataFrame()
+        st.error(f"Errore nel caricamento dati: {e}")
+        return pd.DataFrame()
+    
 
 # --- 4. FUNZIONE EXPORT EXCEL ---
 def to_excel_full(df):
