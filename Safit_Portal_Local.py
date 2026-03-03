@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 from io import BytesIO
 import plotly.express as px
 
-# --- 1. CONFIGURAZIONE E STILE ---
-APP_VERSION = "3.0.2-GIA-Focus"
+# --- 1. CONFIGURAZIONE E STILE (Versione Integrale 2.4.0) ---
+APP_VERSION = "3.0.4-GIA-Precision"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
@@ -57,7 +57,7 @@ def smart_load(filename, key_col):
     df = df.ffill() 
     return df
 
-# --- 4. MOTORE DI CALCOLO ATP ---
+# --- 4. MOTORE DI CALCOLO ATP (Logica basata su GIA reale) ---
 @st.cache_data(ttl=300)
 def load_and_process():
     try:
@@ -70,19 +70,16 @@ def load_and_process():
         df_full[c_qta] = clean_num(df_full[c_qta])
         df_full = df_full.dropna(subset=[c_dat, c_art])
 
-        # Carico Access - FIX CHIRURGICO SU GIA
+        # Carico Access - FORZATURA PUNTUALE COLONNA GIA
         df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
         stock = {}
         if not df_acc.empty:
             for _, r in df_acc.iterrows():
                 art_code = str(r['CODICE']).strip().upper()
                 
-                # CORREZIONE: puntiamo alla colonna GIA usando il nome esatto della serie r
-                # e calcoliamo separatamente i campi per evitare confusioni con SLD_M
+                # CORREZIONE DEFINITIVA: leggiamo GIA, INACQ e sommiamo TMP, RWI, GRZ
                 val_gia = clean_num(pd.Series([r.get('GIA', 0)])).iloc[0]
                 val_inacq = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
-                
-                # Somma Avanzamento (TMP + RWI + GRZ)
                 val_prod = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['TMP', 'RWI', 'GRZ']])
                 
                 stock[art_code] = {
@@ -108,19 +105,19 @@ def load_and_process():
             st_v, col, dt_e = ("MANCANTE", "urgent-row", row[c_dat] + timedelta(days=45))
             if row[c_tipo] == 'OCA': st_v, col = "DA PIANIFICARE", "oca-row"
 
-            # 1. Copertura con Giacenza (Access GIA)
+            # 1. Copertura con GIACENZA REALE (GIA)
             if s['GIA'] >= qta:
                 s['GIA'] -= qta; st_v, col, dt_e = "DISPONIBILE", "on-time-row", row[c_dat]
             else:
                 qta -= s['GIA']; s['GIA'] = 0
-                # 2. Copertura con Acquisti (OFF/OFR Arca)
+                # 2. Copertura con Acquisti
                 for a in arr_list:
                     if a[1] > 0:
                         if a[1] >= qta:
                             a[1] -= qta; st_v, col, dt_e = "ACQUISTO", "acq-row", a[0]; qta = 0; break
                         else:
                             qta -= a[1]; a[1] = 0
-                # 3. Copertura con Produzione (Access TMP+RWI+GRZ)
+                # 3. Copertura con Produzione (TMP+RWI+GRZ)
                 if qta > 0 and s['PROD'] >= qta:
                     s['PROD'] -= qta; st_v, col, dt_e = "PRODUZIONE", "prod-row", datetime.now() + timedelta(days=21)
 
@@ -147,7 +144,7 @@ if not st.session_state.auth:
             else: st.error("Credenziali non valide")
     st.stop()
 
-# --- 6. DASHBOARD E FILTRI ---
+# --- 6. DASHBOARD E FILTRI (Versione Integrale 2.4.0) ---
 df_res, stock_raw = load_and_process()
 
 if not df_res.empty:
