@@ -6,7 +6,7 @@ from io import BytesIO
 import plotly.express as px
 
 # --- 1. CONFIGURAZIONE E STILE (Dalla v3.2.0) ---
-APP_VERSION = "3.2.1-Master-AuthFix"
+APP_VERSION = "3.3"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
