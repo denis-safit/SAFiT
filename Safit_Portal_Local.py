@@ -6,7 +6,7 @@ from io import BytesIO
 import plotly.express as px
 
 # --- 1. CONFIGURAZIONE E STILE ---
-APP_VERSION = "2.4.0-Full-Logic"
+APP_VERSION = "3.0.0-Precision-Data"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
@@ -54,14 +54,13 @@ def smart_load(filename, key_col):
             h_row = i; break
     df = pd.read_excel(filename, skiprows=h_row)
     df.columns = [str(c).strip() for c in df.columns]
-    df = df.ffill() 
+    df = df.ffill() # <--- QUESTA RIGA È VITALE PER NON PERDERE I CODICI
     return df
 
-# --- 4. MOTORE DI CALCOLO ATP ---
-@st.cache_data(ttl=300)
+# --- 4. MOTORE DI CALCOLO ATP (Precision Data) ---
+@st.cache_data(ttl=60)
 def load_and_process():
     try:
-        # Carico Arca
         df_full = smart_load('righe_Ordini_ARCA.xlsx', "Articolo C")
         if df_full.empty: return pd.DataFrame(), {}
         
@@ -70,48 +69,43 @@ def load_and_process():
         df_full[c_qta] = clean_num(df_full[c_qta])
         df_full = df_full.dropna(subset=[c_dat, c_art])
 
-        # Carico Access (Stock e Avanzamento)
         df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
         stock = {}
         if not df_acc.empty:
             for _, r in df_acc.iterrows():
-                # Somma ACQ, TMP, RWI, TRF chiesta da Denis
-                p_val = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['ACQ', 'TMP', 'RWI', 'TRF']])
-                stock[str(r['CODICE']).strip().upper()] = {
+                art_code = str(r['CODICE']).strip().upper()
+                # Nuova logica campi chiesti: GIA reale, INACQ e Prod (TMP+RWI+GRZ)
+                stock[art_code] = {
                     'GIA': clean_num(pd.Series([r.get('GIA', 0)])).iloc[0], 
-                    'PROD': p_val
+                    'INACQ': clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0],
+                    'PROD': sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['TMP', 'RWI', 'GRZ']])
                 }
 
-        # Gestione Acquisti Fornitori (OFF / OFR) da Arca
         df_arr = df_full[df_full[c_tipo].isin(['OFF', 'OFR'])].copy()
         arca_arr = {art: g.sort_values(c_dat)[[c_dat, c_qta]].values.tolist() for art, g in df_arr.groupby(c_art)}
 
-        # Processo OCI (Ordini) e OCA (Previsioni)
         df_orders = df_full[df_full[c_tipo].isin(['OCI', 'OCA'])].sort_values([c_dat, c_tipo])
         
         final = []
         for _, row in df_orders.iterrows():
             art = str(row[c_art]).strip().upper()
             qta = row[c_qta]
-            s = stock.get(art, {'GIA': 0, 'PROD': 0})
+            s = stock.get(art, {'GIA': 0, 'INACQ': 0, 'PROD': 0})
             arr_list = arca_arr.get(art, [])
             
             st_v, col, dt_e = ("MANCANTE", "urgent-row", row[c_dat] + timedelta(days=45))
             if row[c_tipo] == 'OCA': st_v, col = "DA PIANIFICARE", "oca-row"
 
-            # 1. Copertura con Giacenza (Access)
             if s['GIA'] >= qta:
                 s['GIA'] -= qta; st_v, col, dt_e = "DISPONIBILE", "on-time-row", row[c_dat]
             else:
                 qta -= s['GIA']; s['GIA'] = 0
-                # 2. Copertura con Acquisti (OFF/OFR Arca)
                 for a in arr_list:
                     if a[1] > 0:
                         if a[1] >= qta:
                             a[1] -= qta; st_v, col, dt_e = "ACQUISTO", "acq-row", a[0]; qta = 0; break
                         else:
                             qta -= a[1]; a[1] = 0
-                # 3. Copertura con Produzione (Access: ACQ+TMP+RWI+TRF)
                 if qta > 0 and s['PROD'] >= qta:
                     s['PROD'] -= qta; st_v, col, dt_e = "PRODUZIONE", "prod-row", datetime.now() + timedelta(days=21)
 
@@ -125,7 +119,6 @@ def load_and_process():
 
 # --- 5. LOGICA DI ACCESSO ---
 if "auth" not in st.session_state: st.session_state.auth = False
-
 if not st.session_state.auth:
     col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
@@ -138,7 +131,7 @@ if not st.session_state.auth:
             else: st.error("Credenziali non valide")
     st.stop()
 
-# --- 6. DASHBOARD E FILTRI MULTIPLI ---
+# --- 6. DASHBOARD ---
 df_res, stock_raw = load_and_process()
 
 if not df_res.empty:
@@ -147,64 +140,34 @@ if not df_res.empty:
         st.markdown(f'<div class="user-info">👤 <b>{st.session_state.user}</b></div>', unsafe_allow_html=True)
         if st.button("🚪 Log-out", use_container_width=True): st.session_state.auth = False; st.rerun()
         st.markdown("---")
-        
-        # Filtro Cliente
-        if st.session_state.permesso == "TUTTI":
-            sel_cli = st.selectbox("Seleziona Cliente:", ["TUTTI"] + sorted(df_res['CLI_NAME'].unique().tolist()))
-        else:
-            sel_cli = st.session_state.permesso
-            st.info(f"Cliente: {sel_cli}")
-
-        # FILTRI OPZIONE MULTIPLI (Checkbox invece di Radio)
+        sel_cli = st.selectbox("Seleziona Cliente:", ["TUTTI"] + sorted(df_res['CLI_NAME'].unique().tolist())) if st.session_state.permesso == "TUTTI" else st.session_state.permesso
         st.write("### Filtra per Stato:")
-        stati_possibili = ["DISPONIBILE", "ACQUISTO", "PRODUZIONE", "MANCANTE", "DA PIANIFICARE"]
-        sel_stati = []
-        for s in stati_possibili:
-            if st.checkbox(s, value=True, key=f"chk_{s}"):
-                sel_stati.append(s)
-        
-        st.markdown("---")
+        sel_stati = [s for s in ["DISPONIBILE", "ACQUISTO", "PRODUZIONE", "MANCANTE", "DA PIANIFICARE"] if st.checkbox(s, value=True, key=f"chk_{s}")]
         search = st.text_input("🔍 Cerca Articolo:").upper()
 
-    # Applicazione Filtri
     df_f = df_res[df_res['CLI_NAME'] == sel_cli] if sel_cli != "TUTTI" else df_res.copy()
     df_f = df_f[df_f['ST'].isin(sel_stati)]
     if search: df_f = df_f[df_f['ART_KEY'].str.contains(search)]
 
-    # DOWNLOAD EXCEL
     st.sidebar.download_button("📊 Esporta in Excel", data=to_excel(df_f), file_name=f"Safit_{datetime.now().strftime('%d%m')}.xlsx", use_container_width=True)
 
-    # UI PRINCIPALE
     st.title("Pannello Controllo Consegne Safit")
-    
-    # KPI
     k1, k2, k3, k4 = st.columns(4)
-    tot_q = df_f['Qta Residua'].sum()
-    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">PEZZI FILTRATI</div><div class="kpi-val">{int(tot_q):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
+    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">PEZZI</div><div class="kpi-val">{int(df_f["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
     k2.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#4caf50">PRONTI</div><div class="kpi-val">{int(df_f[df_f["ST"]=="DISPONIBILE"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
-    k3.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#2196f3">IN ACQUISTO</div><div class="kpi-val">{int(df_f[df_f["ST"]=="ACQUISTO"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
+    k3.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#2196f3">ACQUISTO</div><div class="kpi-val">{int(df_f[df_f["ST"]=="ACQUISTO"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
     k4.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#f44336">MANCANTI</div><div class="kpi-val">{int(df_f[df_f["ST"]=="MANCANTE"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
 
-    # Grafici
     c1, c2 = st.columns(2)
-    with c1:
-        st.plotly_chart(px.pie(df_f, values='Qta Residua', names='ST', color='ST', title="Stato Copertura Attuale",
-                               color_discrete_map={'DISPONIBILE':'#4caf50','ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}), use_container_width=True)
+    with c1: st.plotly_chart(px.pie(df_f, values='Qta Residua', names='ST', color='ST', title="Stato Copertura", color_discrete_map={'DISPONIBILE':'#4caf50','ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}), use_container_width=True)
     with c2:
         df_f['Famiglia'] = df_f['Articolo D'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
-        st.plotly_chart(px.pie(df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10), 
-                               values='Qta Residua', names='Famiglia', hole=0.4, title="Top 10 Famiglie Prodotti"), use_container_width=True)
+        st.plotly_chart(px.pie(df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10), values='Qta Residua', names='Famiglia', hole=0.4, title="Top 10 Famiglie"), use_container_width=True)
 
-    st.markdown("---")
-
-    # Lista Dettagliata
-    if df_f.empty:
-        st.warning("Nessun dato trovato con i filtri selezionati.")
-    else:
-        for art, g in df_f.groupby('ART_KEY'):
-            with st.expander(f"📦 {art} - {g['Articolo D'].iloc[0]} ({len(g)} ordini)"):
-                info = stock_raw.get(art, {'GIA': 0, 'PROD': 0})
-                st.markdown(f'<div class="debug-box"><span>📦 GIACENZA: <b>{int(info["GIA"])}</b></span><span>⚙️ IN PRODUZIONE (Access): <b>{int(info["PROD"])}</b></span></div>', unsafe_allow_html=True)
-                for _, r in g.iterrows():
-                    tag = "📋 [PREV]" if r['Codice Documento'] == "OCA" else "🛒 [ORD]"
-                    st.markdown(f'<div class="status-row {r["CS"]}"><span>{tag} 📅 {r["DT_EXP"].strftime("%d/%m/%Y")} | Q: {int(r["Qta Residua"])} | {r["CLI_NAME"]}</span><span><b>{r["ST"]}</b></span></div>', unsafe_allow_html=True)
+    for art, g in df_f.groupby('ART_KEY'):
+        with st.expander(f"📦 {art} - {g['Articolo D'].iloc[0]} ({len(g)} ordini)"):
+            info = stock_raw.get(art, {'GIA': 0, 'INACQ': 0, 'PROD': 0})
+            st.markdown(f'<div class="debug-box"><span>📦 GIA: <b>{int(info["GIA"])}</b></span><span>🚚 IN ACQUISTO: <b>{int(info["INACQ"])}</b></span><span>⚙️ PROD: <b>{int(info["PROD"])}</b></span></div>', unsafe_allow_html=True)
+            for _, r in g.iterrows():
+                tag = "📋 [PREV]" if r['Codice Documento'] == "OCA" else "🛒 [ORD]"
+                st.markdown(f'<div class="status-row {r["CS"]}"><span>{tag} 📅 {r["DT_EXP"].strftime("%d/%m/%Y")} | Q: {int(r["Qta Residua"])} | {r["CLI_NAME"]}</span><span><b>{r["ST"]}</b></span></div>', unsafe_allow_html=True)
