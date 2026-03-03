@@ -73,95 +73,57 @@ def smart_load(filename, key_col):
     if "CODICE" not in key_col: df = df.ffill() 
     return df
 
-# --- 4. MOTORE DI CALCOLO (LOGICA MASTER 3.2.5: GIA -> ACQ -> PROD) ---
+# --- 4. MOTORE DI CALCOLO (Logica 1.4) ---
 @st.cache_data(ttl=300)
 def load_and_process():
     try:
-        # 4.1 Caricamento Ordini ARCA
         df_arca = smart_load('righe_Ordini_ARCA.xlsx', "Articolo C")
-        if df_arca.empty: 
-            return pd.DataFrame(), {}
+        if df_arca.empty: return pd.DataFrame(), {}
         
         c_tipo, c_art, c_qta, c_dat, c_cli = "Codice Documento", "Articolo C", "Qta Residua", "Data Consegna", "Cliente Fornitore CD"
         df_arca[c_dat] = pd.to_datetime(df_arca[c_dat], errors='coerce')
         df_arca[c_qta] = clean_num(df_arca[c_qta])
         df_arca = df_arca.dropna(subset=[c_dat, c_art])
 
-        # 4.2 Caricamento Scorte ACCESS
         df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
         stock_map = {}
         if not df_acc.empty:
             df_acc.columns = [str(c).strip().upper() for c in df_acc.columns]
             for _, r in df_acc.iterrows():
                 art_code = str(r['CODICE']).strip().upper()
-                # Definizione Scorte
                 gia = clean_num(pd.Series([r.get('GIA', 0)])).iloc[0]
                 acq_v = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
-                # Somma tutte le fasi di produzione
                 prod_v = 0
                 for f in ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'ACQ', 'TRF']:
                     prod_v += clean_num(pd.Series([r.get(f, 0)])).iloc[0]
                 stock_map[art_code] = {'GIA': gia, 'ACQ': acq_v, 'PROD': prod_v}
 
-        # 4.3 Algoritmo di Allocazione Sequenziale
-        # Ordiniamo per articolo e data consegna per rispettare la priorità temporale
         df_orders = df_arca[df_arca[c_tipo].isin(['OCI', 'OCA'])].sort_values([c_art, c_dat])
         final_results = []
         oggi = datetime.now()
 
         for art, group in df_orders.groupby(c_art):
-            # Recupero scorte iniziali per l'articolo
             s = stock_map.get(str(art).upper(), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
-            m = float(s['GIA'])   # Magazzino (Giacenza)
-            a = float(s['ACQ'])   # Acquisto (In arrivo)
-            p = float(s['PROD'])  # Produzione (In lavorazione)
-            
+            m, a, p = float(s['GIA']), float(s['ACQ']), float(s['PROD'])
             for _, row in group.iterrows():
                 q = float(row[c_qta])
-                
-                # CASO 1: Coperto da GIACENZA (Priorità 1)
                 if m >= q:
-                    m -= q
-                    s_v, c_v, d_v = "DISPONIBILE", "on-time-row", row[c_dat]
-                
-                # CASO 2: Coperto da GIACENZA RESIDUA + ACQUISTO (Priorità 2)
+                    m -= q; s_v, c_v, d_v = "DISPONIBILE", "on-time-row", row[c_dat]
                 elif (m + a) >= q:
-                    a -= (q - m)
-                    m = 0
-                    s_v, c_v, d_v = "ACQUISTO", "acq-row", oggi + timedelta(days=12)
-                
-                # CASO 3: Coperto da GIA + ACQ + PRODUZIONE (Priorità 3)
+                    a -= (q - m); m = 0; s_v, c_v, d_v = "ACQUISTO", "acq-row", oggi + timedelta(days=12)
                 elif (m + a + p) >= q:
-                    p -= (q - m - a)
-                    m = 0
-                    a = 0
-                    s_v, c_v, d_v = "PRODUZIONE", "prod-row", oggi + timedelta(days=22)
-                
-                # CASO 4: MANCANTE (Nessuna copertura sufficiente)
+                    p -= (q - m - a); m = 0; a = 0; s_v, c_v, d_v = "PRODUZIONE", "prod-row", oggi + timedelta(days=22)
                 else:
-                    m = 0; a = 0; p = 0
                     s_v, c_v, d_v = "MANCANTE", "urgent-row", oggi + timedelta(days=40)
                 
-                # Gestione speciale Previsioni (OCA) se mancanti
-                if row[c_tipo] == 'OCA' and s_v == "MANCANTE":
-                    s_v, c_v = "DA PIANIFICARE", "oca-row"
+                if row[c_tipo] == 'OCA' and s_v == "MANCANTE": s_v, c_v = "DA PIANIFICARE", "oca-row"
 
-                # Creazione riga risultato
                 res = row.to_dict()
-                res.update({
-                    'ST': s_v, 
-                    'CS': c_v, 
-                    'DT_EXP': d_v, 
-                    'ART_KEY': art, 
-                    'CLI_NAME': str(row[c_cli])
-                })
+                res.update({'ST': s_v, 'CS': c_v, 'DT_EXP': d_v, 'ART_KEY': art, 'CLI_NAME': str(row[c_cli])})
                 final_results.append(res)
-                
         return pd.DataFrame(final_results), stock_map
-
     except Exception as e:
-        st.error(f"Errore nel calcolo logico: {e}")
-        return pd.DataFrame(), {}
+        st.error(f"Errore: {e}"); return pd.DataFrame(), {}
 
 # --- 5. LOGICA DI ACCESSO ---
 if "auth" not in st.session_state: st.session_state.auth = False
