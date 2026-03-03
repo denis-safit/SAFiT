@@ -80,15 +80,13 @@ def load_and_process():
             df_acc.columns = [str(c).strip().upper() for c in df_acc.columns]
             
             # Identifichiamo gli indici esatti per evitare SLD_M
-            # Se ci sono duplicati nei nomi colonne (comune in export Access), prendiamo il primo
             col_idx = {name: i for i, name in enumerate(df_acc.columns)}
             
             for _, r in df_acc.iterrows():
                 art_code = str(r['CODICE']).strip().upper()
                 if art_code == "NAN" or not art_code: continue
                 
-                # Estrazione tramite il valore della riga r alla colonna specifica
-                # Usiamo .iloc sulla serie r per essere certi della posizione
+                # Estrazione tramite l'indice esatto per la colonna GIA
                 val_gia = clean_num(pd.Series([r.iloc[col_idx['GIA']]])).iloc[0] if 'GIA' in col_idx else 0
                 val_inacq = clean_num(pd.Series([r.iloc[col_idx['INACQ']]])).iloc[0] if 'INACQ' in col_idx else 0
                 
@@ -120,7 +118,7 @@ def load_and_process():
             st_v, col, dt_e = ("MANCANTE", "urgent-row", row[c_dat] + timedelta(days=45))
             if row[c_tipo] == 'OCA': st_v, col = "DA PIANIFICARE", "oca-row"
 
-            # 1. Copertura con Giacenza REALE (17061 nell'esempio)
+            # 1. Copertura con Giacenza REALE
             if s['GIA'] >= qta:
                 s['GIA'] -= qta; st_v, col, dt_e = "DISPONIBILE", "on-time-row", row[c_dat]
             else:
@@ -190,7 +188,6 @@ if not df_res.empty:
 
     st.title("Pannello Controllo Consegne Safit")
     
-    # KPI Cards
     k1, k2, k3, k4 = st.columns(4)
     tot_q = df_f['Qta Residua'].sum()
     k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">PEZZI FILTRATI</div><div class="kpi-val">{int(tot_q):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
@@ -198,7 +195,6 @@ if not df_res.empty:
     k3.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#2196f3">IN ACQUISTO</div><div class="kpi-val">{int(df_f[df_f["ST"]=="ACQUISTO"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
     k4.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#f44336">MANCANTI</div><div class="kpi-val">{int(df_f[df_f["ST"]=="MANCANTE"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
 
-    # Grafici
     c1, c2 = st.columns(2)
     with c1:
         st.plotly_chart(px.pie(df_f, values='Qta Residua', names='ST', color='ST', title="Stato Copertura Attuale",
@@ -210,7 +206,6 @@ if not df_res.empty:
 
     st.markdown("---")
 
-    # Lista Expander
     if df_f.empty:
         st.warning("Nessun dato trovato con i filtri selezionati.")
     else:
