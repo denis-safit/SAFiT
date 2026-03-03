@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 from io import BytesIO
 import plotly.express as px
 
-# --- 1. CONFIGURAZIONE E STILE (Versione Integrale 2.4.0) ---
-APP_VERSION = "3.0.4-GIA-Precision"
+# --- 1. CONFIGURAZIONE E STILE (Integrale v2.4.0) ---
+APP_VERSION = "3.0.5-GIA-Final-Fix"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
@@ -54,10 +54,12 @@ def smart_load(filename, key_col):
             h_row = i; break
     df = pd.read_excel(filename, skiprows=h_row)
     df.columns = [str(c).strip() for c in df.columns]
-    df = df.ffill() 
+    # NON usiamo ffill qui per Access per evitare trascinamenti di dati su righe vuote
+    if "CODICE" not in key_col: 
+        df = df.ffill()
     return df
 
-# --- 4. MOTORE DI CALCOLO ATP (Logica basata su GIA reale) ---
+# --- 4. MOTORE DI CALCOLO ATP ---
 @st.cache_data(ttl=300)
 def load_and_process():
     try:
@@ -70,22 +72,35 @@ def load_and_process():
         df_full[c_qta] = clean_num(df_full[c_qta])
         df_full = df_full.dropna(subset=[c_dat, c_art])
 
-        # Carico Access - FORZATURA PUNTUALE COLONNA GIA
+        # Carico Access - CORREZIONE RIGIDISSIMA POSIZIONE COLONNE
         df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
         stock = {}
         if not df_acc.empty:
+            # Pulizia nomi colonne
+            df_acc.columns = [str(c).strip().upper() for c in df_acc.columns]
+            
+            # Identifichiamo gli indici esatti per evitare SLD_M
+            # Se ci sono duplicati nei nomi colonne (comune in export Access), prendiamo il primo
+            col_idx = {name: i for i, name in enumerate(df_acc.columns)}
+            
             for _, r in df_acc.iterrows():
                 art_code = str(r['CODICE']).strip().upper()
+                if art_code == "NAN" or not art_code: continue
                 
-                # CORREZIONE DEFINITIVA: leggiamo GIA, INACQ e sommiamo TMP, RWI, GRZ
-                val_gia = clean_num(pd.Series([r.get('GIA', 0)])).iloc[0]
-                val_inacq = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
-                val_prod = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['TMP', 'RWI', 'GRZ']])
+                # Estrazione tramite il valore della riga r alla colonna specifica
+                # Usiamo .iloc sulla serie r per essere certi della posizione
+                val_gia = clean_num(pd.Series([r.iloc[col_idx['GIA']]])).iloc[0] if 'GIA' in col_idx else 0
+                val_inacq = clean_num(pd.Series([r.iloc[col_idx['INACQ']]])).iloc[0] if 'INACQ' in col_idx else 0
+                
+                # Somma Produzione: TMP + RWI + GRZ
+                v_tmp = clean_num(pd.Series([r.iloc[col_idx['TMP']]])).iloc[0] if 'TMP' in col_idx else 0
+                v_rwi = clean_num(pd.Series([r.iloc[col_idx['RWI']]])).iloc[0] if 'RWI' in col_idx else 0
+                v_grz = clean_num(pd.Series([r.iloc[col_idx['GRZ']]])).iloc[0] if 'GRZ' in col_idx else 0
                 
                 stock[art_code] = {
                     'GIA': val_gia, 
-                    'INACQ': val_inacq,
-                    'PROD': val_prod
+                    'INACQ': val_inacq, 
+                    'PROD': v_tmp + v_rwi + v_grz
                 }
 
         # Gestione Acquisti Arca (OFF/OFR)
@@ -105,7 +120,7 @@ def load_and_process():
             st_v, col, dt_e = ("MANCANTE", "urgent-row", row[c_dat] + timedelta(days=45))
             if row[c_tipo] == 'OCA': st_v, col = "DA PIANIFICARE", "oca-row"
 
-            # 1. Copertura con GIACENZA REALE (GIA)
+            # 1. Copertura con Giacenza REALE (17061 nell'esempio)
             if s['GIA'] >= qta:
                 s['GIA'] -= qta; st_v, col, dt_e = "DISPONIBILE", "on-time-row", row[c_dat]
             else:
@@ -117,7 +132,7 @@ def load_and_process():
                             a[1] -= qta; st_v, col, dt_e = "ACQUISTO", "acq-row", a[0]; qta = 0; break
                         else:
                             qta -= a[1]; a[1] = 0
-                # 3. Copertura con Produzione (TMP+RWI+GRZ)
+                # 3. Copertura con Produzione
                 if qta > 0 and s['PROD'] >= qta:
                     s['PROD'] -= qta; st_v, col, dt_e = "PRODUZIONE", "prod-row", datetime.now() + timedelta(days=21)
 
@@ -144,7 +159,7 @@ if not st.session_state.auth:
             else: st.error("Credenziali non valide")
     st.stop()
 
-# --- 6. DASHBOARD E FILTRI (Versione Integrale 2.4.0) ---
+# --- 6. DASHBOARD E FILTRI ---
 df_res, stock_raw = load_and_process()
 
 if not df_res.empty:
@@ -175,6 +190,7 @@ if not df_res.empty:
 
     st.title("Pannello Controllo Consegne Safit")
     
+    # KPI Cards
     k1, k2, k3, k4 = st.columns(4)
     tot_q = df_f['Qta Residua'].sum()
     k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">PEZZI FILTRATI</div><div class="kpi-val">{int(tot_q):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
@@ -182,6 +198,7 @@ if not df_res.empty:
     k3.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#2196f3">IN ACQUISTO</div><div class="kpi-val">{int(df_f[df_f["ST"]=="ACQUISTO"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
     k4.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#f44336">MANCANTI</div><div class="kpi-val">{int(df_f[df_f["ST"]=="MANCANTE"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
 
+    # Grafici
     c1, c2 = st.columns(2)
     with c1:
         st.plotly_chart(px.pie(df_f, values='Qta Residua', names='ST', color='ST', title="Stato Copertura Attuale",
@@ -193,6 +210,7 @@ if not df_res.empty:
 
     st.markdown("---")
 
+    # Lista Expander
     if df_f.empty:
         st.warning("Nessun dato trovato con i filtri selezionati.")
     else:
