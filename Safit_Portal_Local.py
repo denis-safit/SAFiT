@@ -6,7 +6,7 @@ from io import BytesIO
 import plotly.express as px
 
 # --- 1. CONFIGURAZIONE E STILE ---
-APP_VERSION = "3.0.6-GIA-Hard-Coded-Fix"
+APP_VERSION = "3.0.7-GIA-Fix-Final"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
@@ -70,45 +70,37 @@ def load_and_process():
         df_full[c_qta] = clean_num(df_full[c_qta])
         df_full = df_full.dropna(subset=[c_dat, c_art])
 
-        # Carico Access con protezione totale sulle colonne
+        # Carico Access con mappatura forzata
         df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
         stock = {}
         if not df_acc.empty:
-            # Pulizia forzata delle colonne per evitare match con SLD_M
-            cols = [str(c).upper().strip() for c in df_acc.columns]
-            df_acc.columns = cols
+            # Pulizia intestazioni
+            df_acc.columns = [str(c).upper().strip() for c in df_acc.columns]
             
-            # Troviamo gli indici numerici reali delle colonne che ci servono
+            # Ricerca indici esatti delle colonne GIA e SLD_M per confronto
+            cols = list(df_acc.columns)
             try:
-                idx_gia = cols.index('GIA')
-                idx_inacq = cols.index('INACQ') if 'INACQ' in cols else -1
-                idx_tmp = cols.index('TMP') if 'TMP' in cols else -1
-                idx_rwi = cols.index('RWI') if 'RWI' in cols else -1
-                idx_grz = cols.index('GRZ') if 'GRZ' in cols else -1
+                idx_gia = cols.index("GIA")
             except ValueError:
-                st.error("Colonna GIA non trovata nel file Access!")
+                st.error("ERRORE: Colonna 'GIA' non trovata nel file Access!")
                 return pd.DataFrame(), {}
 
             for _, r in df_acc.iterrows():
                 art_code = str(r['CODICE']).strip().upper()
                 if art_code == "NAN" or not art_code: continue
                 
-                # Estrazione per indice fisico (ILOC) per non farsi ingannare dai nomi duplicati
-                val_gia = clean_num(pd.Series([r.iloc[idx_gia]])).iloc[0]
+                # Estrazione valore tramite iloc (indice fisico) per evitare ambiguità di nome
+                val_gia_reale = clean_num(pd.Series([r.iloc[idx_gia]])).iloc[0]
                 
-                # Calcolo produzione sommando i vari step
-                v_inacq = clean_num(pd.Series([r.iloc[idx_inacq]])).iloc[0] if idx_inacq != -1 else 0
-                v_tmp = clean_num(pd.Series([r.iloc[idx_tmp]])).iloc[0] if idx_tmp != -1 else 0
-                v_rwi = clean_num(pd.Series([r.iloc[idx_rwi]])).iloc[0] if idx_rwi != -1 else 0
-                v_grz = clean_num(pd.Series([r.iloc[idx_grz]])).iloc[0] if idx_grz != -1 else 0
+                # Somma produzione aggiornata (Denis)
+                p_val = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['ACQ', 'TMP', 'RWI', 'TRF']])
                 
                 stock[art_code] = {
-                    'GIA': val_gia, 
-                    'INACQ': v_inacq,
-                    'PROD': v_tmp + v_rwi + v_grz
+                    'GIA': val_gia_reale, 
+                    'PROD': p_val
                 }
 
-        # Gestione Acquisti Arca (OFF/OFR)
+        # Gestione Acquisti Arca
         df_arr = df_full[df_full[c_tipo].isin(['OFF', 'OFR'])].copy()
         arca_arr = {art: g.sort_values(c_dat)[[c_dat, c_qta]].values.tolist() for art, g in df_arr.groupby(c_art)}
 
@@ -119,25 +111,25 @@ def load_and_process():
         for _, row in df_orders.iterrows():
             art = str(row[c_art]).strip().upper()
             qta = row[c_qta]
-            s = stock.get(art, {'GIA': 0, 'INACQ': 0, 'PROD': 0})
+            s = stock.get(art, {'GIA': 0, 'PROD': 0})
             arr_list = arca_arr.get(art, [])
             
             st_v, col, dt_e = ("MANCANTE", "urgent-row", row[c_dat] + timedelta(days=45))
             if row[c_tipo] == 'OCA': st_v, col = "DA PIANIFICARE", "oca-row"
 
-            # 1. Copertura con Giacenza (GIA)
+            # 1. Giacenza
             if s['GIA'] >= qta:
                 s['GIA'] -= qta; st_v, col, dt_e = "DISPONIBILE", "on-time-row", row[c_dat]
             else:
                 qta -= s['GIA']; s['GIA'] = 0
-                # 2. Copertura con Acquisti
+                # 2. Acquisti
                 for a in arr_list:
                     if a[1] > 0:
                         if a[1] >= qta:
                             a[1] -= qta; st_v, col, dt_e = "ACQUISTO", "acq-row", a[0]; qta = 0; break
                         else:
                             qta -= a[1]; a[1] = 0
-                # 3. Copertura con Produzione
+                # 3. Produzione
                 if qta > 0 and s['PROD'] >= qta:
                     s['PROD'] -= qta; st_v, col, dt_e = "PRODUZIONE", "prod-row", datetime.now() + timedelta(days=21)
 
@@ -147,7 +139,7 @@ def load_and_process():
         
         return pd.DataFrame(final), stock
     except Exception as e:
-        st.error(f"Errore nel calcolo: {e}"); return pd.DataFrame(), {}
+        st.error(f"Errore critico: {e}"); return pd.DataFrame(), {}
 
 # --- 5. LOGICA DI ACCESSO ---
 if "auth" not in st.session_state: st.session_state.auth = False
@@ -163,7 +155,7 @@ if not st.session_state.auth:
             else: st.error("Credenziali non valide")
     st.stop()
 
-# --- 6. DASHBOARD E FILTRI ---
+# --- 6. DASHBOARD ---
 df_res, stock_raw = load_and_process()
 
 if not df_res.empty:
@@ -172,14 +164,17 @@ if not df_res.empty:
         st.markdown(f'<div class="user-info">👤 <b>{st.session_state.user}</b></div>', unsafe_allow_html=True)
         if st.button("🚪 Log-out", use_container_width=True): st.session_state.auth = False; st.rerun()
         st.markdown("---")
+        
         if st.session_state.permesso == "TUTTI":
             sel_cli = st.selectbox("Seleziona Cliente:", ["TUTTI"] + sorted(df_res['CLI_NAME'].unique().tolist()))
         else:
             sel_cli = st.session_state.permesso
             st.info(f"Cliente: {sel_cli}")
+
         st.write("### Filtra per Stato:")
         stati_possibili = ["DISPONIBILE", "ACQUISTO", "PRODUZIONE", "MANCANTE", "DA PIANIFICARE"]
         sel_stati = [s for s in stati_possibili if st.checkbox(s, value=True, key=f"chk_{s}")]
+        
         st.markdown("---")
         search = st.text_input("🔍 Cerca Articolo:").upper()
 
@@ -190,6 +185,7 @@ if not df_res.empty:
     st.sidebar.download_button("📊 Esporta in Excel", data=to_excel(df_f), file_name=f"Safit_{datetime.now().strftime('%d%m')}.xlsx", use_container_width=True)
 
     st.title("Pannello Controllo Consegne Safit")
+    
     k1, k2, k3, k4 = st.columns(4)
     tot_q = df_f['Qta Residua'].sum()
     k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">PEZZI FILTRATI</div><div class="kpi-val">{int(tot_q):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
@@ -207,13 +203,14 @@ if not df_res.empty:
                                values='Qta Residua', names='Famiglia', hole=0.4, title="Top 10 Famiglie Prodotti"), use_container_width=True)
 
     st.markdown("---")
+
     if df_f.empty:
         st.warning("Nessun dato trovato con i filtri selezionati.")
     else:
         for art, g in df_f.groupby('ART_KEY'):
             with st.expander(f"📦 {art} - {g['Articolo D'].iloc[0]} ({len(g)} ordini)"):
-                info = stock_raw.get(art, {'GIA': 0, 'INACQ': 0, 'PROD': 0})
-                st.markdown(f'<div class="debug-box"><span>📦 GIA: <b>{int(info["GIA"])}</b></span><span>🚚 IN ACQUISTO: <b>{int(info["INACQ"])}</b></span><span>⚙️ PROD: <b>{int(info["PROD"])}</b></span></div>', unsafe_allow_html=True)
+                info = stock_raw.get(art, {'GIA': 0, 'PROD': 0})
+                st.markdown(f'<div class="debug-box"><span>📦 GIACENZA: <b>{int(info["GIA"])}</b></span><span>⚙️ PRODUZIONE: <b>{int(info["PROD"])}</b></span></div>', unsafe_allow_html=True)
                 for _, r in g.iterrows():
                     tag = "📋 [PREV]" if r['Codice Documento'] == "OCA" else "🛒 [ORD]"
                     st.markdown(f'<div class="status-row {r["CS"]}"><span>{tag} 📅 {r["DT_EXP"].strftime("%d/%m/%Y")} | Q: {int(r["Qta Residua"])} | {r["CLI_NAME"]}</span><span><b>{r["ST"]}</b></span></div>', unsafe_allow_html=True)
