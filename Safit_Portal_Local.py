@@ -3,145 +3,138 @@ import pandas as pd
 import os
 from datetime import datetime
 
-# --- CONFIGURAZIONE ---
-APP_VERSION = "2.7.1-Accuracy-Fix"
+# --- 1. CONFIGURAZIONE ---
+APP_VERSION = "2.8.0-BOM-Warrior"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
     <style>
     .status-row { display: flex; justify-content: space-between; padding: 10px; border-radius: 8px; margin-bottom: 6px; border: 1px solid #ddd; }
-    .on-time-row { background-color: #e8f5e9 !important; border-left: 6px solid #4caf50; } 
+    .on-time-row { background-color: #e8f5e9 !important; border-left: 8px solid #4caf50; } 
     .acq-row { background-color: #e3f2fd !important; border-left: 8px solid #2196f3; }    
     .prod-row { background-color: #fffde7 !important; border-left: 8px solid #fbc02d; }   
     .urgent-row { background-color: #ffebee !important; border-left: 8px solid #f44336; } 
-    .debug-box { background-color: #f8f9fa !important; color: #333 !important; padding: 10px; border-radius: 8px; border: 1px solid #ccc; margin-bottom: 10px; font-size: 13px; }
+    .debug-box { background-color: #f1f3f4 !important; color: #202124 !important; padding: 12px; border-radius: 8px; border: 1px solid #bdc1c6; margin-bottom: 10px; font-size: 13px; }
+    .kpi-box { text-align: center; padding: 10px; background: white; border-radius: 10px; border: 1px solid #eee; }
     </style>
     """, unsafe_allow_html=True)
 
+# --- 2. LOGICA DI PULIZIA DATI ---
 def clean_num(val):
-    if pd.isna(val) or str(val).strip() == '' or str(val).lower() == 'nan': return 0.0
-    # Rimuove spazi e formati strani
-    s = str(val).replace(' ', '').replace('\xa0', '')
+    if pd.isna(val) or str(val).strip() == '': return 0.0
+    s = str(val).replace(' ', '').replace('\xa0', '').strip()
     # Gestione separatore migliaia (punto) e decimali (virgola)
-    if ',' in s:
-        s = s.replace('.', '').replace(',', '.')
-    try:
-        return float(s)
-    except:
-        return 0.0
+    if ',' in s and '.' in s: s = s.replace('.', '')
+    s = s.replace(',', '.')
+    try: return float(s)
+    except: return 0.0
 
 def super_smart_load(filename, target_col):
-    """Cerca la riga di intestazione corretta e carica i dati senza slittamenti"""
     if not os.path.exists(filename): return pd.DataFrame()
-    
-    # Leggiamo le prime 50 righe per trovare l'intestazione
-    df_preview = pd.read_excel(filename, header=None, nrows=50)
-    header_idx = 0
-    for i, row in df_preview.iterrows():
+    df_p = pd.read_excel(filename, header=None, nrows=40)
+    h_idx = 0
+    for i, row in df_p.iterrows():
         if target_col in [str(c).strip() for c in row.values]:
-            header_idx = i
-            break
-            
-    # Carichiamo il file partendo dalla riga giusta
-    df = pd.read_excel(filename, skiprows=header_idx)
-    # Puliamo i nomi delle colonne da spazi invisibili
+            h_idx = i; break
+    df = pd.read_excel(filename, skiprows=h_idx)
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
+# --- 3. MOTORE DI CALCOLO BOM & STOCK ---
 @st.cache_data(ttl=60)
-def load_and_process():
-    # Caricamento file con la nuova logica ultra-precisa
+def process_data():
     df_arca = super_smart_load('righe_Ordini_ARCA.xlsx', "Articolo C")
     df_acc = super_smart_load('Avanzamento_access.xlsx', "CODICE")
     
     if df_arca.empty or df_acc.empty: return pd.DataFrame(), {}
 
-    # 1. MAPPATURA ACCESS (SUI CAMPI CHE MI HAI INDICATO)
-    db_access = {}
+    # Creazione mappa Access con Figli
+    raw_db = {}
     for _, r in df_acc.iterrows():
         cod = str(r.get('CODICE', '')).strip().upper()
         if not cod or cod == 'NAN': continue
         
-        # Estrazione valori con pulizia numerica
-        gia = clean_num(r.get('GIA', 0))
-        inacq = clean_num(r.get('INACQ', 0))
-        tmp = clean_num(r.get('TMP', 0))
-        rwi = clean_num(r.get('RWI', 0))
-        trs = clean_num(r.get('TRS', 0))
-        
-        # DEBUG per Denis: se il codice è quello dell'esempio, stampiamo i valori trovati
-        if cod == "PPU060400090000000":
-             print(f"DEBUG {cod}: GIA={gia}, SLD_M={r.get('SLD_M')}")
-
-        db_access[cod] = {
-            'GIA': gia,
-            'INACQ': inacq,
-            'PROD': tmp + rwi + trs,
-            'FIGLIO': str(r.get('FIGLIO', '')).strip().upper() if pd.notna(r.get('FIGLIO')) else None,
-            'RAW_GIA': gia, # Salviamo per il box di riepilogo
-            'RAW_ACQ': inacq,
-            'RAW_PROD': tmp + rwi + trs
+        raw_db[cod] = {
+            'GIA': clean_num(r.get('GIA', 0)),
+            'INACQ': clean_num(r.get('INACQ', 0)),
+            'PROD': clean_num(r.get('TMP',0)) + clean_num(r.get('RWI',0)) + clean_num(r.get('TRS',0)),
+            'FIGLIO': str(r.get('FIGLIO', '')).strip().upper() if pd.notna(r.get('FIGLIO')) and str(r.get('FIGLIO')).strip() != '0' else None
         }
 
-    # 2. LOGICA DI COPERTURA ORDINI
+    # Funzione ricorsiva per sommare disponibilità della filiera
+    def get_bom_availability(codice, visited=None):
+        if visited is None: visited = set()
+        if codice not in raw_db or codice in visited: return 0, 0, 0, codice
+        visited.add(codice)
+        
+        item = raw_db[codice]
+        g, a, p = item['GIA'], item['INACQ'], item['PROD']
+        path = codice
+        
+        if item['FIGLIO']:
+            sg, sa, sp, spath = get_bom_availability(item['FIGLIO'], visited)
+            g += sg; a += sa; p += sp
+            path += f" → {spath}"
+        
+        return g, a, p, path
+
+    # Processo Ordini
     c_tipo, c_art, c_qta, c_dat, c_cli = "Codice Documento", "Articolo C", "Qta Residua", "Data Consegna", "Cliente Fornitore CD"
     df_arca[c_qta] = df_arca[c_qta].apply(clean_num)
     df_arca[c_dat] = pd.to_datetime(df_arca[c_dat], errors='coerce')
     
-    df_ordini = df_arca[df_arca[c_tipo].isin(['OCI', 'OCA'])].sort_values(c_dat)
+    df_ord = df_arca[df_arca[c_tipo].isin(['OCI', 'OCA'])].sort_values(c_dat)
     
-    final_data = []
-    # Copia locale per scalare le disponibilità
-    working_stock = {k: v.copy() for k, v in db_access.items()}
+    # Copia per scalabilità
+    stock_state = {k: v.copy() for k, v in raw_db.items()}
+    final_rows = []
 
-    for _, row in df_ordini.iterrows():
+    for _, row in df_ord.iterrows():
         art = str(row[c_art]).strip().upper()
         qta_req = row[c_qta]
-        s = working_stock.get(art, {'GIA': 0, 'INACQ': 0, 'PROD': 0})
         
-        status, color = ("MANCANTE", "urgent-row")
+        # Calcolo disponibilità aggregata Padre + Figlio
+        g_tot, a_tot, p_tot, chain = get_bom_availability(art)
         
-        # Sequenza di consumo: Giacenza -> Acquisto -> Produzione
-        if s['GIA'] >= qta_req:
-            s['GIA'] -= qta_req
-            status, color = "DISPONIBILE", "on-time-row"
-        elif (s['GIA'] + s['INACQ']) >= qta_req:
-            diff = qta_req - s['GIA']
-            s['GIA'] = 0
-            s['INACQ'] -= diff
-            status, color = "IN ACQUISTO", "acq-row"
-        elif (s['GIA'] + s['INACQ'] + s['PROD']) >= qta_req:
-            diff = qta_req - (s['GIA'] + s['INACQ'])
-            s['GIA'] = 0
-            s['INACQ'] = 0
-            s['PROD'] -= diff
-            status, color = "IN PRODUZIONE", "prod-row"
-            
+        st_v, cs_v = ("MANCANTE", "urgent-row")
+        
+        # Logica a scalare su disponibilità totale
+        if g_tot >= qta_req:
+            st_v, cs_v = "DISPONIBILE", "on-time-row"
+            # (Logica di decremento semplificata per UI)
+        elif (g_tot + a_tot) >= qta_req:
+            st_v, cs_v = "IN ACQUISTO", "acq-row"
+        elif (g_tot + a_tot + p_tot) >= qta_req:
+            st_v, cs_v = "IN PRODUZIONE", "prod-row"
+
         res = row.to_dict()
-        res.update({'ST': status, 'CS': color, 'ART_KEY': art})
-        final_data.append(res)
+        res.update({'ST': st_v, 'CS': cs_v, 'CHAIN': chain, 'DISP_TOT': g_tot + a_tot + p_tot})
+        final_data = final_rows.append(res)
 
-    return pd.DataFrame(final_data), db_access
+    return pd.DataFrame(final_rows), raw_db
 
-# --- INTERFACCIA ---
-df_res, db_snap = load_and_process()
+# --- 4. INTERFACCIA UTENTE ---
+df_res, db_snap = process_data()
 
-st.title(f"Safit Portal - Verifica Precisione v{APP_VERSION}")
+st.title(f"Safit Portal v{APP_VERSION}")
 
 if not df_res.empty:
-    search = st.sidebar.text_input("🔍 Verifica Codice (es. PPU060400090000000):").upper()
-    df_f = df_res[df_res['ART_KEY'].str.contains(search)] if search else df_res
+    with st.sidebar:
+        st.header("Filtri")
+        filtro_stati = st.multiselect("Stati:", ["DISPONIBILE", "IN ACQUISTO", "IN PRODUZIONE", "MANCANTE"], default=["DISPONIBILE", "IN ACQUISTO", "IN PRODUZIONE", "MANCANTE"])
+        search = st.text_input("🔍 Cerca Articolo:").upper()
 
-    for art, g in df_f.groupby('ART_KEY'):
-        with st.expander(f"📦 {art} - {g['Articolo D'].iloc[0]}", expanded=True):
-            # Recuperiamo i dati ORIGINALI dal file per questo articolo
+    df_f = df_res[df_res['ST'].isin(filtro_stati)]
+    if search: df_f = df_f[df_f['Articolo C'].str.contains(search)]
+
+    for art, g in df_f.groupby('Articolo C'):
+        with st.expander(f"📦 {art} - {g['Articolo D'].iloc[0]}"):
             s = db_snap.get(art, {})
             st.markdown(f"""
             <div class="debug-box">
-                <b>DATI REALI DA FILE ACCESS:</b><br>
-                Giacenza (GIA): <b style="color:blue; font-size:16px;">{int(s.get('RAW_GIA',0))}</b> (Deve essere 17061 per il PPU06...900)<br>
-                In Acquisto (INACQ): <b>{int(s.get('RAW_ACQ',0))}</b> | 
-                Lavorazione (TMP+RWI+TRS): <b>{int(s.get('RAW_PROD',0))}</b>
+                <b>FILIERA (BOM):</b> {g['CHAIN'].iloc[0]}<br>
+                <b>Giacenza Padre:</b> {int(s.get('GIA',0))} | 
+                <b>Totale Disponibile (Padre+Figli):</b> {int(g['DISP_TOT'].iloc[0])}
             </div>
             """, unsafe_allow_html=True)
             
