@@ -6,7 +6,7 @@ from io import BytesIO
 import plotly.express as px
 
 # --- 1. CONFIGURAZIONE E STILE ---
-APP_VERSION = "3.0.1-GIA-Fix"
+APP_VERSION = "3.0.2-GIA-Focus"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
@@ -61,7 +61,7 @@ def smart_load(filename, key_col):
 @st.cache_data(ttl=300)
 def load_and_process():
     try:
-        # Caricamento Arca
+        # Carico Arca
         df_full = smart_load('righe_Ordini_ARCA.xlsx', "Articolo C")
         if df_full.empty: return pd.DataFrame(), {}
         
@@ -70,25 +70,25 @@ def load_and_process():
         df_full[c_qta] = clean_num(df_full[c_qta])
         df_full = df_full.dropna(subset=[c_dat, c_art])
 
-        # Caricamento Access - CORREZIONE CAMPO GIA
+        # Carico Access - FIX CHIRURGICO SU GIA
         df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
         stock = {}
         if not df_acc.empty:
             for _, r in df_acc.iterrows():
                 art_code = str(r['CODICE']).strip().upper()
                 
-                # Forzatura lettura campo GIA esatto (evitando SLD_M)
-                # Utilizziamo clean_num su una serie creata dal singolo valore della colonna GIA
-                valore_gia_reale = clean_num(pd.Series([r['GIA']])).iloc[0] if 'GIA' in r else 0
+                # CORREZIONE: puntiamo alla colonna GIA usando il nome esatto della serie r
+                # e calcoliamo separatamente i campi per evitare confusioni con SLD_M
+                val_gia = clean_num(pd.Series([r.get('GIA', 0)])).iloc[0]
+                val_inacq = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
                 
-                # Calcolo Avanzamento (TMP + RWI + GRZ)
-                v_prod = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['TMP', 'RWI', 'GRZ']])
-                v_acq = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
-
+                # Somma Avanzamento (TMP + RWI + GRZ)
+                val_prod = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['TMP', 'RWI', 'GRZ']])
+                
                 stock[art_code] = {
-                    'GIA': valore_gia_reale, 
-                    'INACQ': v_acq,
-                    'PROD': v_prod
+                    'GIA': val_gia, 
+                    'INACQ': val_inacq,
+                    'PROD': val_prod
                 }
 
         # Gestione Acquisti Arca (OFF/OFR)
@@ -108,19 +108,19 @@ def load_and_process():
             st_v, col, dt_e = ("MANCANTE", "urgent-row", row[c_dat] + timedelta(days=45))
             if row[c_tipo] == 'OCA': st_v, col = "DA PIANIFICARE", "oca-row"
 
-            # 1. Copertura con Giacenza Reale
+            # 1. Copertura con Giacenza (Access GIA)
             if s['GIA'] >= qta:
                 s['GIA'] -= qta; st_v, col, dt_e = "DISPONIBILE", "on-time-row", row[c_dat]
             else:
                 qta -= s['GIA']; s['GIA'] = 0
-                # 2. Copertura con Acquisti
+                # 2. Copertura con Acquisti (OFF/OFR Arca)
                 for a in arr_list:
                     if a[1] > 0:
                         if a[1] >= qta:
                             a[1] -= qta; st_v, col, dt_e = "ACQUISTO", "acq-row", a[0]; qta = 0; break
                         else:
                             qta -= a[1]; a[1] = 0
-                # 3. Copertura con Produzione
+                # 3. Copertura con Produzione (Access TMP+RWI+GRZ)
                 if qta > 0 and s['PROD'] >= qta:
                     s['PROD'] -= qta; st_v, col, dt_e = "PRODUZIONE", "prod-row", datetime.now() + timedelta(days=21)
 
