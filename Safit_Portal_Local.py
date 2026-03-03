@@ -73,7 +73,7 @@ def smart_load(filename, key_col):
     if "CODICE" not in key_col: df = df.ffill() 
     return df
 
-# --- 4. MOTORE DI CALCOLO (LOGICA MASTER 3.2.6: CRONOLOGIA ESATTA ARCA) ---
+# --- 4. MOTORE DI CALCOLO (LOGICA MASTER 3.2.7: ZERO ACCORPAMENTI) ---
 @st.cache_data(ttl=300)
 def load_and_process():
     try:
@@ -82,17 +82,19 @@ def load_and_process():
         if df_arca.empty: 
             return pd.DataFrame(), {}
         
-        # Identificazione colonne chiave
         c_tipo = "Codice Documento"
         c_art = "Articolo C"
         c_qta = "Qta Residua"
         c_dat = "Data Consegna"
         c_cli = "Cliente Fornitore CD"
         
-        # Pulizia e conversione dati
+        # PULIZIA RIGOROSA: Trasformiamo i negativi (es. -2.000) in positivi per il calcolo
+        df_arca[c_qta] = clean_num(df_arca[c_qta]).abs()
         df_arca[c_dat] = pd.to_datetime(df_arca[c_dat], errors='coerce')
-        df_arca[c_qta] = clean_num(df_arca[c_qta]).abs() # Usiamo il valore assoluto per gestire i segni -
-        df_arca = df_arca.dropna(subset=[c_dat, c_art])
+        
+        # Filtriamo subito per tenere solo OCI/OCA con quantità
+        df_arca = df_arca[df_arca[c_tipo].isin(['OCI', 'OCA'])]
+        df_arca = df_arca[df_arca[c_qta] > 0].dropna(subset=[c_dat, c_art])
 
         # 4.2 Caricamento Scorte ACCESS
         df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
@@ -102,71 +104,68 @@ def load_and_process():
             for _, r in df_acc.iterrows():
                 art_code = str(r['CODICE']).strip().upper()
                 gia = clean_num(pd.Series([r.get('GIA', 0)])).iloc[0]
-                acq_v = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
-                prod_v = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'ACQ', 'TRF']])
-                stock_map[art_code] = {'GIA': gia, 'ACQ': acq_v, 'PROD': prod_v}
+                acq = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
+                # Somma fasi produzione
+                prod = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'ACQ', 'TRF']])
+                stock_map[art_code] = {'GIA': gia, 'ACQ': acq, 'PROD': prod}
 
-        # 4.3 Algoritmo di Allocazione (Nessun raggruppamento, riga per riga)
-        # Ordiniamo PRIMA per articolo e POI per data per non sbagliare la coda
-        df_orders = df_arca[df_arca[c_tipo].isin(['OCI', 'OCA'])].sort_values(by=[c_art, c_dat])
+        # 4.3 CALCOLO SEQUENZIALE RIGA PER RIGA
+        # Ordiniamo per data per rispettare la cronologia reale di ARCA
+        df_orders = df_arca.sort_values(by=[c_art, c_dat])
         
         final_results = []
         oggi = datetime.now()
 
-        # Elaboriamo ogni articolo separatamente
-        for art, group in df_orders.groupby(c_art):
-            s = stock_map.get(str(art).upper(), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
-            m = float(s['GIA'])   # Giacenza disponibile
-            a = float(s['ACQ'])   # Acquisti in arrivo
-            p = float(s['PROD'])  # Produzione in corso
-            
-            # Iteriamo su ogni singola riga d'ordine originale di ARCA
-            for index, row in group.iterrows():
-                q = float(row[c_qta])
-                
-                # 1. Verifica Giacenza
-                if m >= q:
-                    m -= q
-                    s_v, c_v, d_v = "DISPONIBILE", "on-time-row", row[c_dat]
-                
-                # 2. Verifica Acquisto (se GIA esaurita o insufficiente)
-                elif (m + a) >= q:
-                    a -= (q - m)
-                    m = 0
-                    s_v, c_v, d_v = "ACQUISTO", "acq-row", oggi + timedelta(days=12)
-                
-                # 3. Verifica Produzione
-                elif (m + a + p) >= q:
-                    p -= (q - m - a)
-                    m = 0
-                    a = 0
-                    s_v, c_v, d_v = "PRODUZIONE", "prod-row", oggi + timedelta(days=22)
-                
-                # 4. Mancante
-                else:
-                    m = 0; a = 0; p = 0
-                    s_v, c_v, d_v = "MANCANTE", "urgent-row", oggi + timedelta(days=40)
-                
-                # Se è una previsione (OCA) e non c'è copertura, etichetta speciale
-                if row[c_tipo] == 'OCA' and s_v == "MANCANTE":
-                    s_v, c_v = "DA PIANIFICARE", "oca-row"
+        # Usiamo un dizionario per scalare le scorte man mano che scorriamo le righe
+        # per ogni articolo separatamente
+        current_stocks = {k: v.copy() for k, v in stock_map.items()}
 
-                # Salvataggio dati riga per riga senza alterare la data originale ARCA nel record
-                res = row.to_dict()
-                res.update({
-                    'ST': s_v, 
-                    'CS': c_v, 
-                    'DT_EXP': d_v, # Data calcolata dal portale
-                    'DT_ARCA': row[c_dat], # Manteniamo la data originale di ARCA per controllo
-                    'ART_KEY': art, 
-                    'CLI_NAME': str(row[c_cli])
-                })
-                final_results.append(res)
+        for index, row in df_orders.iterrows():
+            art_code = str(row[c_art]).upper()
+            qta_ordine = float(row[c_qta])
+            
+            # Recuperiamo scorte attuali per questo specifico articolo
+            scorte = current_stocks.get(art_code, {'GIA': 0, 'ACQ': 0, 'PROD': 0})
+            
+            # Logica di allocazione a cascata
+            if scorte['GIA'] >= qta_ordine:
+                scorte['GIA'] -= qta_ordine
+                stato, colore, data_disp = "DISPONIBILE", "on-time-row", row[c_dat]
+            elif (scorte['GIA'] + scorte['ACQ']) >= qta_ordine:
+                scorte['ACQ'] -= (qta_ordine - scorte['GIA'])
+                scorte['GIA'] = 0
+                stato, colore, data_disp = "ACQUISTO", "acq-row", oggi + timedelta(days=12)
+            elif (scorte['GIA'] + scorte['ACQ'] + scorte['PROD']) >= qta_ordine:
+                scorte['PROD'] -= (qta_ordine - scorte['GIA'] - scorte['ACQ'])
+                scorte['GIA'] = 0
+                scorte['ACQ'] = 0
+                stato, colore, data_disp = "PRODUZIONE", "prod-row", oggi + timedelta(days=22)
+            else:
+                scorte['GIA'] = 0; scorte['ACQ'] = 0; scorte['PROD'] = 0
+                stato, colore, data_disp = "MANCANTE", "urgent-row", oggi + timedelta(days=40)
+            
+            # Eccezione OCA
+            if row[c_tipo] == 'OCA' and stato == "MANCANTE":
+                stato, colore = "DA PIANIFICARE", "oca-row"
+
+            # Aggiorniamo le scorte nel dizionario per il prossimo ordine dello stesso articolo
+            current_stocks[art_code] = scorte
+
+            # Creiamo il record finale mantenendo TUTTE le informazioni originali
+            res = row.to_dict()
+            res.update({
+                'ST': stato, 
+                'CS': colore, 
+                'DT_EXP': data_disp, 
+                'ART_KEY': art_code,
+                'CLI_NAME': str(row[c_cli])
+            })
+            final_results.append(res)
                 
         return pd.DataFrame(final_results), stock_map
 
     except Exception as e:
-        st.error(f"Errore critico nella logica: {e}")
+        st.error(f"Errore logica 3.2.7: {e}")
         return pd.DataFrame(), {}
 
 # --- 5. LOGICA DI ACCESSO ---
