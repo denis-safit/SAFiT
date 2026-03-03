@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 from io import BytesIO
 import plotly.express as px
 
-# --- 1. CONFIGURAZIONE E STILE (Integrale v2.4.0) ---
-APP_VERSION = "3.0.5-GIA-Final-Fix"
+# --- 1. CONFIGURAZIONE E STILE ---
+APP_VERSION = "3.0.6-GIA-Hard-Coded-Fix"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
@@ -54,9 +54,7 @@ def smart_load(filename, key_col):
             h_row = i; break
     df = pd.read_excel(filename, skiprows=h_row)
     df.columns = [str(c).strip() for c in df.columns]
-    # NON usiamo ffill qui per Access per evitare trascinamenti di dati su righe vuote
-    if "CODICE" not in key_col: 
-        df = df.ffill()
+    if "CODICE" not in key_col: df = df.ffill() 
     return df
 
 # --- 4. MOTORE DI CALCOLO ATP ---
@@ -72,32 +70,41 @@ def load_and_process():
         df_full[c_qta] = clean_num(df_full[c_qta])
         df_full = df_full.dropna(subset=[c_dat, c_art])
 
-        # Carico Access - CORREZIONE RIGIDISSIMA POSIZIONE COLONNE
+        # Carico Access con protezione totale sulle colonne
         df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
         stock = {}
         if not df_acc.empty:
-            # Pulizia nomi colonne
-            df_acc.columns = [str(c).strip().upper() for c in df_acc.columns]
+            # Pulizia forzata delle colonne per evitare match con SLD_M
+            cols = [str(c).upper().strip() for c in df_acc.columns]
+            df_acc.columns = cols
             
-            # Identifichiamo gli indici esatti per evitare SLD_M
-            col_idx = {name: i for i, name in enumerate(df_acc.columns)}
-            
+            # Troviamo gli indici numerici reali delle colonne che ci servono
+            try:
+                idx_gia = cols.index('GIA')
+                idx_inacq = cols.index('INACQ') if 'INACQ' in cols else -1
+                idx_tmp = cols.index('TMP') if 'TMP' in cols else -1
+                idx_rwi = cols.index('RWI') if 'RWI' in cols else -1
+                idx_grz = cols.index('GRZ') if 'GRZ' in cols else -1
+            except ValueError:
+                st.error("Colonna GIA non trovata nel file Access!")
+                return pd.DataFrame(), {}
+
             for _, r in df_acc.iterrows():
                 art_code = str(r['CODICE']).strip().upper()
                 if art_code == "NAN" or not art_code: continue
                 
-                # Estrazione tramite l'indice esatto per la colonna GIA
-                val_gia = clean_num(pd.Series([r.iloc[col_idx['GIA']]])).iloc[0] if 'GIA' in col_idx else 0
-                val_inacq = clean_num(pd.Series([r.iloc[col_idx['INACQ']]])).iloc[0] if 'INACQ' in col_idx else 0
+                # Estrazione per indice fisico (ILOC) per non farsi ingannare dai nomi duplicati
+                val_gia = clean_num(pd.Series([r.iloc[idx_gia]])).iloc[0]
                 
-                # Somma Produzione: TMP + RWI + GRZ
-                v_tmp = clean_num(pd.Series([r.iloc[col_idx['TMP']]])).iloc[0] if 'TMP' in col_idx else 0
-                v_rwi = clean_num(pd.Series([r.iloc[col_idx['RWI']]])).iloc[0] if 'RWI' in col_idx else 0
-                v_grz = clean_num(pd.Series([r.iloc[col_idx['GRZ']]])).iloc[0] if 'GRZ' in col_idx else 0
+                # Calcolo produzione sommando i vari step
+                v_inacq = clean_num(pd.Series([r.iloc[idx_inacq]])).iloc[0] if idx_inacq != -1 else 0
+                v_tmp = clean_num(pd.Series([r.iloc[idx_tmp]])).iloc[0] if idx_tmp != -1 else 0
+                v_rwi = clean_num(pd.Series([r.iloc[idx_rwi]])).iloc[0] if idx_rwi != -1 else 0
+                v_grz = clean_num(pd.Series([r.iloc[idx_grz]])).iloc[0] if idx_grz != -1 else 0
                 
                 stock[art_code] = {
                     'GIA': val_gia, 
-                    'INACQ': val_inacq, 
+                    'INACQ': v_inacq,
                     'PROD': v_tmp + v_rwi + v_grz
                 }
 
@@ -118,7 +125,7 @@ def load_and_process():
             st_v, col, dt_e = ("MANCANTE", "urgent-row", row[c_dat] + timedelta(days=45))
             if row[c_tipo] == 'OCA': st_v, col = "DA PIANIFICARE", "oca-row"
 
-            # 1. Copertura con Giacenza REALE
+            # 1. Copertura con Giacenza (GIA)
             if s['GIA'] >= qta:
                 s['GIA'] -= qta; st_v, col, dt_e = "DISPONIBILE", "on-time-row", row[c_dat]
             else:
@@ -144,7 +151,6 @@ def load_and_process():
 
 # --- 5. LOGICA DI ACCESSO ---
 if "auth" not in st.session_state: st.session_state.auth = False
-
 if not st.session_state.auth:
     col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
@@ -166,17 +172,14 @@ if not df_res.empty:
         st.markdown(f'<div class="user-info">👤 <b>{st.session_state.user}</b></div>', unsafe_allow_html=True)
         if st.button("🚪 Log-out", use_container_width=True): st.session_state.auth = False; st.rerun()
         st.markdown("---")
-        
         if st.session_state.permesso == "TUTTI":
             sel_cli = st.selectbox("Seleziona Cliente:", ["TUTTI"] + sorted(df_res['CLI_NAME'].unique().tolist()))
         else:
             sel_cli = st.session_state.permesso
             st.info(f"Cliente: {sel_cli}")
-
         st.write("### Filtra per Stato:")
         stati_possibili = ["DISPONIBILE", "ACQUISTO", "PRODUZIONE", "MANCANTE", "DA PIANIFICARE"]
         sel_stati = [s for s in stati_possibili if st.checkbox(s, value=True, key=f"chk_{s}")]
-        
         st.markdown("---")
         search = st.text_input("🔍 Cerca Articolo:").upper()
 
@@ -187,7 +190,6 @@ if not df_res.empty:
     st.sidebar.download_button("📊 Esporta in Excel", data=to_excel(df_f), file_name=f"Safit_{datetime.now().strftime('%d%m')}.xlsx", use_container_width=True)
 
     st.title("Pannello Controllo Consegne Safit")
-    
     k1, k2, k3, k4 = st.columns(4)
     tot_q = df_f['Qta Residua'].sum()
     k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">PEZZI FILTRATI</div><div class="kpi-val">{int(tot_q):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
@@ -205,7 +207,6 @@ if not df_res.empty:
                                values='Qta Residua', names='Famiglia', hole=0.4, title="Top 10 Famiglie Prodotti"), use_container_width=True)
 
     st.markdown("---")
-
     if df_f.empty:
         st.warning("Nessun dato trovato con i filtri selezionati.")
     else:
