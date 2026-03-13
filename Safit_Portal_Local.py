@@ -18,12 +18,12 @@ st.markdown("""
     .prod-row { background-color: #fffde7 !important; border-left: 8px solid #fbc02d; }   
     .urgent-row { background-color: #ffebee !important; border-left: 8px solid #f44336; } 
     .oca-row { background-color: #f5f5f5 !important; border-left: 8px solid #9e9e9e; color: #666 !important; }
+    .bom-row { background-color: #f3e5f5 !important; border-left: 8px solid #9c27b0; }
     .debug-box { background-color: #f8f9fa !important; color: #333 !important; padding: 12px; border-radius: 8px; border: 1px dotted #bbb; margin-bottom: 10px; display: flex; justify-content: space-around; font-size: 13px; font-weight: bold; }
     .kpi-card { background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px; border-radius: 10px; text-align: center; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
     .kpi-val { font-size: 24px; font-weight: bold; color: #1f77b4; }
     .user-info { padding: 10px; background: #f8f9fa; border-radius: 5px; border: 1px solid #eee; margin-bottom: 20px; text-align: center; }
     </style>
-    .bom-row { background-color: #f3e5f5 !important; border-left: 8px solid #9c27b0; }
     """, unsafe_allow_html=True)
 
 # --- 2. GESTIONE UTENTI DINAMICA (Recuperata da v1.4) ---
@@ -102,10 +102,10 @@ def load_and_process():
                 figlio = str(r.get('FIGLIO', 'NAN')).strip().upper()
                 stock_map[art_code] = {'GIA': gia, 'ACQ': acq, 'PROD': prod, 'FIGLIO': figlio}
 
-        # 4.3 CALCOLO SEQUENZIALE CON LOGICA BOM
+        # 4.3 CALCOLO SEQUENZIALE CON LOGICA BOM CORRETTA
         df_orders = df_arca.sort_values(by=[c_art, c_dat])
         final_results = []
-        # Usiamo current_stocks per permettere alla ricorsione di scalare le giacenze reali
+        # curr_stocks viene modificato ricorsivamente da get_coverage
         curr_stocks = {k: v.copy() for k, v in stock_map.items()}
 
         for index, row in df_orders.iterrows():
@@ -113,15 +113,17 @@ def load_and_process():
             qta_ordine = float(row[c_qta])
             
             # --- ESECUZIONE MOTORE BOM ---
+            # La funzione ora scala direttamente le giacenze in curr_stocks
             source, lvl = get_coverage(art_code, qta_ordine, curr_stocks)
             
-            # Assegnazione stato basata su BOM
+            # Assegnazione stato
             if source == art_code:
                 stato, colore = "DISPONIBILE", "on-time-row"
             elif source:
+                # Se source è diverso da art_code, significa che abbiamo trovato copertura sul figlio
                 stato, colore = "COPERTO BOM", "bom-row"
             else:
-                # Fallback alla tua logica originale per ACQUISTO/PRODUZIONE/MANCANTE
+                # Logica di fallback: guardiamo cosa resta dopo che la ricorsione ha pulito le giacenze
                 s = curr_stocks.get(art_code, {'ACQ':0, 'PROD':0})
                 if s['ACQ'] >= qta_ordine: 
                     stato, colore = "ACQUISTO", "acq-row"
@@ -130,7 +132,7 @@ def load_and_process():
                 else: 
                     stato, colore = "MANCANTE", "urgent-row"
             
-            # Gestione speciale per OCA
+            # Gestione speciale per OCA (non toccare questa logica)
             if row[c_tipo] == 'OCA' and stato == "MANCANTE":
                 stato, colore = "DA PIANIFICARE", "oca-row"
 
@@ -146,10 +148,6 @@ def load_and_process():
             final_results.append(res)
                 
         return pd.DataFrame(final_results), stock_map
-
-    except Exception as e:
-        st.error(f"Errore nel Motore di Calcolo: {e}")
-        return pd.DataFrame(), {}
     
 # --- 5. LOGICA DI ACCESSO ---
 if "auth" not in st.session_state: st.session_state.auth = False
