@@ -1,21 +1,21 @@
 import streamlit as st
 import pandas as pd
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from io import BytesIO
 import plotly.express as px
-from bom_engine import get_coverage  # Assicurati che bom_engine.py sia nella stessa cartella
+from bom_engine import get_coverage  
 
 # --- 1. CONFIGURAZIONE E STILE ---
-APP_VERSION = "3.3"
+APP_VERSION = "3.6"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
     <style>
     .status-row { display: flex; justify-content: space-between; padding: 10px; border-radius: 8px; margin-bottom: 6px; border: 1px solid #ddd; color: #000 !important; font-size: 14px; }
     .on-time-row { background-color: #e8f5e9 !important; border-left: 6px solid #4caf50; } 
-    .acq-row { background-color: #e3f2fd !important; border-left: 6px solid #2196f3; }    
-    .prod-row { background-color: #fffde7 !important; border-left: 6px solid #fbc02d; }   
+    .acq-row { background-color: #e3f2fd !important; border-left: 8px solid #2196f3; }    
+    .prod-row { background-color: #fffde7 !important; border-left: 8px solid #fbc02d; }   
     .urgent-row { background-color: #ffebee !important; border-left: 8px solid #f44336; } 
     .oca-row { background-color: #f5f5f5 !important; border-left: 8px solid #9e9e9e; color: #666 !important; }
     .bom-row { background-color: #f3e5f5 !important; border-left: 8px solid #9c27b0; }
@@ -26,14 +26,49 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. FUNZIONI E LOGICA ---
-# [Le tue funzioni get_user_db, clean_num, to_excel, smart_load rimangono identiche]
-# (Le ometto per brevità ma devono restare nel file)
+# --- 2. FUNZIONI TECNICHE ---
+@st.cache_data
+def get_user_db():
+    if os.path.exists('utenti.xlsx'):
+        try:
+            df_u = pd.read_excel('utenti.xlsx')
+            df_u.columns = [str(c).strip() for c in df_u.columns]
+            return df_u.set_index('username')[['password', 'cliente_arca']].T.to_dict('list')
+        except: pass
+    return {"safit_admin": ["admin2026", "TUTTI"], "denis": ["denis2026", "TUTTI"]}
 
+def clean_num(serie):
+    s = serie.astype(str).str.replace(' ', '').str.replace('\xa0', '')
+    def fix_val(val):
+        if val.lower() in ['nan', '', 'none']: return '0'
+        if ',' in val and '.' in val: return val.replace('.', '').replace(',', '.')
+        elif ',' in val: return val.replace(',', '.')
+        return val
+    return pd.to_numeric(s.apply(fix_val), errors='coerce').fillna(0)
+
+def to_excel(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.drop(columns=['CS', 'DT_EXP', 'ART_KEY', 'ST'], errors='ignore').to_excel(writer, index=False)
+    return output.getvalue()
+
+def smart_load(filename, key_col):
+    if not os.path.exists(filename): return pd.DataFrame()
+    df_p = pd.read_excel(filename, header=None, nrows=20)
+    h_row = 0
+    for i, row in df_p.iterrows():
+        if key_col in row.astype(str).values:
+            h_row = i; break
+    df = pd.read_excel(filename, skiprows=h_row)
+    df.columns = [str(c).strip() for c in df.columns]
+    if "CODICE" not in key_col: df = df.ffill() 
+    return df
+
+# --- 3. MOTORE DI CALCOLO ---
 @st.cache_data(ttl=300)
 def load_and_process():
     try:
-        # 4.1 Caricamento Ordini ARCA
+        # 3.1 Caricamento Ordini
         df_arca = smart_load('righe_Ordini_ARCA.xlsx', "Articolo C")
         if df_arca.empty: return pd.DataFrame(), {}
         
@@ -43,7 +78,7 @@ def load_and_process():
         df_arca = df_arca[df_arca[c_tipo].isin(['OCI', 'OCA'])]
         df_arca = df_arca[df_arca[c_qta] > 0].dropna(subset=[c_dat, c_art])
 
-        # 4.2 Caricamento Scorte ACCESS
+        # 3.2 Caricamento Scorte
         df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
         stock_map = {}
         if not df_acc.empty:
@@ -56,7 +91,7 @@ def load_and_process():
                 figlio = str(r.get('FIGLIO', 'NAN')).strip().upper()
                 stock_map[art_code] = {'GIA': gia, 'ACQ': acq, 'PROD': prod, 'FIGLIO': figlio}
 
-        # 4.3 CALCOLO SEQUENZIALE
+        # 3.3 Calcolo Sequenziale con BOM
         df_orders = df_arca.sort_values(by=[c_art, c_dat])
         final_results = []
         curr_stocks = {k: v.copy() for k, v in stock_map.items()}
@@ -65,6 +100,7 @@ def load_and_process():
             art_code = str(row[c_art]).upper()
             qta_ordine = float(row[c_qta])
             
+            # Motore BOM
             fonte = get_coverage(art_code, qta_ordine, curr_stocks)
             
             if fonte == art_code:
@@ -72,9 +108,9 @@ def load_and_process():
             elif fonte:
                 stato, colore = "COPERTO BOM", "bom-row"
             else:
-                scorte = curr_stocks.get(art_code, {'GIA': 0, 'ACQ': 0, 'PROD': 0})
-                if (scorte['GIA'] + scorte['ACQ']) >= qta_ordine: stato, colore = "ACQUISTO", "acq-row"
-                elif (scorte['GIA'] + scorte['ACQ'] + scorte['PROD']) >= qta_ordine: stato, colore = "PRODUZIONE", "prod-row"
+                s = curr_stocks.get(art_code, {'GIA':0, 'ACQ': 0, 'PROD': 0})
+                if (s['GIA'] + s['ACQ']) >= qta_ordine: stato, colore = "ACQUISTO", "acq-row"
+                elif (s['GIA'] + s['ACQ'] + s['PROD']) >= qta_ordine: stato, colore = "PRODUZIONE", "prod-row"
                 else: stato, colore = "MANCANTE", "urgent-row"
             
             if row[c_tipo] == 'OCA' and stato == "MANCANTE": stato, colore = "DA PIANIFICARE", "oca-row"
@@ -85,67 +121,57 @@ def load_and_process():
                 
         return pd.DataFrame(final_results), stock_map
     except Exception as e:
-        st.error(f"Errore: {e}")
+        st.error(f"Errore Motore: {e}")
         return pd.DataFrame(), {}
 
-# --- FINE FUNZIONE - ORA IL CODICE È FUORI ---
+# --- 4. ACCESSO E LOGIN ---
 if "auth" not in st.session_state: st.session_state.auth = False
-# ... (segui con il resto del tuo codice di login)
 
-# --- 5. LOGICA DI ACCESSO ---
-if "auth" not in st.session_state: st.session_state.auth = False
 if not st.session_state.auth:
+    USER_DB = get_user_db()
     col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
         if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', width=250)
         u = st.text_input("Username").strip()
         p = st.text_input("Password", type="password").strip()
         if st.button("Accedi", use_container_width=True):
-            # Controllo incrociato con USER_DB (file utenti.xlsx)
             if u in USER_DB and str(USER_DB[u][0]) == p:
                 st.session_state.auth = True
                 st.session_state.user = u
                 st.session_state.permesso = USER_DB[u][1]
                 st.rerun()
             else:
-                st.error("Credenziali non valide o utente non trovato in utenti.xlsx")
+                st.error("Credenziali non valide.")
     st.stop()
 
-# --- 6. DASHBOARD (Invariata) ---
+# --- 5. DASHBOARD ---
 df_res, stock_raw = load_and_process()
 if not df_res.empty:
     with st.sidebar:
         if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
         st.markdown(f'<div class="user-info">👤 <b>{st.session_state.user}</b></div>', unsafe_allow_html=True)
-        if st.button("🚪 Log-out", use_container_width=True): st.session_state.auth = False; st.rerun()
+        if st.button("🚪 Log-out"): st.session_state.auth = False; st.rerun()
         st.markdown("---")
         
-        if st.session_state.permesso == "TUTTI":
-            sel_cli = st.selectbox("Seleziona Cliente:", ["TUTTI"] + sorted(df_res['CLI_NAME'].unique().tolist()))
-        else:
-            sel_cli = st.session_state.permesso
-            st.info(f"Filtro Cliente: {sel_cli}")
-
-        sel_stati = [s for s in ["DISPONIBILE", "ACQUISTO", "PRODUZIONE", "MANCANTE", "DA PIANIFICARE"] if st.checkbox(s, value=True, key=f"ch_{s}")]
+        sel_cli = st.selectbox("Cliente:", ["TUTTI"] + sorted(df_res['CLI_NAME'].unique().tolist())) if st.session_state.permesso == "TUTTI" else st.session_state.permesso
+        sel_stati = [s for s in ["DISPONIBILE", "COPERTO BOM", "ACQUISTO", "PRODUZIONE", "MANCANTE", "DA PIANIFICARE"] if st.checkbox(s, value=True)]
         search = st.text_input("🔍 Cerca Articolo:").upper()
 
     df_f = df_res[df_res['CLI_NAME'] == sel_cli] if sel_cli != "TUTTI" else df_res.copy()
     df_f = df_f[df_f['ST'].isin(sel_stati)]
     if search: df_f = df_f[df_f['ART_KEY'].str.contains(search)]
 
-    st.sidebar.download_button("📊 Esporta Report", data=to_excel(df_f), file_name=f"Safit_Report_{datetime.now().strftime('%d%m')}.xlsx", use_container_width=True)
-
-    st.title("Pannello Controllo Consegne Safit")
+    st.title("Pannello Controllo Safit")
     k1, k2, k3, k4 = st.columns(4)
-    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">PEZZI FILTRATI</div><div class="kpi-val">{int(df_f["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
-    k2.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#4caf50">PRONTI</div><div class="kpi-val">{int(df_f[df_f["ST"]=="DISPONIBILE"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
-    k3.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#2196f3">IN ACQUISTO</div><div class="kpi-val">{int(df_f[df_f["ST"]=="ACQUISTO"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
-    k4.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#f44336">MANCANTI</div><div class="kpi-val">{int(df_f[df_f["ST"]=="MANCANTE"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
+    k1.metric("PEZZI FILTRATI", int(df_f["Qta Residua"].sum()))
+    k2.metric("PRONTI", int(df_f[df_f["ST"]=="DISPONIBILE"]["Qta Residua"].sum()))
+    k3.metric("COPERTI BOM", int(df_f[df_f["ST"]=="COPERTO BOM"]["Qta Residua"].sum()))
+    k4.metric("MANCANTI", int(df_f[df_f["ST"]=="MANCANTE"]["Qta Residua"].sum()))
 
     c1, c2 = st.columns(2)
     with c1:
         st.plotly_chart(px.pie(df_f, values='Qta Residua', names='ST', color='ST', title="Stato Copertura",
-                               color_discrete_map={'DISPONIBILE':'#4caf50','ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}), use_container_width=True)
+                               color_discrete_map={'DISPONIBILE':'#4caf50', 'COPERTO BOM':'#9c27b0', 'ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}), use_container_width=True)
     with c2:
         df_f['Famiglia'] = df_f['Articolo D'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
         st.plotly_chart(px.pie(df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10), 
