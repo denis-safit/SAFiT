@@ -6,9 +6,8 @@ from io import BytesIO
 import plotly.express as px
 from bom_engine import get_coverage  
 
-# --- 1. CONFIGURAZIONE E STILE ---
-APP_VERSION = "3.6"
-st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
+# --- 1. CONFIGURAZIONE ---
+st.set_page_config(page_title="Safit Portal v3.7", layout="wide")
 
 st.markdown("""
     <style>
@@ -22,7 +21,6 @@ st.markdown("""
     .debug-box { background-color: #f8f9fa !important; color: #333 !important; padding: 12px; border-radius: 8px; border: 1px dotted #bbb; margin-bottom: 10px; display: flex; justify-content: space-around; font-size: 13px; font-weight: bold; }
     .kpi-card { background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px; border-radius: 10px; text-align: center; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
     .kpi-val { font-size: 24px; font-weight: bold; color: #1f77b4; }
-    .user-info { padding: 10px; background: #f8f9fa; border-radius: 5px; border: 1px solid #eee; margin-bottom: 20px; text-align: center; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -35,22 +33,14 @@ def get_user_db():
             df_u.columns = [str(c).strip() for c in df_u.columns]
             return df_u.set_index('username')[['password', 'cliente_arca']].T.to_dict('list')
         except: pass
-    return {"safit_admin": ["admin2026", "TUTTI"], "denis": ["denis2026", "TUTTI"]}
+    return {"safit_admin": ["admin2026", "TUTTI"]}
 
 def clean_num(serie):
     s = serie.astype(str).str.replace(' ', '').str.replace('\xa0', '')
     def fix_val(val):
         if val.lower() in ['nan', '', 'none']: return '0'
-        if ',' in val and '.' in val: return val.replace('.', '').replace(',', '.')
-        elif ',' in val: return val.replace(',', '.')
-        return val
+        return val.replace('.', '').replace(',', '.') if ',' in val and '.' in val else val.replace(',', '.')
     return pd.to_numeric(s.apply(fix_val), errors='coerce').fillna(0)
-
-def to_excel(df):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.drop(columns=['CS', 'DT_EXP', 'ART_KEY', 'ST'], errors='ignore').to_excel(writer, index=False)
-    return output.getvalue()
 
 def smart_load(filename, key_col):
     if not os.path.exists(filename): return pd.DataFrame()
@@ -68,17 +58,14 @@ def smart_load(filename, key_col):
 @st.cache_data(ttl=300)
 def load_and_process():
     try:
-        # 3.1 Caricamento Ordini
         df_arca = smart_load('righe_Ordini_ARCA.xlsx', "Articolo C")
         if df_arca.empty: return pd.DataFrame(), {}
         
         c_tipo, c_art, c_qta, c_dat, c_cli = "Codice Documento", "Articolo C", "Qta Residua", "Data Consegna", "Cliente Fornitore CD"
         df_arca[c_qta] = clean_num(df_arca[c_qta]).abs()
         df_arca[c_dat] = pd.to_datetime(df_arca[c_dat], errors='coerce')
-        df_arca = df_arca[df_arca[c_tipo].isin(['OCI', 'OCA'])]
-        df_arca = df_arca[df_arca[c_qta] > 0].dropna(subset=[c_dat, c_art])
+        df_arca = df_arca[df_arca[c_tipo].isin(['OCI', 'OCA']) & (df_arca[c_qta] > 0)].dropna(subset=[c_dat, c_art])
 
-        # 3.2 Caricamento Scorte
         df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
         stock_map = {}
         if not df_acc.empty:
@@ -88,41 +75,43 @@ def load_and_process():
                 gia = clean_num(pd.Series([r.get('GIA', 0)])).iloc[0]
                 acq = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
                 prod = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'ACQ', 'TRF']])
-                figlio = str(r.get('FIGLIO', 'NAN')).strip().upper()
-                stock_map[art_code] = {'GIA': gia, 'ACQ': acq, 'PROD': prod, 'FIGLIO': figlio}
+                stock_map[art_code] = {'GIA': gia, 'ACQ': acq, 'PROD': prod, 'FIGLIO': str(r.get('FIGLIO', 'NAN'))}
 
-# --- 3.3 Calcolo Sequenziale con BOM ---
         df_orders = df_arca.sort_values(by=[c_art, c_dat])
         final_results = []
         curr_stocks = {k: v.copy() for k, v in stock_map.items()}
 
         for index, row in df_orders.iterrows():
-            art_code = str(row[c_art]).strip().upper() # Pulizia extra
+            art_code = str(row[c_art]).strip().upper()
             qta_ordine = float(row[c_qta])
-            
-            # Chiamata al motore
             fonte = get_coverage(art_code, qta_ordine, curr_stocks)
             
             if fonte:
-                # TRUCCO: Puliamo fonte per sicurezza nel confronto
-                fonte = str(fonte).strip().upper()
-                
-                if fonte == art_code:
+                if str(fonte).strip().upper() == art_code:
                     stato, colore = "DISPONIBILE", "on-time-row"
                 else:
                     stato, colore = "COPERTO BOM", "bom-row"
             else:
-                # Fallback se non c'è giacenza né nel padre né nel figlio
                 s = curr_stocks.get(art_code, {'GIA':0, 'ACQ': 0, 'PROD': 0})
-                if (s['GIA'] + s['ACQ']) >= qta_ordine: 
-                    stato, colore = "ACQUISTO", "acq-row"
-                elif (s['GIA'] + s['ACQ'] + s['PROD']) >= qta_ordine: 
-                    stato, colore = "PRODUZIONE", "prod-row"
-                else: 
-                    stato, colore = "MANCANTE", "urgent-row"
+                if (s['GIA'] + s['ACQ']) >= qta_ordine: stato, colore = "ACQUISTO", "acq-row"
+                elif (s['GIA'] + s['ACQ'] + s['PROD']) >= qta_ordine: stato, colore = "PRODUZIONE", "prod-row"
+                else: stato, colore = "MANCANTE", "urgent-row"
+            
+            if row[c_tipo] == 'OCA' and stato == "MANCANTE": stato, colore = "DA PIANIFICARE", "oca-row"
+            
+            res = row.to_dict()
+            res.update({'ST': stato, 'CS': colore, 'ART_KEY': art_code, 'DT_EXP': row[c_dat], 'CLI_NAME': str(row[c_cli])})
+            final_results.append(res)
+                
+        return pd.DataFrame(final_results), stock_map
 
-# --- 4. ACCESSO E LOGIN ---
-if "auth" not in st.session_state: st.session_state.auth = False
+    except Exception as e:
+        st.error(f"Errore: {e}")
+        return pd.DataFrame(), {}
+
+# --- 4. GESTIONE ACCESSO ---
+if "auth" not in st.session_state: 
+    st.session_state.auth = False
 
 if not st.session_state.auth:
     USER_DB = get_user_db()
@@ -138,18 +127,18 @@ if not st.session_state.auth:
                 st.session_state.permesso = USER_DB[u][1]
                 st.rerun()
             else:
-                st.error("Credenziali non valide.")
+                st.error("Credenziali errate.")
     st.stop()
 
 # --- 5. DASHBOARD ---
 df_res, stock_raw = load_and_process()
 if not df_res.empty:
     with st.sidebar:
-        if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', use_container_width=True)
-        st.markdown(f'<div class="user-info">👤 <b>{st.session_state.user}</b></div>', unsafe_allow_html=True)
-        if st.button("🚪 Log-out"): st.session_state.auth = False; st.rerun()
+        st.title(f"Utente: {st.session_state.user}")
+        if st.button("Log-out"): 
+            st.session_state.auth = False
+            st.rerun()
         st.markdown("---")
-        
         sel_cli = st.selectbox("Cliente:", ["TUTTI"] + sorted(df_res['CLI_NAME'].unique().tolist())) if st.session_state.permesso == "TUTTI" else st.session_state.permesso
         sel_stati = [s for s in ["DISPONIBILE", "COPERTO BOM", "ACQUISTO", "PRODUZIONE", "MANCANTE", "DA PIANIFICARE"] if st.checkbox(s, value=True)]
         search = st.text_input("🔍 Cerca Articolo:").upper()
@@ -160,21 +149,19 @@ if not df_res.empty:
 
     st.title("Pannello Controllo Safit")
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("PEZZI FILTRATI", int(df_f["Qta Residua"].sum()))
-    k2.metric("PRONTI", int(df_f[df_f["ST"]=="DISPONIBILE"]["Qta Residua"].sum()))
-    k3.metric("COPERTI BOM", int(df_f[df_f["ST"]=="COPERTO BOM"]["Qta Residua"].sum()))
+    k1.metric("FILTRATI", int(df_f["Qta Residua"].sum()))
+    k2.metric("PRONTI (GIA)", int(df_f[df_f["ST"]=="DISPONIBILE"]["Qta Residua"].sum()))
+    k3.metric("BOM (FIGLI)", int(df_f[df_f["ST"]=="COPERTO BOM"]["Qta Residua"].sum()))
     k4.metric("MANCANTI", int(df_f[df_f["ST"]=="MANCANTE"]["Qta Residua"].sum()))
 
     c1, c2 = st.columns(2)
     with c1:
-        st.plotly_chart(px.pie(df_f, values='Qta Residua', names='ST', color='ST', title="Stato Copertura",
-                               color_discrete_map={'DISPONIBILE':'#4caf50', 'COPERTO BOM':'#9c27b0', 'ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}), use_container_width=True)
+        st.plotly_chart(px.pie(df_f, values='Qta Residua', names='ST', color='ST', 
+                               color_discrete_map={'DISPONIBILE':'#4caf50','COPERTO BOM':'#9c27b0','ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}), use_container_width=True)
     with c2:
         df_f['Famiglia'] = df_f['Articolo D'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
-        st.plotly_chart(px.pie(df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10), 
-                               values='Qta Residua', names='Famiglia', hole=0.4, title="Top 10 Famiglie"), use_container_width=True)
+        st.plotly_chart(px.pie(df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10), values='Qta Residua', names='Famiglia', hole=0.4), use_container_width=True)
 
-    st.markdown("---")
     for art, g in df_f.groupby('ART_KEY'):
         with st.expander(f"📦 {art} - {g['Articolo D'].iloc[0]} ({len(g)} ordini)"):
             s_i = stock_raw.get(art, {'GIA': 0, 'ACQ': 0, 'PROD': 0})
