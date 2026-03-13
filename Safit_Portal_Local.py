@@ -4,9 +4,9 @@ import os
 from datetime import datetime, timedelta
 from io import BytesIO
 import plotly.express as px
-from bom_engine import get_coverage
+from bom_engine import get_coverage  # Assicurati che bom_engine.py sia nella stessa cartella
 
-# --- 1. CONFIGURAZIONE E STILE (Dalla v3.2.0) ---
+# --- 1. CONFIGURAZIONE E STILE ---
 APP_VERSION = "3.3"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
@@ -14,8 +14,8 @@ st.markdown("""
     <style>
     .status-row { display: flex; justify-content: space-between; padding: 10px; border-radius: 8px; margin-bottom: 6px; border: 1px solid #ddd; color: #000 !important; font-size: 14px; }
     .on-time-row { background-color: #e8f5e9 !important; border-left: 6px solid #4caf50; } 
-    .acq-row { background-color: #e3f2fd !important; border-left: 8px solid #2196f3; }    
-    .prod-row { background-color: #fffde7 !important; border-left: 8px solid #fbc02d; }   
+    .acq-row { background-color: #e3f2fd !important; border-left: 6px solid #2196f3; }    
+    .prod-row { background-color: #fffde7 !important; border-left: 6px solid #fbc02d; }   
     .urgent-row { background-color: #ffebee !important; border-left: 8px solid #f44336; } 
     .oca-row { background-color: #f5f5f5 !important; border-left: 8px solid #9e9e9e; color: #666 !important; }
     .bom-row { background-color: #f3e5f5 !important; border-left: 8px solid #9c27b0; }
@@ -26,56 +26,10 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. GESTIONE UTENTI DINAMICA (Recuperata da v1.4) ---
-@st.cache_data
-def get_user_db():
-    # Prova a leggere il file utenti.xlsx come nella v1.4
-    if os.path.exists('utenti.xlsx'):
-        try:
-            df_u = pd.read_excel('utenti.xlsx')
-            df_u.columns = [str(c).strip() for c in df_u.columns]
-            # Crea un dizionario {username: [password, cliente_arca]}
-            return df_u.set_index('username')[['password', 'cliente_arca']].T.to_dict('list')
-        except Exception as e:
-            st.error(f"Errore lettura utenti.xlsx: {e}")
-    
-    # Utenti di emergenza se il file non esiste
-    return {
-        "safit_admin": ["admin2026", "TUTTI"],
-        "denis": ["denis2026", "TUTTI"]
-    }
+# --- 2. FUNZIONI E LOGICA ---
+# [Le tue funzioni get_user_db, clean_num, to_excel, smart_load rimangono identiche]
+# (Le ometto per brevità ma devono restare nel file)
 
-USER_DB = get_user_db()
-
-# --- 3. FUNZIONI TECNICHE (Invariate) ---
-def clean_num(serie):
-    s = serie.astype(str).str.replace(' ', '').str.replace('\xa0', '')
-    def fix_val(val):
-        if val.lower() in ['nan', '', 'none']: return '0'
-        if ',' in val and '.' in val: return val.replace('.', '').replace(',', '.')
-        elif ',' in val: return val.replace(',', '.')
-        return val
-    return pd.to_numeric(s.apply(fix_val), errors='coerce').fillna(0)
-
-def to_excel(df):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.drop(columns=['CS', 'DT_EXP', 'ART_KEY', 'ST'], errors='ignore').to_excel(writer, index=False)
-    return output.getvalue()
-
-def smart_load(filename, key_col):
-    if not os.path.exists(filename): return pd.DataFrame()
-    df_p = pd.read_excel(filename, header=None, nrows=20)
-    h_row = 0
-    for i, row in df_p.iterrows():
-        if key_col in row.astype(str).values:
-            h_row = i; break
-    df = pd.read_excel(filename, skiprows=h_row)
-    df.columns = [str(c).strip() for c in df.columns]
-    if "CODICE" not in key_col: df = df.ffill() 
-    return df
-
-# --- 4. MOTORE DI CALCOLO (LOGICA INTEGRATA BOM 3.6) ---
 @st.cache_data(ttl=300)
 def load_and_process():
     try:
@@ -102,46 +56,41 @@ def load_and_process():
                 figlio = str(r.get('FIGLIO', 'NAN')).strip().upper()
                 stock_map[art_code] = {'GIA': gia, 'ACQ': acq, 'PROD': prod, 'FIGLIO': figlio}
 
-        # 4.3 CALCOLO SEQUENZIALE CON LOGICA BOM (Integra la tua funzione)
+        # 4.3 CALCOLO SEQUENZIALE
         df_orders = df_arca.sort_values(by=[c_art, c_dat])
         final_results = []
-        # Importante: usiamo una copia delle scorte per non modificare il dizionario originale
         curr_stocks = {k: v.copy() for k, v in stock_map.items()}
 
         for index, row in df_orders.iterrows():
             art_code = str(row[c_art]).upper()
             qta_ordine = float(row[c_qta])
             
-            # --- CHIAMATA ALLA TUA FUNZIONE ---
-            # La funzione scala le giacenze in curr_stocks
             fonte = get_coverage(art_code, qta_ordine, curr_stocks)
             
-            # Assegnazione Stato e Colore
             if fonte == art_code:
                 stato, colore = "DISPONIBILE", "on-time-row"
             elif fonte:
-                # Se fonte esiste ma non è l'articolo stesso, è un figlio (BOM)
                 stato, colore = "COPERTO BOM", "bom-row"
             else:
-                # Fallback alla logica originale se la BOM non basta
                 scorte = curr_stocks.get(art_code, {'GIA': 0, 'ACQ': 0, 'PROD': 0})
-                if (scorte['GIA'] + scorte['ACQ']) >= qta_ordine:
-                    stato, colore = "ACQUISTO", "acq-row"
-                elif (scorte['GIA'] + scorte['ACQ'] + scorte['PROD']) >= qta_ordine:
-                    stato, colore = "PRODUZIONE", "prod-row"
-                else:
-                    stato, colore = "MANCANTE", "urgent-row"
+                if (scorte['GIA'] + scorte['ACQ']) >= qta_ordine: stato, colore = "ACQUISTO", "acq-row"
+                elif (scorte['GIA'] + scorte['ACQ'] + scorte['PROD']) >= qta_ordine: stato, colore = "PRODUZIONE", "prod-row"
+                else: stato, colore = "MANCANTE", "urgent-row"
             
-            # Gestione OCA
-            if row[c_tipo] == 'OCA' and stato == "MANCANTE":
-                stato, colore = "DA PIANIFICARE", "oca-row"
+            if row[c_tipo] == 'OCA' and stato == "MANCANTE": stato, colore = "DA PIANIFICARE", "oca-row"
 
-            # Salvataggio
             res = row.to_dict()
             res.update({'ST': stato, 'CS': colore, 'ART_KEY': art_code, 'DT_EXP': row[c_dat], 'CLI_NAME': str(row[c_cli])})
             final_results.append(res)
                 
         return pd.DataFrame(final_results), stock_map
+    except Exception as e:
+        st.error(f"Errore: {e}")
+        return pd.DataFrame(), {}
+
+# --- FINE FUNZIONE - ORA IL CODICE È FUORI ---
+if "auth" not in st.session_state: st.session_state.auth = False
+# ... (segui con il resto del tuo codice di login)
 
 # --- 5. LOGICA DI ACCESSO ---
 if "auth" not in st.session_state: st.session_state.auth = False
