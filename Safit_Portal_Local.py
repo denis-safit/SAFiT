@@ -91,38 +91,35 @@ def load_and_process():
                 figlio = str(r.get('FIGLIO', 'NAN')).strip().upper()
                 stock_map[art_code] = {'GIA': gia, 'ACQ': acq, 'PROD': prod, 'FIGLIO': figlio}
 
-        # 3.3 Calcolo Sequenziale con BOM
+# --- 3.3 Calcolo Sequenziale con BOM ---
         df_orders = df_arca.sort_values(by=[c_art, c_dat])
         final_results = []
         curr_stocks = {k: v.copy() for k, v in stock_map.items()}
 
         for index, row in df_orders.iterrows():
-            art_code = str(row[c_art]).upper()
+            art_code = str(row[c_art]).strip().upper() # Pulizia extra
             qta_ordine = float(row[c_qta])
             
-            # Motore BOM
+            # Chiamata al motore
             fonte = get_coverage(art_code, qta_ordine, curr_stocks)
             
-            if fonte == art_code:
-                stato, colore = "DISPONIBILE", "on-time-row"
-            elif fonte:
-                stato, colore = "COPERTO BOM", "bom-row"
-            else:
-                s = curr_stocks.get(art_code, {'GIA':0, 'ACQ': 0, 'PROD': 0})
-                if (s['GIA'] + s['ACQ']) >= qta_ordine: stato, colore = "ACQUISTO", "acq-row"
-                elif (s['GIA'] + s['ACQ'] + s['PROD']) >= qta_ordine: stato, colore = "PRODUZIONE", "prod-row"
-                else: stato, colore = "MANCANTE", "urgent-row"
-            
-            if row[c_tipo] == 'OCA' and stato == "MANCANTE": stato, colore = "DA PIANIFICARE", "oca-row"
-
-            res = row.to_dict()
-            res.update({'ST': stato, 'CS': colore, 'ART_KEY': art_code, 'DT_EXP': row[c_dat], 'CLI_NAME': str(row[c_cli])})
-            final_results.append(res)
+            if fonte:
+                # TRUCCO: Puliamo fonte per sicurezza nel confronto
+                fonte = str(fonte).strip().upper()
                 
-        return pd.DataFrame(final_results), stock_map
-    except Exception as e:
-        st.error(f"Errore Motore: {e}")
-        return pd.DataFrame(), {}
+                if fonte == art_code:
+                    stato, colore = "DISPONIBILE", "on-time-row"
+                else:
+                    stato, colore = "COPERTO BOM", "bom-row"
+            else:
+                # Fallback se non c'è giacenza né nel padre né nel figlio
+                s = curr_stocks.get(art_code, {'GIA':0, 'ACQ': 0, 'PROD': 0})
+                if (s['GIA'] + s['ACQ']) >= qta_ordine: 
+                    stato, colore = "ACQUISTO", "acq-row"
+                elif (s['GIA'] + s['ACQ'] + s['PROD']) >= qta_ordine: 
+                    stato, colore = "PRODUZIONE", "prod-row"
+                else: 
+                    stato, colore = "MANCANTE", "urgent-row"
 
 # --- 4. ACCESSO E LOGIN ---
 if "auth" not in st.session_state: st.session_state.auth = False

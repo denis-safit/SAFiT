@@ -1,21 +1,22 @@
-def get_coverage(art, qta, stocks, depth=0):
+def get_coverage(art, qta, stocks):
     """
-    Motore ricorsivo: scava nella distinta base.
-    depth > 5 serve a evitare loop infiniti se ci sono errori nei dati.
+    Restituisce il codice dell'articolo che copre il fabbisogno.
+    Se copre il padre, restituisce il padre. 
+    Se copre il figlio, restituisce il figlio.
     """
-    if depth > 5 or art not in stocks: 
-        return None, 0
+    if art not in stocks: 
+        return None
     
-    s = stocks[art]
+    # 1. Prova con la giacenza del Padre
+    if stocks[art]['GIA'] >= qta:
+        stocks[art]['GIA'] -= qta
+        return art # Restituisce una stringa
     
-    # 1. Prova a usare la giacenza del Padre
-    if s['GIA'] >= qta:
-        s['GIA'] -= qta
-        return art, depth
-    
-    # 2. Se non basta, prova a cercare nel Figlio
-    figlio = s.get('FIGLIO', 'NAN')
+    # 2. Se non basta, prova con il Figlio
+    figlio = stocks[art].get('FIGLIO', 'NAN')
     if figlio != 'NAN' and figlio in stocks:
-        return get_coverage(figlio, qta, stocks, depth + 1)
-        
-    return None, -1
+        if stocks[figlio]['GIA'] >= qta:
+            stocks[figlio]['GIA'] -= qta
+            return figlio # Restituisce una stringa
+            
+    return None
