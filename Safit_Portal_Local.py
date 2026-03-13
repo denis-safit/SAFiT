@@ -102,53 +102,47 @@ def load_and_process():
                 figlio = str(r.get('FIGLIO', 'NAN')).strip().upper()
                 stock_map[art_code] = {'GIA': gia, 'ACQ': acq, 'PROD': prod, 'FIGLIO': figlio}
 
-        # 4.3 CALCOLO SEQUENZIALE CON LOGICA BOM CORRETTA
+        # 4.3 CALCOLO SEQUENZIALE CON LOGICA BOM (Integra la tua funzione)
         df_orders = df_arca.sort_values(by=[c_art, c_dat])
         final_results = []
-        # curr_stocks viene modificato ricorsivamente da get_coverage
+        # Importante: usiamo una copia delle scorte per non modificare il dizionario originale
         curr_stocks = {k: v.copy() for k, v in stock_map.items()}
 
         for index, row in df_orders.iterrows():
             art_code = str(row[c_art]).upper()
             qta_ordine = float(row[c_qta])
             
-            # --- ESECUZIONE MOTORE BOM ---
-            # La funzione ora scala direttamente le giacenze in curr_stocks
-            source, lvl = get_coverage(art_code, qta_ordine, curr_stocks)
+            # --- CHIAMATA ALLA TUA FUNZIONE ---
+            # La funzione scala le giacenze in curr_stocks
+            fonte = get_coverage(art_code, qta_ordine, curr_stocks)
             
-            # Assegnazione stato
-            if source == art_code:
+            # Assegnazione Stato e Colore
+            if fonte == art_code:
                 stato, colore = "DISPONIBILE", "on-time-row"
-            elif source:
-                # Se source è diverso da art_code, significa che abbiamo trovato copertura sul figlio
+            elif fonte:
+                # Se fonte esiste ma non è l'articolo stesso, è un figlio (BOM)
                 stato, colore = "COPERTO BOM", "bom-row"
             else:
-                # Logica di fallback: guardiamo cosa resta dopo che la ricorsione ha pulito le giacenze
-                s = curr_stocks.get(art_code, {'ACQ':0, 'PROD':0})
-                if s['ACQ'] >= qta_ordine: 
+                # Fallback alla logica originale se la BOM non basta
+                scorte = curr_stocks.get(art_code, {'GIA': 0, 'ACQ': 0, 'PROD': 0})
+                if (scorte['GIA'] + scorte['ACQ']) >= qta_ordine:
                     stato, colore = "ACQUISTO", "acq-row"
-                elif s['PROD'] >= qta_ordine: 
+                elif (scorte['GIA'] + scorte['ACQ'] + scorte['PROD']) >= qta_ordine:
                     stato, colore = "PRODUZIONE", "prod-row"
-                else: 
+                else:
                     stato, colore = "MANCANTE", "urgent-row"
             
-            # Gestione speciale per OCA (non toccare questa logica)
+            # Gestione OCA
             if row[c_tipo] == 'OCA' and stato == "MANCANTE":
                 stato, colore = "DA PIANIFICARE", "oca-row"
 
-            # Salvataggio risultato
+            # Salvataggio
             res = row.to_dict()
-            res.update({
-                'ST': stato, 
-                'CS': colore, 
-                'DT_EXP': row[c_dat],
-                'ART_KEY': art_code,
-                'CLI_NAME': str(row[c_cli])
-            })
+            res.update({'ST': stato, 'CS': colore, 'ART_KEY': art_code, 'DT_EXP': row[c_dat], 'CLI_NAME': str(row[c_cli])})
             final_results.append(res)
                 
         return pd.DataFrame(final_results), stock_map
-    
+
 # --- 5. LOGICA DI ACCESSO ---
 if "auth" not in st.session_state: st.session_state.auth = False
 if not st.session_state.auth:
