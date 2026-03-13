@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timedelta
 from io import BytesIO
 import plotly.express as px
+from bom_engine import get_coverage
 
 # --- 1. CONFIGURAZIONE E STILE (Dalla v3.2.0) ---
 APP_VERSION = "3.3"
@@ -22,6 +23,7 @@ st.markdown("""
     .kpi-val { font-size: 24px; font-weight: bold; color: #1f77b4; }
     .user-info { padding: 10px; background: #f8f9fa; border-radius: 5px; border: 1px solid #eee; margin-bottom: 20px; text-align: center; }
     </style>
+    .bom-row { background-color: #f3e5f5 !important; border-left: 8px solid #9c27b0; }
     """, unsafe_allow_html=True)
 
 # --- 2. GESTIONE UTENTI DINAMICA (Recuperata da v1.4) ---
@@ -73,36 +75,59 @@ def smart_load(filename, key_col):
     if "CODICE" not in key_col: df = df.ffill() 
     return df
 
-# --- 4. MOTORE DI CALCOLO (LOGICA MASTER 3.2.8: PROTEZIONE DATE ORIGINALI) ---
+# --- 4. MOTORE DI CALCOLO (LOGICA INTEGRATA BOM) ---
 @st.cache_data(ttl=300)
 def load_and_process():
-    try:
-        # 4.1 Caricamento Ordini ARCA
-        df_arca = smart_load('righe_Ordini_ARCA.xlsx', "Articolo C")
-        if df_arca.empty: 
-            return pd.DataFrame(), {}
-        
-        c_tipo, c_art, c_qta, c_dat, c_cli = "Codice Documento", "Articolo C", "Qta Residua", "Data Consegna", "Cliente Fornitore CD"
-        
-        # Pulizia dati: trasformiamo i negativi in positivi e convertiamo le date
-        df_arca[c_qta] = clean_num(df_arca[c_qta]).abs()
-        df_arca[c_dat] = pd.to_datetime(df_arca[c_dat], errors='coerce')
-        
-        # Teniamo solo ordini validi OCI/OCA
-        df_arca = df_arca[df_arca[c_tipo].isin(['OCI', 'OCA'])]
-        df_arca = df_arca[df_arca[c_qta] > 0].dropna(subset=[c_dat, c_art])
+    # 4.1 Caricamento Ordini ARCA (Tua logica originale)
+    df_arca = smart_load('righe_Ordini_ARCA.xlsx', "Articolo C")
+    if df_arca.empty: return pd.DataFrame(), {}
+    
+    c_tipo, c_art, c_qta, c_dat = "Codice Documento", "Articolo C", "Qta Residua", "Data Consegna"
+    df_arca[c_qta] = clean_num(df_arca[c_qta]).abs()
+    df_arca[c_dat] = pd.to_datetime(df_arca[c_dat], errors='coerce')
+    df_arca = df_arca[df_arca[c_tipo].isin(['OCI', 'OCA'])]
+    df_arca = df_arca[df_arca[c_qta] > 0].dropna(subset=[c_dat, c_art])
 
-        # 4.2 Caricamento Scorte ACCESS
-        df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
-        stock_map = {}
-        if not df_acc.empty:
-            df_acc.columns = [str(c).strip().upper() for c in df_acc.columns]
-            for _, r in df_acc.iterrows():
-                art_code = str(r['CODICE']).strip().upper()
-                gia = clean_num(pd.Series([r.get('GIA', 0)])).iloc[0]
-                acq = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
-                prod = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'ACQ', 'TRF']])
-                stock_map[art_code] = {'GIA': gia, 'ACQ': acq, 'PROD': prod}
+    # 4.2 Caricamento Scorte ACCESS (Aggiunto campo FIGLIO)
+    df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
+    stock_map = {}
+    if not df_acc.empty:
+        df_acc.columns = [str(c).strip().upper() for c in df_acc.columns]
+        for _, r in df_acc.iterrows():
+            art_code = str(r['CODICE']).strip().upper()
+            gia = clean_num(pd.Series([r.get('GIA', 0)])).iloc[0]
+            acq = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
+            prod = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'ACQ', 'TRF']])
+            figlio = str(r.get('FIGLIO', 'NAN')).strip().upper()
+            stock_map[art_code] = {'GIA': gia, 'ACQ': acq, 'PROD': prod, 'FIGLIO': figlio}
+
+    # 4.3 Processo Logica BOM
+    curr_stocks = {k: v.copy() for k, v in stock_map.items()}
+    results = []
+    
+    for _, row in df_arca.iterrows():
+        art = str(row[c_art]).strip().upper()
+        qta = row[c_qta]
+        
+        # Richiamo il motore esterno
+        source, lvl = get_coverage(art, qta, curr_stocks)
+        
+        res = row.to_dict()
+        res['ART_KEY'] = art
+        
+        # Logica di assegnazione Stato
+        if source == art:
+            res.update({'ST': 'DISPONIBILE', 'CS': 'on-time-row'})
+        elif source:
+            res.update({'ST': 'COPERTO BOM', 'CS': 'bom-row'})
+        else:
+            s = curr_stocks.get(art, {'ACQ':0, 'PROD':0})
+            if s['ACQ'] >= qta: res.update({'ST': 'ACQUISTO', 'CS': 'acq-row'})
+            elif s['PROD'] >= qta: res.update({'ST': 'PRODUZIONE', 'CS': 'prod-row'})
+            else: res.update({'ST': 'MANCANTE', 'CS': 'urgent-row'})
+        results.append(res)
+        
+    return pd.DataFrame(results), stock_map
 
         # 4.3 CALCOLO SEQUENZIALE SENZA SOVRASCRIVERE LE DATE
         df_orders = df_arca.sort_values(by=[c_art, c_dat])
