@@ -6,7 +6,7 @@ from io import BytesIO
 import plotly.express as px
 
 # --- 1. CONFIGURAZIONE E STILE (Dalla v3.2.0) ---
-APP_VERSION = "3.5.0"
+APP_VERSION = "3.3"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
@@ -21,21 +21,27 @@ st.markdown("""
     .kpi-card { background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px; border-radius: 10px; text-align: center; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
     .kpi-val { font-size: 24px; font-weight: bold; color: #1f77b4; }
     .user-info { padding: 10px; background: #f8f9fa; border-radius: 5px; border: 1px solid #eee; margin-bottom: 20px; text-align: center; }
-    .disp-rt { color: #1565c0; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
 # --- 2. GESTIONE UTENTI DINAMICA (Recuperata da v1.4) ---
 @st.cache_data
 def get_user_db():
+    # Prova a leggere il file utenti.xlsx come nella v1.4
     if os.path.exists('utenti.xlsx'):
         try:
             df_u = pd.read_excel('utenti.xlsx')
             df_u.columns = [str(c).strip() for c in df_u.columns]
+            # Crea un dizionario {username: [password, cliente_arca]}
             return df_u.set_index('username')[['password', 'cliente_arca']].T.to_dict('list')
         except Exception as e:
             st.error(f"Errore lettura utenti.xlsx: {e}")
-    return {"safit_admin": ["admin2026", "TUTTI"], "denis": ["denis2026", "TUTTI"]}
+    
+    # Utenti di emergenza se il file non esiste
+    return {
+        "safit_admin": ["admin2026", "TUTTI"],
+        "denis": ["denis2026", "TUTTI"]
+    }
 
 USER_DB = get_user_db()
 
@@ -52,6 +58,7 @@ def clean_num(serie):
 def to_excel(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        ### AGGIUNTA OFF: Rimosso PRES_DISP_RT dall'export per pulizia ###
         df.drop(columns=['CS', 'DT_EXP', 'ART_KEY', 'ST', 'PRES_DISP_RT'], errors='ignore').to_excel(writer, index=False)
     return output.getvalue()
 
@@ -67,26 +74,27 @@ def smart_load(filename, key_col):
     if "CODICE" not in key_col: df = df.ffill() 
     return df
 
-# --- 4. MOTORE DI CALCOLO (LOGICA AGGIORNATA PER DATI OFF) ---
+# --- 4. MOTORE DI CALCOLO (LOGICA MASTER 3.2.8: PROTEZIONE DATE ORIGINALI) ---
 @st.cache_data(ttl=300)
 def load_and_process():
     try:
-        # Caricamento Ordini ARCA
+        # 4.1 Caricamento Ordini ARCA
         df_arca_raw = smart_load('righe_Ordini_ARCA.xlsx', "Articolo C")
-        if df_arca_raw.empty: return pd.DataFrame(), {}
+        if df_arca_raw.empty: 
+            return pd.DataFrame(), {}
         
         c_tipo, c_art, c_qta, c_dat, c_cli = "Codice Documento", "Articolo C", "Qta Residua", "Data Consegna", "Cliente Fornitore CD"
         
-        # Pulizia dati
+        # Pulizia dati: trasformiamo i negativi in positivi e convertiamo le date
         df_arca_raw[c_qta] = clean_num(df_arca_raw[c_qta]).abs()
         df_arca_raw[c_dat] = pd.to_datetime(df_arca_raw[c_dat], errors='coerce')
         df_arca_raw[c_art] = df_arca_raw[c_art].astype(str).str.strip().str.upper()
 
-        # --- NOVITÀ: RECUPERO DATA DISPONIBILITÀ DA DOCUMENTI OFF ---
-        df_off = df_arca_raw[df_arca_raw[c_tipo] == 'OFF'].copy()
-        mappa_disp_rt = df_off.sort_values(c_dat).groupby(c_art)[c_dat].first().to_dict()
+        ### AGGIUNTA OFF: RECUPERO DATE DISPONIBILITÀ ###
+        df_off_temp = df_arca_raw[df_arca_raw[c_tipo] == 'OFF'].copy()
+        mappa_off = df_off_temp.sort_values(c_dat).groupby(c_art)[c_dat].first().to_dict()
 
-        # Teniamo solo ordini validi OCI/OCA
+        # Teniamo solo ordini validi OCI/OCA (Filtro originale)
         df_arca = df_arca_raw[df_arca_raw[c_tipo].isin(['OCI', 'OCA'])]
         df_arca = df_arca[df_arca[c_qta] > 0].dropna(subset=[c_dat, c_art])
 
@@ -102,39 +110,62 @@ def load_and_process():
                 prod = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'ACQ', 'TRF']])
                 stock_map[art_code] = {'GIA': gia, 'ACQ': acq, 'PROD': prod}
 
-        # 4.3 CALCOLO SEQUENZIALE
+        # 4.3 CALCOLO SEQUENZIALE SENZA SOVRASCRIVERE LE DATE
         df_orders = df_arca.sort_values(by=[c_art, c_dat])
         final_results = []
+        
+        # Copia delle scorte per il calcolo a scalare
         current_stocks = {k: v.copy() for k, v in stock_map.items()}
 
         for index, row in df_orders.iterrows():
-            art_code = row[c_art]
+            art_code = str(row[c_art]).upper()
             qta_ordine = float(row[c_qta])
             scorte = current_stocks.get(art_code, {'GIA': 0, 'ACQ': 0, 'PROD': 0})
             
-            # Recupero data OFF
-            dt_off = mappa_disp_rt.get(art_code, None)
-            dt_off_str = dt_off.strftime('%d/%m/%Y') if pd.notnull(dt_off) else "-"
+            # Usiamo SEMPRE la data originale di ARCA per la visualizzazione
+            data_originale = row[c_dat]
+            
+            ### AGGIUNTA OFF: Recupero stringa data ###
+            dt_off_val = mappa_off.get(art_code, None)
+            dt_off_str = dt_off_val.strftime('%d/%m/%Y') if pd.notnull(dt_off_val) else "-"
             
             if scorte['GIA'] >= qta_ordine:
-                scorte['GIA'] -= qta_ordine; stato, colore = "DISPONIBILE", "on-time-row"
+                scorte['GIA'] -= qta_ordine
+                stato, colore = "DISPONIBILE", "on-time-row"
             elif (scorte['GIA'] + scorte['ACQ']) >= qta_ordine:
-                scorte['ACQ'] -= (qta_ordine - scorte['GIA']); scorte['GIA'] = 0; stato, colore = "ACQUISTO", "acq-row"
+                scorte['ACQ'] -= (qta_ordine - scorte['GIA'])
+                scorte['GIA'] = 0
+                stato, colore = "ACQUISTO", "acq-row"
             elif (scorte['GIA'] + scorte['ACQ'] + scorte['PROD']) >= qta_ordine:
-                scorte['PROD'] -= (qta_ordine - scorte['GIA'] - scorte['ACQ']); scorte['GIA'] = 0; scorte['ACQ'] = 0; stato, colore = "PRODUZIONE", "prod-row"
+                scorte['PROD'] -= (qta_ordine - scorte['GIA'] - scorte['ACQ'])
+                scorte['GIA'] = 0; scorte['ACQ'] = 0
+                stato, colore = "PRODUZIONE", "prod-row"
             else:
-                scorte['GIA'] = 0; scorte['ACQ'] = 0; scorte['PROD'] = 0; stato, colore = "MANCANTE", "urgent-row"
+                scorte['GIA'] = 0; scorte['ACQ'] = 0; scorte['PROD'] = 0
+                stato, colore = "MANCANTE", "urgent-row"
             
-            if row[c_tipo] == 'OCA' and stato == "MANCANTE": stato, colore = "DA PIANIFICARE", "oca-row"
+            if row[c_tipo] == 'OCA' and stato == "MANCANTE":
+                stato, colore = "DA PIANIFICARE", "oca-row"
 
             current_stocks[art_code] = scorte
+
+            # Salvataggio
             res = row.to_dict()
-            res.update({'ST': stato, 'CS': colore, 'DT_EXP': row[c_dat], 'PRES_DISP_RT': dt_off_str, 'ART_KEY': art_code, 'CLI_NAME': str(row[c_cli])})
+            res.update({
+                'ST': stato, 
+                'CS': colore, 
+                'DT_EXP': data_originale,
+                'PRES_DISP_RT': dt_off_str, ### AGGIUNTA OFF ###
+                'ART_KEY': art_code,
+                'CLI_NAME': str(row[c_cli])
+            })
             final_results.append(res)
                 
         return pd.DataFrame(final_results), stock_map
+
     except Exception as e:
-        st.error(f"Errore: {e}"); return pd.DataFrame(), {}
+        st.error(f"Errore: {e}")
+        return pd.DataFrame(), {}
 
 # --- 5. LOGICA DI ACCESSO ---
 if "auth" not in st.session_state: st.session_state.auth = False
@@ -146,43 +177,53 @@ if not st.session_state.auth:
         p = st.text_input("Password", type="password").strip()
         if st.button("Accedi", use_container_width=True):
             if u in USER_DB and str(USER_DB[u][0]) == p:
-                st.session_state.auth, st.session_state.user, st.session_state.permesso = True, u, USER_DB[u][1]
+                st.session_state.auth = True
+                st.session_state.user = u
+                st.session_state.permesso = USER_DB[u][1]
                 st.rerun()
-            else: st.error("Credenziali non valide o utente non trovato")
+            else:
+                st.error("Credenziali non valide o utente non trovato in utenti.xlsx")
     st.stop()
 
-# --- 6. DASHBOARD PRINCIPALE ---
+# --- 6. DASHBOARD (RIPRISTINATA INTEGRALE) ---
 df_res, stock_raw = load_and_process()
 
 if not df_res.empty:
+    # Filtro cliente originale
     if st.session_state.permesso != "TUTTI":
         df_res = df_res[df_res['CLI_NAME'] == st.session_state.permesso]
 
+    # Info utente originale
     st.markdown(f'<div class="user-info">Utente: <b>{st.session_state.user}</b> | Accesso: {st.session_state.permesso}</div>', unsafe_allow_html=True)
     
-    # KPI
+    # KPI originali
     c1, c2, c3, c4 = st.columns(4)
-    with c1: st.markdown(f'<div class="kpi-card"><div class="kpi-val">{len(df_res)}</div>Ordini</div>', unsafe_allow_html=True)
+    with c1: st.markdown(f'<div class="kpi-card"><div class="kpi-val">{len(df_res)}</div>Ordini Totali</div>', unsafe_allow_html=True)
     with c2: st.markdown(f'<div class="kpi-card"><div class="kpi-val">{len(df_res[df_res["ST"]=="DISPONIBILE"])}</div>Pronti</div>', unsafe_allow_html=True)
     with c3: st.markdown(f'<div class="kpi-card"><div class="kpi-val">{len(df_res[df_res["ST"].isin(["ACQUISTO","PRODUZIONE"])])}</div>In Lavorazione</div>', unsafe_allow_html=True)
     with c4: st.markdown(f'<div class="kpi-card"><div class="kpi-val" style="color:red">{len(df_res[df_res["ST"]=="MANCANTE"])}</div>Mancanti</div>', unsafe_allow_html=True)
 
     st.write("---")
-    search = st.text_input("Filtra per Articolo o Ragione Sociale").upper()
+    
+    # Search bar originale
+    search = st.text_input("Cerca Articolo o Ragione Sociale").upper()
     if search:
         df_res = df_res[df_res['Articolo C'].str.contains(search) | df_res['CLI_NAME'].str.contains(search)]
 
-    # Elenco con la nuova colonna integrata
+    # Elenco righe originale con aggiunta colonna OFF
     for _, r in df_res.iterrows():
         st.markdown(f"""
             <div class="status-row {r['CS']}">
                 <div style="flex:2"><b>{r['Articolo C']}</b><br><small>{r['CLI_NAME']}</small></div>
                 <div style="flex:1">Qta: {int(r['Qta Residua'])}</div>
-                <div style="flex:1">Consegna: {r['DT_EXP'].strftime('%d/%m/%Y')}</div>
-                <div style="flex:2" class="disp-rt">Presunta data disponibilità in tempo reale: {r['PRES_DISP_RT']}</div>
+                <div style="flex:1.2">Consegna: {r['DT_EXP'].strftime('%d/%m/%Y')}</div>
+                <div style="flex:2; color: #1565c0;"><b>Presunta data disponibilità in tempo reale: {r['PRES_DISP_RT']}</b></div>
                 <div style="flex:1; text-align:right;"><b>{r['ST']}</b></div>
             </div>
         """, unsafe_allow_html=True)
 
     st.write("---")
     st.download_button("Scarica Excel", data=to_excel(df_res), file_name="Report_Safit.xlsx")
+    if st.button("Logout"):
+        st.session_state.auth = False
+        st.rerun()
