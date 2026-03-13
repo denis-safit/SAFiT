@@ -6,12 +6,12 @@ from io import BytesIO
 import plotly.express as px
 
 # --- 1. CONFIGURAZIONE E STILE (ORIGINALE v3.2.0) ---
-APP_VERSION = "3.2.0_OFF"
+APP_VERSION = "3.2.0_OFF_INTEGRATED"
 st.set_page_config(page_title=f"Safit Portal v{APP_VERSION}", layout="wide")
 
 st.markdown("""
     <style>
-    .status-row { display: flex; justify-content: space-between; padding: 10px; border-radius: 8px; margin-bottom: 6px; border: 1px solid #ddd; color: #000 !important; font-size: 14px; }
+    .status-row { display: flex; justify-content: space-between; padding: 10px; border-radius: 8px; margin-bottom: 6px; border: 1px solid #ddd; color: #000 !important; font-size: 14px; align-items: center; }
     .on-time-row { background-color: #e8f5e9 !important; border-left: 6px solid #4caf50; } 
     .acq-row { background-color: #e3f2fd !important; border-left: 8px solid #2196f3; }    
     .prod-row { background-color: #fffde7 !important; border-left: 8px solid #fbc02d; }   
@@ -19,10 +19,11 @@ st.markdown("""
     .oca-row { background-color: #f5f5f5 !important; border-left: 8px solid #9e9e9e; color: #666 !important; }
     .kpi-card { background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px; border-radius: 10px; text-align: center; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
     .kpi-val { font-size: 24px; font-weight: bold; color: #1f77b4; }
+    .disp-rt-col { color: #1565c0; font-weight: bold; flex: 2; text-align: center; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. GESTIONE UTENTI (Sidebar) ---
+# --- 2. GESTIONE UTENTI (Sidebar Login/DB) ---
 @st.cache_data
 def get_user_db():
     if os.path.exists('utenti.xlsx'):
@@ -31,7 +32,7 @@ def get_user_db():
             df_u.columns = [str(c).strip() for c in df_u.columns]
             return df_u.set_index('username')[['password', 'cliente_arca']].T.to_dict('list')
         except: pass
-    return {"safit_admin": ["admin2026", "TUTTI"]}
+    return {"safit_admin": ["admin2026", "TUTTI"], "denis": ["denis2026", "TUTTI"]}
 
 USER_DB = get_user_db()
 
@@ -63,7 +64,7 @@ def smart_load(filename, key_col):
     if "CODICE" not in key_col: df = df.ffill() 
     return df
 
-# --- 4. MOTORE DI CALCOLO (INTEGRATO OFF) ---
+# --- 4. MOTORE DI CALCOLO (V3.2.0 + LOGICA OFF) ---
 @st.cache_data(ttl=300)
 def load_and_process():
     try:
@@ -76,10 +77,11 @@ def load_and_process():
         df_arca_raw[c_dat] = pd.to_datetime(df_arca_raw[c_dat], errors='coerce')
         df_arca_raw[c_art] = df_arca_raw[c_art].astype(str).str.strip().str.upper()
 
-        # --- LOGICA OFF ---
+        # --- ESTRAZIONE DATE DA OFF ---
         df_off = df_arca_raw[df_arca_raw[c_tipo] == 'OFF'].copy()
         mappa_off = df_off.sort_values(c_dat).groupby(c_art)[c_dat].first().to_dict()
 
+        # Filtro OCI/OCA
         df_arca = df_arca_raw[df_arca_raw[c_tipo].isin(['OCI', 'OCA'])]
         df_arca = df_arca[df_arca[c_qta] > 0].dropna(subset=[c_dat, c_art])
 
@@ -90,11 +92,10 @@ def load_and_process():
             df_acc.columns = [str(c).strip().upper() for c in df_acc.columns]
             for _, r in df_acc.iterrows():
                 art_code = str(r['CODICE']).strip().upper()
-                stock_map[art_code] = {
-                    'GIA': clean_num(pd.Series([r.get('GIA', 0)])).iloc[0],
-                    'ACQ': clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0],
-                    'PROD': sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'ACQ', 'TRF']])
-                }
+                gia = clean_num(pd.Series([r.get('GIA', 0)])).iloc[0]
+                acq = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
+                prod = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'ACQ', 'TRF']])
+                stock_map[art_code] = {'GIA': gia, 'ACQ': acq, 'PROD': prod}
 
         df_orders = df_arca.sort_values(by=[c_art, c_dat])
         final_results = []
@@ -144,20 +145,16 @@ if not st.session_state.auth:
 
 # --- 6. SIDEBAR (LOGO, FILTRI, LOGOUT) ---
 with st.sidebar:
-    if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', width=200)
-    st.write(f"Utente: **{st.session_state.user}**")
+    if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', width=180)
+    st.write(f"👤 **{st.session_state.user}**")
     if st.button("Log-out"):
         st.session_state.auth = False
         st.rerun()
     st.write("---")
     
-    # Filtro Cliente (Se Admin)
-    cliente_selezionato = "TUTTI"
-    if st.session_state.permesso == "TUTTI":
-        cliente_selezionato = st.selectbox("Seleziona Cliente", ["TUTTI"] + sorted(list(USER_DB.keys())))
-    else:
-        cliente_selezionato = st.session_state.permesso
-
+    # Filtro Cliente Sidebar
+    cliente_selezionato = st.selectbox("Seleziona Cliente", ["TUTTI"] + sorted(list(USER_DB.keys()))) if st.session_state.permesso == "TUTTI" else st.session_state.permesso
+    
     st.write("---")
     f_disp = st.checkbox("DISPONIBILE", value=True)
     f_acq = st.checkbox("ACQUISTO", value=True)
@@ -166,56 +163,49 @@ with st.sidebar:
     f_oca = st.checkbox("DA PIANIFICARE", value=True)
     
     search = st.text_input("Cerca Articolo...").upper()
+    st.write("---")
     if st.button("Esporta Report"):
-        st.download_button("Download Excel", data=to_excel(pd.DataFrame()), file_name="Report_Safit.xlsx")
+        st.download_button("Scarica Excel", data=to_excel(pd.DataFrame()), file_name="Safit_Report.xlsx")
 
 # --- 7. MAIN DASHBOARD ---
-st.header("Pannello Controllo Consegne Safit")
+st.title("Pannello Controllo Consegne Safit")
 df_res, stocks = load_and_process()
 
 if not df_res.empty:
-    # Filtri Dashboard
-    if cliente_selezionato != "TUTTI":
-        df_res = df_res[df_res['CLI_NAME'] == cliente_selezionato]
-    
-    filtri_stati = []
-    if f_disp: filtri_stati.append("DISPONIBILE")
-    if f_acq: filtri_stati.append("ACQUISTO")
-    if f_prod: filtri_stati.append("PRODUZIONE")
-    if f_manc: filtri_stati.append("MANCANTE")
-    if f_oca: filtri_stati.append("DA PIANIFICARE")
+    # Filtri
+    if cliente_selezionato != "TUTTI": df_res = df_res[df_res['CLI_NAME'] == cliente_selezionato]
+    filtri_stati = [s for s, b in zip(["DISPONIBILE","ACQUISTO","PRODUZIONE","MANCANTE","DA PIANIFICARE"], [f_disp, f_acq, f_prod, f_manc, f_oca]) if b]
     df_res = df_res[df_res['ST'].isin(filtri_stati)]
     if search: df_res = df_res[df_res['Articolo C'].str.contains(search)]
 
     # KPI
     c1, c2, c3, c4 = st.columns(4)
-    with c1: st.markdown(f'<div class="kpi-card"><div class="kpi-val">{int(df_res["Qta Residua"].sum()):,}</div>Pezzi Totali</div>', unsafe_allow_html=True)
+    with c1: st.markdown(f'<div class="kpi-card"><div class="kpi-val">{int(df_res["Qta Residua"].sum()):,}</div>Pezzi</div>', unsafe_allow_html=True)
     with c2: st.markdown(f'<div class="kpi-card"><div class="kpi-val">{len(df_res[df_res["ST"]=="DISPONIBILE"])}</div>Pronti</div>', unsafe_allow_html=True)
     with c3: st.markdown(f'<div class="kpi-card"><div class="kpi-val">{len(df_res[df_res["ST"].isin(["ACQUISTO","PRODUZIONE"])])}</div>In Corso</div>', unsafe_allow_html=True)
     with c4: st.markdown(f'<div class="kpi-card"><div class="kpi-val" style="color:red">{len(df_res[df_res["ST"]=="MANCANTE"])}</div>Mancanti</div>', unsafe_allow_html=True)
 
-    # Grafici
+    # GRAFICI PLOTLY (Punto 7 screenshot)
     g1, g2 = st.columns(2)
     with g1:
-        st.write("**Stato Copertura**")
-        fig1 = px.pie(df_res, names='ST', hole=0)
-        st.plotly_chart(fig1, use_container_width=True)
+        st.subheader("Stato Copertura")
+        fig_pie = px.pie(df_res, names='ST', color='ST', color_discrete_map={"DISPONIBILE":"green","ACQUISTO":"blue","PRODUZIONE":"orange","MANCANTE":"red","DA PIANIFICARE":"grey"})
+        st.plotly_chart(fig_pie, use_container_width=True)
     with g2:
-        st.write("**Top 10 Famiglie**")
-        df_top = df_res.groupby('Articolo C')['Qta Residua'].sum().nlargest(10).reset_index()
-        fig2 = px.pie(df_top, values='Qta Residua', names='Articolo C', hole=0.4)
-        st.plotly_chart(fig2, use_container_width=True)
+        st.subheader("Top 10 Famiglie")
+        df_fam = df_res.groupby('Articolo C')['Qta Residua'].sum().nlargest(10).reset_index()
+        fig_donut = px.pie(df_fam, values='Qta Residua', names='Articolo C', hole=0.4)
+        st.plotly_chart(fig_donut, use_container_width=True)
 
-    # Elenco Expander (come nello screenshot)
-    for art, group in df_res.groupby('Articolo C'):
-        with st.expander(f"📦 {art} - ({len(group)} ordini)"):
-            for _, r in group.iterrows():
-                st.markdown(f"""
-                    <div class="status-row {r['CS']}">
-                        <div style="flex:1"><b>{r['Articolo C']}</b></div>
-                        <div style="flex:1">Qta: {int(r['Qta Residua'])}</div>
-                        <div style="flex:1">Consegna: {r['DT_EXP'].strftime('%d/%m/%Y')}</div>
-                        <div style="flex:2; color: #1565c0;"><b>Disp. Real-Time: {r['PRES_DISP_RT']}</b></div>
-                        <div style="flex:1; text-align:right;"><b>{r['ST']}</b></div>
-                    </div>
-                """, unsafe_allow_html=True)
+    # ELENCO RIGHE CON OFF
+    st.write("---")
+    for _, r in df_res.iterrows():
+        st.markdown(f"""
+            <div class="status-row {r['CS']}">
+                <div style="flex:2"><b>{r['Articolo C']}</b><br><small>{r['CLI_NAME']}</small></div>
+                <div style="flex:1">Qta: {int(r['Qta Residua'])}</div>
+                <div style="flex:1">Richiesta: {r['DT_EXP'].strftime('%d/%m/%Y')}</div>
+                <div class="disp-rt-col">Presunta disponibilità RT: {r['PRES_DISP_RT']}</div>
+                <div style="flex:1; text-align:right;"><b>{r['ST']}</b></div>
+            </div>
+        """, unsafe_allow_html=True)
