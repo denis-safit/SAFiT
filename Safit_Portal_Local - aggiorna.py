@@ -167,9 +167,11 @@ if not df_res.empty:
             sel_cli = st.session_state.permesso
             st.info(f"Filtro Cliente: {sel_cli}")
 
+        sel_stati = [s for s in ["DISPONIBILE", "COPERTO BOM", "ACQUISTO", "PRODUZIONE", "MANCANTE", "DA PIANIFICARE"] if st.checkbox(s, value=True, key=f"ch_{s}")]
         search = st.text_input("🔍 Cerca Articolo:").upper()
 
     df_f = df_res[df_res['CLI_NAME'] == sel_cli] if sel_cli != "TUTTI" else df_res.copy()
+    df_f = df_f[df_f['ST'].isin(sel_stati)]
     if search: df_f = df_f[df_f['ART_KEY'].str.contains(search)]
 
     # DOWNLOAD BUTTON
@@ -182,41 +184,16 @@ if not df_res.empty:
     k3.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#9c27b0">BOM (FIGLI)</div><div class="kpi-val">{int(df_f[df_f["ST"]=="COPERTO BOM"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
     k4.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#f44336">MANCANTI</div><div class="kpi-val">{int(df_f[df_f["ST"]=="MANCANTE"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
 
-    # Calcola famiglia su df_f prima dei grafici
-    df_f = df_f.copy()
-    df_f['Famiglia'] = df_f['Articolo D'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
-
     c1, c2 = st.columns(2)
     with c1:
-        fig_stato = px.pie(df_f, values='Qta Residua', names='ST', color='ST', title="Stato Copertura",
-                           color_discrete_map={'DISPONIBILE':'#4caf50','COPERTO BOM':'#9c27b0','ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'})
-        sel_stato = st.plotly_chart(fig_stato, use_container_width=True, on_select="rerun", key="chart_stato")
-
+        st.plotly_chart(px.pie(df_f, values='Qta Residua', names='ST', color='ST', title="Stato Copertura",
+                               color_discrete_map={'DISPONIBILE':'#4caf50','COPERTO BOM':'#9c27b0','ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}), use_container_width=True)
     with c2:
-        df_fam = df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
-        fig_fam = px.pie(df_fam, values='Qta Residua', names='Famiglia', hole=0.4, title="Top 10 Famiglie — clicca per filtrare")
-        sel_fam = st.plotly_chart(fig_fam, use_container_width=True, on_select="rerun", key="chart_fam")
-
-    # --- Leggi selezione grafici ---
-    fam_selezionata = None
-    if sel_fam and sel_fam.get("selection", {}).get("points"):
-        fam_selezionata = sel_fam["selection"]["points"][0].get("label")
-
-    stato_selezionato = None
-    if sel_stato and sel_stato.get("selection", {}).get("points"):
-        stato_selezionato = sel_stato["selection"]["points"][0].get("label")
-
-    # Applica filtro famiglia e/o stato dal grafico
-    df_view = df_f.copy()
-    if fam_selezionata:
-        df_view = df_view[df_view['Famiglia'] == fam_selezionata]
-        st.info(f"📂 Famiglia selezionata: **{fam_selezionata}** — {len(df_view)} ordini | Clicca di nuovo per deselezionare")
-    if stato_selezionato:
-        df_view = df_view[df_view['ST'] == stato_selezionato]
-        st.info(f"🔵 Stato selezionato: **{stato_selezionato}** — {len(df_view)} ordini | Clicca di nuovo per deselezionare")
+        df_f['Famiglia'] = df_f['Articolo D'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
+        st.plotly_chart(px.pie(df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10), values='Qta Residua', names='Famiglia', hole=0.4, title="Top 10 Famiglie"), use_container_width=True)
 
     st.markdown("---")
-    for art, g in df_view.groupby('ART_KEY'):
+    for art, g in df_f.groupby('ART_KEY'):
         with st.expander(f"📦 {art} - {g['Articolo D'].iloc[0]} ({len(g)} ordini)"):
             s_i = stock_raw.get(art, {'GIA': 0, 'ACQ': 0, 'PROD': 0})
             st.markdown(f'<div class="debug-box"><span>📦 GIA: {int(s_i["GIA"])}</span><span>🚚 ACQ: {int(s_i["ACQ"])}</span><span>⚙️ PROD: {int(s_i["PROD"])}</span></div>', unsafe_allow_html=True)
