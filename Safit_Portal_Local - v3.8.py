@@ -62,7 +62,7 @@ def smart_load(filename, key_col):
     return df
 
 # --- 3. MOTORE DI CALCOLO ---
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=300)
 def load_and_process():
     try:
         df_arca = smart_load('righe_Ordini_ARCA.xlsx', "Articolo C")
@@ -138,27 +138,18 @@ if not st.session_state.auth:
 
 # --- 5. DASHBOARD ---
 df_res, stock_raw = load_and_process()
-if 'last_update' not in st.session_state:
-    st.session_state.last_update = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
 if not df_res.empty:
     with st.sidebar:
+        # LOGO RIPRISTINATO
         if os.path.exists('Logo SAFIT.JPG'): 
             st.image('Logo SAFIT.JPG', use_container_width=True)
         
         st.markdown(f'<div class="user-info">👤 <b>{st.session_state.user}</b></div>', unsafe_allow_html=True)
         
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("🚪 Esci", use_container_width=True):
-                st.session_state.auth = False
-                st.rerun()
-        with col_b:
-            if st.button("🔄 Aggiorna", use_container_width=True):
-                st.cache_data.clear()
-                st.session_state.last_update = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
-                st.rerun()
+        if st.button("🚪 Log-out", use_container_width=True): 
+            st.session_state.auth = False
+            st.rerun()
         
-        st.caption("📅 Dati al: " + st.session_state.get('last_update', '--'))
         st.markdown("---")
         
         if st.session_state.permesso == "TUTTI":
