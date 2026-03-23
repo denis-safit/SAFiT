@@ -136,17 +136,134 @@ if not st.session_state.auth:
                 st.error("Credenziali errate.")
     st.stop()
 
+# ===========================================================
+# FUNZIONI VISTA CLIENTE
+# ===========================================================
+LABEL_CLI = {
+    'DISPONIBILE':    ('Pronto per la spedizione', '#4caf50', 'on-time-row'),
+    'COPERTO BOM':    ('Pronto (componente)',       '#4caf50', 'on-time-row'),
+    'ACQUISTO':       ('In arrivo a magazzino',     '#2196f3', 'acq-row'),
+    'PRODUZIONE':     ('In lavorazione',            '#fbc02d', 'prod-row'),
+    'MANCANTE':       ('In pianificazione',         '#f44336', 'urgent-row'),
+    'DA PIANIFICARE': ('Da confermare',             '#9e9e9e', 'oca-row'),
+}
+
+def pbar_html(pct, color):
+    p = min(max(float(pct), 0), 100)
+    inside  = str(round(p)) + "%" if p > 15 else ""
+    outside = str(round(p)) + "%" if p <= 15 else ""
+    return (
+        '<div style="background:#e9ecef;border-radius:20px;height:16px;width:100%;overflow:hidden;margin:4px 0 8px 0;">'
+        '<div style="width:' + str(round(p,1)) + '%;background:' + color + ';height:100%;border-radius:20px;'
+        'display:flex;align-items:center;justify-content:flex-end;padding-right:6px;'
+        'font-size:10px;font-weight:700;color:#fff;box-sizing:border-box;">' + inside + '</div>'
+        '</div>'
+        '<div style="font-size:10px;color:#555;text-align:right;margin-top:-6px;">' + outside + '</div>'
+    )
+
+def render_vista_cliente(df_cli, stock_raw):
+    """Vista pulita per il cliente — nessun dato interno visibile."""
+    COLOR_MAP_CLI = {v[0]: v[1] for v in LABEL_CLI.values()}
+
+    st.title("📦 I tuoi Ordini")
+
+    if df_cli.empty:
+        st.info("Nessun ordine aperto al momento.")
+        return
+
+    # KPI cliente
+    tot_qta   = int(df_cli['Qta Residua'].sum())
+    n_pronti  = int(df_cli[df_cli['ST'].isin(['DISPONIBILE','COPERTO BOM'])]['Qta Residua'].sum())
+    n_lavoro  = int(df_cli[df_cli['ST'].isin(['ACQUISTO','PRODUZIONE'])]['Qta Residua'].sum())
+    n_mancanti= int(df_cli[df_cli['ST'].isin(['MANCANTE','DA PIANIFICARE'])]['Qta Residua'].sum())
+    pct_pronto = round(n_pronti / tot_qta * 100) if tot_qta > 0 else 0
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">TOTALE PEZZI</div><div class="kpi-val">{tot_qta:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
+    k2.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#4caf50">PRONTI</div><div class="kpi-val">{n_pronti:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
+    k3.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#2196f3">IN LAVORAZIONE</div><div class="kpi-val">{n_lavoro:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
+    k4.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#f44336">DA PIANIFICARE</div><div class="kpi-val">{n_mancanti:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
+
+    # Grafico torta stato ordini cliente
+    df_cli_chart = df_cli.copy()
+    df_cli_chart['Stato Cliente'] = df_cli_chart['ST'].map(lambda x: LABEL_CLI.get(x, (x,'#aaa',''))[0])
+    df_torta = df_cli_chart.groupby('Stato Cliente')['Qta Residua'].sum().reset_index()
+    col_t, col_info = st.columns([1, 1])
+    with col_t:
+        fig_cli = px.pie(df_torta, values='Qta Residua', names='Stato Cliente',
+                         color='Stato Cliente',
+                         color_discrete_map={
+                             'Pronto per la spedizione':'#4caf50',
+                             'Pronto (componente)':     '#4caf50',
+                             'In arrivo a magazzino':   '#2196f3',
+                             'In lavorazione':          '#fbc02d',
+                             'In pianificazione':       '#f44336',
+                             'Da confermare':           '#9e9e9e',
+                         })
+        fig_cli.update_traces(textinfo='label+percent',
+                              hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<extra></extra>')
+        fig_cli.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=False, height=280)
+        st.plotly_chart(fig_cli, use_container_width=True)
+    with col_info:
+        st.markdown("##### Avanzamento complessivo")
+        st.markdown(f"**{pct_pronto}%** degli ordini è pronto per la spedizione")
+        st.markdown(pbar_html(pct_pronto, '#4caf50'), unsafe_allow_html=True)
+        st.markdown("---")
+        st.caption("🟢 Pronto — disponibile in magazzino")
+        st.caption("🔵 In arrivo — materiale in fase di acquisto")
+        st.caption("🟡 In lavorazione — in produzione")
+        st.caption("🔴 In pianificazione — da programmare")
+
+    st.markdown("---")
+
+    # Dettaglio ordini per articolo
+    for art, g in df_cli.groupby('ART_KEY'):
+        desc     = g['Articolo D'].iloc[0]
+        qta_tot  = int(g['Qta Residua'].sum())
+        stati_g  = g['ST'].tolist()
+        # Colore expander = stato peggiore
+        if 'MANCANTE' in stati_g or 'DA PIANIFICARE' in stati_g:
+            badge = "🔴"
+        elif 'PRODUZIONE' in stati_g or 'ACQUISTO' in stati_g:
+            badge = "🟡"
+        else:
+            badge = "🟢"
+
+        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pz".replace(",",".")):
+            # Barra avanzamento articolo
+            qta_pronta = int(g[g['ST'].isin(['DISPONIBILE','COPERTO BOM'])]['Qta Residua'].sum())
+            pct_art    = round(qta_pronta / qta_tot * 100) if qta_tot > 0 else 0
+            bar_col    = '#4caf50' if pct_art >= 100 else ('#fbc02d' if pct_art > 0 else '#f44336')
+            st.markdown(
+                f"**Disponibile: {qta_pronta:,} / {qta_tot:,} pz**".replace(",","."),
+            )
+            st.markdown(pbar_html(pct_art, bar_col), unsafe_allow_html=True)
+
+            # Righe ordine
+            for _, r in g.iterrows():
+                testo, colore, css = LABEL_CLI.get(r['ST'], (r['ST'], '#aaa', 'oca-row'))
+                data_str = r['DT_EXP'].strftime("%d/%m/%Y") if pd.notnull(r['DT_EXP']) else "N.D."
+                st.markdown(
+                    f'<div class="status-row {css}">'
+                    f'<span>📅 Consegna: <b>{data_str}</b> | Q.tà: <b>{int(r["Qta Residua"]):,}</b></span>'.replace(",",".")
+                    + f'<span><b>{testo}</b></span>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
+# ===========================================================
 # --- 5. DASHBOARD ---
+# ===========================================================
 df_res, stock_raw = load_and_process()
 if 'last_update' not in st.session_state:
     st.session_state.last_update = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+
 if not df_res.empty:
+    # --- SIDEBAR COMUNE ---
     with st.sidebar:
-        if os.path.exists('Logo SAFIT.JPG'): 
+        if os.path.exists('Logo SAFIT.JPG'):
             st.image('Logo SAFIT.JPG', use_container_width=True)
-        
         st.markdown(f'<div class="user-info">👤 <b>{st.session_state.user}</b></div>', unsafe_allow_html=True)
-        
         col_a, col_b = st.columns(2)
         with col_a:
             if st.button("🚪 Esci", use_container_width=True):
@@ -157,23 +274,33 @@ if not df_res.empty:
                 st.cache_data.clear()
                 st.session_state.last_update = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
                 st.rerun()
-        
         st.caption("📅 Dati al: " + st.session_state.get('last_update', '--'))
         st.markdown("---")
-        
-        if st.session_state.permesso == "TUTTI":
+
+        is_admin = st.session_state.permesso == "TUTTI"
+        if is_admin:
             sel_cli = st.selectbox("Seleziona Cliente:", ["TUTTI"] + sorted(df_res['CLI_NAME'].unique().tolist()))
         else:
             sel_cli = st.session_state.permesso
-            st.info(f"Filtro Cliente: {sel_cli}")
 
         search = st.text_input("🔍 Cerca Articolo:").upper()
 
     df_f = df_res[df_res['CLI_NAME'] == sel_cli] if sel_cli != "TUTTI" else df_res.copy()
     if search: df_f = df_f[df_f['ART_KEY'].str.contains(search)]
 
-    # DOWNLOAD BUTTON
-    st.sidebar.download_button("📊 Esporta Report", data=to_excel(df_f), file_name=f"Safit_Report_{datetime.now().strftime('%d%m')}.xlsx", use_container_width=True)
+    # ===========================================================
+    # VISTA CLIENTE
+    # ===========================================================
+    if not is_admin:
+        render_vista_cliente(df_f, stock_raw)
+        st.stop()
+
+    # ===========================================================
+    # VISTA ADMIN (tutto il pannello originale)
+    # ===========================================================
+    st.sidebar.download_button("📊 Esporta Report", data=to_excel(df_f),
+                               file_name=f"Safit_Report_{datetime.now().strftime('%d%m')}.xlsx",
+                               use_container_width=True)
 
     st.title("Pannello Controllo Safit")
     k1, k2, k3, k4 = st.columns(4)
@@ -182,78 +309,50 @@ if not df_res.empty:
     k3.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#9c27b0">BOM (FIGLI)</div><div class="kpi-val">{int(df_f[df_f["ST"]=="COPERTO BOM"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
     k4.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#f44336">MANCANTI</div><div class="kpi-val">{int(df_f[df_f["ST"]=="MANCANTE"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
 
-    # Calcola famiglia su df_f prima dei grafici
     df_f = df_f.copy()
     df_f['Famiglia'] = df_f['Articolo D'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
 
     COLOR_MAP = {'DISPONIBILE':'#4caf50','COPERTO BOM':'#9c27b0','ACQUISTO':'#2196f3',
                  'PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}
 
-    # Inizializza session_state filtri (liste per selezione multipla)
-    if 'filtro_stati' not in st.session_state:  st.session_state.filtro_stati  = []
+    if 'filtro_stati' not in st.session_state:    st.session_state.filtro_stati    = []
     if 'filtro_famiglie' not in st.session_state: st.session_state.filtro_famiglie = []
 
-    # --- DATI GRAFICI ---
     df_fam_chart   = df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
     df_stato_chart = df_f.groupby('ST')['Qta Residua'].sum().sort_values(ascending=False).reset_index()
     stati_disponibili    = df_stato_chart['ST'].tolist()
     famiglie_disponibili = df_fam_chart['Famiglia'].tolist()
 
-    # CSS pulsanti colorati toggle
-    st.markdown("""
-    <style>
+    st.markdown("""<style>
     div[data-testid="stButton"] button {
-        border-radius: 6px !important;
-        font-size: 12px !important;
-        padding: 4px 6px !important;
-        width: 100% !important;
-        white-space: nowrap !important;
-        overflow: hidden !important;
-        text-overflow: ellipsis !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+        border-radius:6px!important;font-size:12px!important;padding:4px 6px!important;
+        width:100%!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;
+    }</style>""", unsafe_allow_html=True)
 
-    # ===== RIGA GRAFICI AFFIANCATI + FILTRI AI LATI =====
-    # Layout: [filtri stato] [torta stato] [torta famiglia] [filtri famiglia]
-    # Proporzioni: 1 - 2 - 2 - 1  (grafici doppio spazio, filtri ai lati)
     col_fs, col_g1, col_g2, col_ff = st.columns([1, 2, 2, 1])
-
     with col_fs:
         st.markdown("**Stato**")
         st.caption("✓ = attivo")
         for stato in stati_disponibili:
             attivo = stato in st.session_state.filtro_stati
-            colore = COLOR_MAP.get(stato, '#aaa')
             label  = f"✓ {stato}" if attivo else stato
-            # Evidenzia pulsante attivo con emoji colorata
             if st.button(label, key=f"btn_stato_{stato}", use_container_width=True,
                          type="primary" if attivo else "secondary"):
-                if attivo:
-                    st.session_state.filtro_stati.remove(stato)
-                else:
-                    st.session_state.filtro_stati.append(stato)
+                if attivo: st.session_state.filtro_stati.remove(stato)
+                else:      st.session_state.filtro_stati.append(stato)
                 st.rerun()
 
     with col_g1:
         st.markdown("##### Stato Copertura")
-        fig_stato = px.pie(df_stato_chart, values='Qta Residua', names='ST', color='ST',
-                           color_discrete_map=COLOR_MAP)
-        fig_stato.update_traces(
-            textinfo='label+percent',
-            hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>'
-        )
+        fig_stato = px.pie(df_stato_chart, values='Qta Residua', names='ST', color='ST', color_discrete_map=COLOR_MAP)
+        fig_stato.update_traces(textinfo='label+percent', hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>')
         fig_stato.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=False, height=320)
         st.plotly_chart(fig_stato, use_container_width=True)
 
     with col_g2:
         st.markdown("##### Top 10 Famiglie")
         fig_fam = px.pie(df_fam_chart, values='Qta Residua', names='Famiglia', hole=0.35)
-        fig_fam.update_traces(
-            textinfo='label+percent',
-            hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>',
-            sort=True
-        )
+        fig_fam.update_traces(textinfo='label+percent', hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>', sort=True)
         fig_fam.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=False, height=320)
         st.plotly_chart(fig_fam, use_container_width=True)
 
@@ -262,18 +361,14 @@ if not df_res.empty:
         st.caption("✓ = attivo")
         for fam in famiglie_disponibili:
             attivo = fam in st.session_state.filtro_famiglie
-            # Label abbreviato per non spezzare il layout su schermi piccoli
             label_short = fam[:14] + "…" if len(fam) > 14 else fam
             label = f"✓ {label_short}" if attivo else label_short
             if st.button(label, key=f"btn_fam_{fam}", use_container_width=True,
                          type="primary" if attivo else "secondary"):
-                if attivo:
-                    st.session_state.filtro_famiglie.remove(fam)
-                else:
-                    st.session_state.filtro_famiglie.append(fam)
+                if attivo: st.session_state.filtro_famiglie.remove(fam)
+                else:      st.session_state.filtro_famiglie.append(fam)
                 st.rerun()
 
-    # Pulsante reset tutto
     with st.sidebar:
         st.markdown("---")
         if st.button("🔄 Reset tutti i filtri", use_container_width=True, key="btn_reset_grafici"):
@@ -285,14 +380,12 @@ if not df_res.empty:
         if st.session_state.filtro_famiglie:
             st.info("📂 Famiglie: " + ", ".join(st.session_state.filtro_famiglie))
 
-    # --- APPLICA FILTRI CUMULABILI ---
     df_view = df_f.copy()
     if st.session_state.filtro_famiglie:
         df_view = df_view[df_view['Famiglia'].isin(st.session_state.filtro_famiglie)]
     if st.session_state.filtro_stati:
         df_view = df_view[df_view['ST'].isin(st.session_state.filtro_stati)]
 
-    # Banner riepilogo filtri attivi
     filtri_attivi = []
     if st.session_state.filtro_famiglie: filtri_attivi.append(f"Famiglie: **{', '.join(st.session_state.filtro_famiglie)}**")
     if st.session_state.filtro_stati:    filtri_attivi.append(f"Stati: **{', '.join(st.session_state.filtro_stati)}**")
