@@ -188,59 +188,60 @@ if not df_res.empty:
     df_f = df_f.copy()
     df_f['Famiglia'] = df_f['Articolo D'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
 
-    # --- GRAFICI INTERATTIVI CON SELEZIONE DIRETTA ---
-    # Calcola Top 10 famiglie ordinate per quantità decrescente
+    # --- GRAFICI A TORTA INTERATTIVI — click per filtrare ---
     df_fam_chart = df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
 
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("##### Stato Copertura — clicca per filtrare")
         fig_stato = px.pie(df_f, values='Qta Residua', names='ST', color='ST',
-                           color_discrete_map={'DISPONIBILE':'#4caf50','COPERTO BOM':'#9c27b0','ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'})
-        fig_stato.update_traces(hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<extra></extra>')
-        fig_stato.update_layout(margin=dict(t=10,b=0,l=0,r=0))
+                           color_discrete_map={'DISPONIBILE':'#4caf50','COPERTO BOM':'#9c27b0',
+                                               'ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d',
+                                               'MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'})
+        fig_stato.update_traces(
+            hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>',
+            textinfo='label+percent'
+        )
+        fig_stato.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=True)
         click_stato = plotly_events(fig_stato, click_event=True, key="ev_stato")
 
     with c2:
         st.markdown("##### Top 10 Famiglie — clicca per filtrare")
-        fig_fam = go.Figure(go.Bar(
-            x=df_fam_chart['Qta Residua'],
-            y=df_fam_chart['Famiglia'],
-            orientation='h',
-            marker_color='#2196f3',
-            text=df_fam_chart['Qta Residua'].apply(lambda v: f"{int(v):,}".replace(",",".")),
-            textposition='outside',
-            hovertemplate='<b>%{y}</b><br>Qta: %{x:,.0f}<extra></extra>'
-        ))
-        fig_fam.update_layout(
-            yaxis={'categoryorder':'total ascending'},
-            margin=dict(t=10,b=0,l=0,r=60),
-            height=320
+        fig_fam = px.pie(df_fam_chart, values='Qta Residua', names='Famiglia', hole=0.35)
+        fig_fam.update_traces(
+            hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>',
+            textinfo='label+percent',
+            sort=False  # mantiene ordine decrescente per quantità
         )
+        fig_fam.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=True)
         click_fam = plotly_events(fig_fam, click_event=True, key="ev_fam")
 
-    # --- Leggi click e aggiorna session_state ---
-    # Stato
+    # --- Leggi click → toggle filtro in session_state ---
     if click_stato:
-        clicked_label = click_stato[0].get('label') or click_stato[0].get('pointIndex')
-        # Ricava il nome dello stato dall'indice se necessario
-        stati_labels = df_f['ST'].unique().tolist()
-        if isinstance(clicked_label, int) and clicked_label < len(stati_labels):
-            clicked_label = stati_labels[clicked_label]
-        if clicked_label:
-            if st.session_state.get('filtro_stato') == clicked_label:
-                st.session_state.filtro_stato = None  # deseleziona se clicco di nuovo
+        # plotly_events restituisce 'label' per i pie chart
+        clicked = click_stato[0].get('label')
+        if not clicked:
+            # fallback: usa pointIndex per ricavare il label
+            idx = click_stato[0].get('pointIndex', 0)
+            labels = df_f['ST'].value_counts().index.tolist()
+            clicked = labels[idx] if idx < len(labels) else None
+        if clicked:
+            if st.session_state.get('filtro_stato') == clicked:
+                st.session_state.filtro_stato = None
             else:
-                st.session_state.filtro_stato = clicked_label
+                st.session_state.filtro_stato = clicked
 
-    # Famiglia
     if click_fam:
-        clicked_fam = click_fam[0].get('y')
-        if clicked_fam:
-            if st.session_state.get('filtro_fam') == clicked_fam:
-                st.session_state.filtro_fam = None  # deseleziona se clicco di nuovo
+        clicked = click_fam[0].get('label')
+        if not clicked:
+            idx = click_fam[0].get('pointIndex', 0)
+            labels = df_fam_chart['Famiglia'].tolist()
+            clicked = labels[idx] if idx < len(labels) else None
+        if clicked:
+            if st.session_state.get('filtro_fam') == clicked:
+                st.session_state.filtro_fam = None
             else:
-                st.session_state.filtro_fam = clicked_fam
+                st.session_state.filtro_fam = clicked
 
     # Bottone reset filtri grafici
     with st.sidebar:
