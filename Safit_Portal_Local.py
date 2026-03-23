@@ -192,39 +192,47 @@ if not df_res.empty:
     df_fam_chart = df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
 
     c1, c2 = st.columns(2)
+    # Colori stati fissi — stessa sequenza usata in go.Pie
+    COLOR_MAP = {'DISPONIBILE':'#4caf50','COPERTO BOM':'#9c27b0','ACQUISTO':'#2196f3',
+                 'PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}
+    # Ordine decrescente per valore — uguale a quello che Plotly renderizza con sort=True (default)
+    df_stato_chart = df_f.groupby('ST')['Qta Residua'].sum().sort_values(ascending=False).reset_index()
+
     with c1:
         st.markdown("##### Stato Copertura — clicca per filtrare")
-        fig_stato = px.pie(df_f, values='Qta Residua', names='ST', color='ST',
-                           color_discrete_map={'DISPONIBILE':'#4caf50','COPERTO BOM':'#9c27b0',
-                                               'ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d',
-                                               'MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'})
-        fig_stato.update_traces(
+        fig_stato = go.Figure(go.Pie(
+            labels=df_stato_chart['ST'].tolist(),
+            values=df_stato_chart['Qta Residua'].tolist(),
+            marker_colors=[COLOR_MAP.get(s, '#aaa') for s in df_stato_chart['ST'].tolist()],
+            sort=False,
             hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>',
             textinfo='label+percent'
-        )
+        ))
         fig_stato.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=True)
         click_stato = plotly_events(fig_stato, click_event=True, key="ev_stato")
 
     with c2:
         st.markdown("##### Top 10 Famiglie — clicca per filtrare")
-        fig_fam = px.pie(df_fam_chart, values='Qta Residua', names='Famiglia', hole=0.35)
-        fig_fam.update_traces(
+        # Usa go.Pie per avere controllo completo sull'ordine e sui customdata
+        fig_fam = go.Figure(go.Pie(
+            labels=df_fam_chart['Famiglia'].tolist(),
+            values=df_fam_chart['Qta Residua'].tolist(),
+            hole=0.35,
+            sort=False,
+            customdata=df_fam_chart['Famiglia'].tolist(),
             hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>',
-            textinfo='label+percent',
-            sort=False  # mantiene ordine decrescente per quantità
-        )
+            textinfo='label+percent'
+        ))
         fig_fam.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=True)
         click_fam = plotly_events(fig_fam, click_event=True, key="ev_fam")
 
     # --- Leggi click → toggle filtro in session_state ---
+    # Per pie chart plotly_events restituisce pointIndex — usiamo le liste ordinate per ricavare il label
     if click_stato:
-        # plotly_events restituisce 'label' per i pie chart
-        clicked = click_stato[0].get('label')
-        if not clicked:
-            # fallback: usa pointIndex per ricavare il label
-            idx = click_stato[0].get('pointIndex', 0)
-            labels = df_f['ST'].value_counts().index.tolist()
-            clicked = labels[idx] if idx < len(labels) else None
+        idx = click_stato[0].get('pointIndex', None)
+        # Costruiamo la lista labels nello stesso ordine in cui Plotly le renderizza (sort per valore desc)
+        labels_stato = df_stato_chart['ST'].tolist()
+        clicked = labels_stato[idx] if idx is not None and idx < len(labels_stato) else None
         if clicked:
             if st.session_state.get('filtro_stato') == clicked:
                 st.session_state.filtro_stato = None
@@ -232,11 +240,10 @@ if not df_res.empty:
                 st.session_state.filtro_stato = clicked
 
     if click_fam:
-        clicked = click_fam[0].get('label')
-        if not clicked:
-            idx = click_fam[0].get('pointIndex', 0)
-            labels = df_fam_chart['Famiglia'].tolist()
-            clicked = labels[idx] if idx < len(labels) else None
+        idx = click_fam[0].get('pointIndex', None)
+        # La lista famiglie è già ordinata per valore desc (sort=False in go.Pie)
+        labels_fam = df_fam_chart['Famiglia'].tolist()
+        clicked = labels_fam[idx] if idx is not None and idx < len(labels_fam) else None
         if clicked:
             if st.session_state.get('filtro_fam') == clicked:
                 st.session_state.filtro_fam = None
