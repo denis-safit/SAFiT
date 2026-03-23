@@ -186,34 +186,40 @@ if not df_res.empty:
     df_f = df_f.copy()
     df_f['Famiglia'] = df_f['Articolo D'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
 
+    # --- FILTRI FAMIGLIA E STATO (sidebar) ---
+    famiglie_disponibili = sorted(df_f['Famiglia'].unique().tolist())
+    stati_disponibili = ["TUTTI"] + sorted(df_f['ST'].unique().tolist())
+
+    with st.sidebar:
+        st.markdown("---")
+        sel_fam = st.selectbox("📂 Famiglia prodotto:", ["TUTTE"] + famiglie_disponibili, key="sel_fam")
+        sel_stato_sb = st.selectbox("🔵 Stato ordine:", stati_disponibili, key="sel_stato_sb")
+
+    # Applica filtri sidebar
+    df_view = df_f.copy()
+    if sel_fam != "TUTTE":
+        df_view = df_view[df_view['Famiglia'] == sel_fam]
+    if sel_stato_sb != "TUTTI":
+        df_view = df_view[df_view['ST'] == sel_stato_sb]
+
+    # --- GRAFICI (su df_view filtrato) ---
     c1, c2 = st.columns(2)
     with c1:
-        fig_stato = px.pie(df_f, values='Qta Residua', names='ST', color='ST', title="Stato Copertura",
+        fig_stato = px.pie(df_view, values='Qta Residua', names='ST', color='ST', title="Stato Copertura",
                            color_discrete_map={'DISPONIBILE':'#4caf50','COPERTO BOM':'#9c27b0','ACQUISTO':'#2196f3','PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'})
-        sel_stato = st.plotly_chart(fig_stato, use_container_width=True, on_select="rerun", key="chart_stato")
+        st.plotly_chart(fig_stato, use_container_width=True)
 
     with c2:
-        df_fam = df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
-        fig_fam = px.pie(df_fam, values='Qta Residua', names='Famiglia', hole=0.4, title="Top 10 Famiglie — clicca per filtrare")
-        sel_fam = st.plotly_chart(fig_fam, use_container_width=True, on_select="rerun", key="chart_fam")
+        df_fam = df_view.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
+        fig_fam = px.pie(df_fam, values='Qta Residua', names='Famiglia', hole=0.4, title="Top 10 Famiglie")
+        st.plotly_chart(fig_fam, use_container_width=True)
 
-    # --- Leggi selezione grafici ---
-    fam_selezionata = None
-    if sel_fam and sel_fam.get("selection", {}).get("points"):
-        fam_selezionata = sel_fam["selection"]["points"][0].get("label")
-
-    stato_selezionato = None
-    if sel_stato and sel_stato.get("selection", {}).get("points"):
-        stato_selezionato = sel_stato["selection"]["points"][0].get("label")
-
-    # Applica filtro famiglia e/o stato dal grafico
-    df_view = df_f.copy()
-    if fam_selezionata:
-        df_view = df_view[df_view['Famiglia'] == fam_selezionata]
-        st.info(f"📂 Famiglia selezionata: **{fam_selezionata}** — {len(df_view)} ordini | Clicca di nuovo per deselezionare")
-    if stato_selezionato:
-        df_view = df_view[df_view['ST'] == stato_selezionato]
-        st.info(f"🔵 Stato selezionato: **{stato_selezionato}** — {len(df_view)} ordini | Clicca di nuovo per deselezionare")
+    # Banner filtri attivi
+    filtri_attivi = []
+    if sel_fam != "TUTTE": filtri_attivi.append(f"Famiglia: **{sel_fam}**")
+    if sel_stato_sb != "TUTTI": filtri_attivi.append(f"Stato: **{sel_stato_sb}**")
+    if filtri_attivi:
+        st.info("🔍 Filtri attivi — " + " | ".join(filtri_attivi) + f" — {len(df_view)} ordini trovati")
 
     st.markdown("---")
     for art, g in df_view.groupby('ART_KEY'):
