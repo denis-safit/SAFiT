@@ -4,8 +4,6 @@ import os
 from datetime import datetime
 from io import BytesIO
 import plotly.express as px
-import plotly.graph_objects as go
-from streamlit_plotly_events import plotly_events
 from bom_engine import get_coverage  
 
 # --- 1. CONFIGURAZIONE ---
@@ -188,93 +186,99 @@ if not df_res.empty:
     df_f = df_f.copy()
     df_f['Famiglia'] = df_f['Articolo D'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
 
-    # --- GRAFICI A TORTA INTERATTIVI — click per filtrare ---
-    df_fam_chart = df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
-
-    c1, c2 = st.columns(2)
-    # Colori stati fissi — stessa sequenza usata in go.Pie
     COLOR_MAP = {'DISPONIBILE':'#4caf50','COPERTO BOM':'#9c27b0','ACQUISTO':'#2196f3',
                  'PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}
-    # Ordine decrescente per valore — uguale a quello che Plotly renderizza con sort=True (default)
+
+    # Inizializza session_state filtri (liste per selezione multipla)
+    if 'filtro_stati' not in st.session_state:  st.session_state.filtro_stati  = []
+    if 'filtro_famiglie' not in st.session_state: st.session_state.filtro_famiglie = []
+
+    # --- GRAFICI A TORTA ---
+    df_fam_chart   = df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
     df_stato_chart = df_f.groupby('ST')['Qta Residua'].sum().sort_values(ascending=False).reset_index()
 
+    c1, c2 = st.columns(2)
     with c1:
-        st.markdown("##### Stato Copertura — clicca per filtrare")
-        fig_stato = go.Figure(go.Pie(
-            labels=df_stato_chart['ST'].tolist(),
-            values=df_stato_chart['Qta Residua'].tolist(),
-            marker_colors=[COLOR_MAP.get(s, '#aaa') for s in df_stato_chart['ST'].tolist()],
-            sort=False,
-            hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>',
-            textinfo='label+percent'
-        ))
-        fig_stato.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=True)
-        click_stato = plotly_events(fig_stato, click_event=True, key="ev_stato")
+        st.markdown("##### Stato Copertura")
+        fig_stato = px.pie(df_stato_chart, values='Qta Residua', names='ST', color='ST',
+                           color_discrete_map=COLOR_MAP)
+        fig_stato.update_traces(textinfo='label+percent',
+                                hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>')
+        fig_stato.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=False)
+        st.plotly_chart(fig_stato, use_container_width=True)
 
     with c2:
-        st.markdown("##### Top 10 Famiglie — clicca per filtrare")
-        # Usa go.Pie per avere controllo completo sull'ordine e sui customdata
-        fig_fam = go.Figure(go.Pie(
-            labels=df_fam_chart['Famiglia'].tolist(),
-            values=df_fam_chart['Qta Residua'].tolist(),
-            hole=0.35,
-            sort=False,
-            customdata=df_fam_chart['Famiglia'].tolist(),
-            hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>',
-            textinfo='label+percent'
-        ))
-        fig_fam.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=True)
-        click_fam = plotly_events(fig_fam, click_event=True, key="ev_fam")
+        st.markdown("##### Top 10 Famiglie")
+        fig_fam = px.pie(df_fam_chart, values='Qta Residua', names='Famiglia', hole=0.35)
+        fig_fam.update_traces(textinfo='label+percent',
+                              hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>',
+                              sort=True)
+        fig_fam.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=False)
+        st.plotly_chart(fig_fam, use_container_width=True)
 
-    # --- Leggi click → toggle filtro in session_state ---
-    # Per pie chart plotly_events restituisce pointIndex — usiamo le liste ordinate per ricavare il label
-    if click_stato:
-        idx = click_stato[0].get('pointIndex', None)
-        # Costruiamo la lista labels nello stesso ordine in cui Plotly le renderizza (sort per valore desc)
-        labels_stato = df_stato_chart['ST'].tolist()
-        clicked = labels_stato[idx] if idx is not None and idx < len(labels_stato) else None
-        if clicked:
-            if st.session_state.get('filtro_stato') == clicked:
-                st.session_state.filtro_stato = None
+    # --- PULSANTI FILTRO STATO (toggle, cumulabili) ---
+    st.markdown("**Filtra per Stato** — clicca per attivare/disattivare, combinabili tra loro:")
+    stati_disponibili = df_stato_chart['ST'].tolist()
+    cols_stato = st.columns(len(stati_disponibili))
+    for i, stato in enumerate(stati_disponibili):
+        col = cols_stato[i]
+        attivo = stato in st.session_state.filtro_stati
+        colore = COLOR_MAP.get(stato, '#aaa')
+        label  = f"✓ {stato}" if attivo else stato
+        stile  = f"background-color:{colore};color:white;border:none;border-radius:6px;padding:4px 8px;font-size:12px;font-weight:bold;width:100%;cursor:pointer;"
+        if not attivo:
+            stile = f"background-color:#eee;color:#555;border:2px solid {colore};border-radius:6px;padding:4px 8px;font-size:12px;width:100%;cursor:pointer;"
+        if col.button(label, key=f"btn_stato_{stato}", use_container_width=True):
+            if attivo:
+                st.session_state.filtro_stati.remove(stato)
             else:
-                st.session_state.filtro_stato = clicked
+                st.session_state.filtro_stati.append(stato)
+            st.rerun()
 
-    if click_fam:
-        idx = click_fam[0].get('pointIndex', None)
-        # La lista famiglie è già ordinata per valore desc (sort=False in go.Pie)
-        labels_fam = df_fam_chart['Famiglia'].tolist()
-        clicked = labels_fam[idx] if idx is not None and idx < len(labels_fam) else None
-        if clicked:
-            if st.session_state.get('filtro_fam') == clicked:
-                st.session_state.filtro_fam = None
-            else:
-                st.session_state.filtro_fam = clicked
+    # --- PULSANTI FILTRO FAMIGLIA (toggle, cumulabili) ---
+    st.markdown("**Filtra per Famiglia** — clicca per attivare/disattivare, combinabili:")
+    famiglie_disponibili = df_fam_chart['Famiglia'].tolist()  # già ordinate per qta desc
+    # Mostra 5 per riga
+    for row_start in range(0, len(famiglie_disponibili), 5):
+        row_fam = famiglie_disponibili[row_start:row_start+5]
+        cols_fam = st.columns(5)
+        for i, fam in enumerate(row_fam):
+            attivo = fam in st.session_state.filtro_famiglie
+            label  = f"✓ {fam}" if attivo else fam
+            if cols_fam[i].button(label, key=f"btn_fam_{fam}", use_container_width=True):
+                if attivo:
+                    st.session_state.filtro_famiglie.remove(fam)
+                else:
+                    st.session_state.filtro_famiglie.append(fam)
+                st.rerun()
 
-    # Bottone reset filtri grafici
+    # Pulsante reset tutto
     with st.sidebar:
         st.markdown("---")
-        if st.button("🔄 Reset filtri grafici", use_container_width=True, key="btn_reset_grafici"):
-            st.session_state.filtro_stato = None
-            st.session_state.filtro_fam   = None
+        if st.button("🔄 Reset tutti i filtri", use_container_width=True, key="btn_reset_grafici"):
+            st.session_state.filtro_stati    = []
+            st.session_state.filtro_famiglie = []
             st.rerun()
-        if st.session_state.get('filtro_stato'):
-            st.info(f"🔵 Stato: **{st.session_state.filtro_stato}**")
-        if st.session_state.get('filtro_fam'):
-            st.info(f"📂 Famiglia: **{st.session_state.filtro_fam}**")
+        if st.session_state.filtro_stati:
+            st.info("🔵 Stati: " + ", ".join(st.session_state.filtro_stati))
+        if st.session_state.filtro_famiglie:
+            st.info("📂 Famiglie: " + ", ".join(st.session_state.filtro_famiglie))
 
-    # --- Applica filtri ---
+    # --- APPLICA FILTRI CUMULABILI ---
     df_view = df_f.copy()
-    if st.session_state.get('filtro_fam'):
-        df_view = df_view[df_view['Famiglia'] == st.session_state.filtro_fam]
-    if st.session_state.get('filtro_stato'):
-        df_view = df_view[df_view['ST'] == st.session_state.filtro_stato]
+    if st.session_state.filtro_famiglie:
+        df_view = df_view[df_view['Famiglia'].isin(st.session_state.filtro_famiglie)]
+    if st.session_state.filtro_stati:
+        df_view = df_view[df_view['ST'].isin(st.session_state.filtro_stati)]
 
-    # Banner filtri attivi
+    # Banner riepilogo filtri attivi
     filtri_attivi = []
-    if st.session_state.get('filtro_fam'):   filtri_attivi.append(f"Famiglia: **{st.session_state.filtro_fam}**")
-    if st.session_state.get('filtro_stato'): filtri_attivi.append(f"Stato: **{st.session_state.filtro_stato}**")
+    if st.session_state.filtro_famiglie: filtri_attivi.append(f"Famiglie: **{', '.join(st.session_state.filtro_famiglie)}**")
+    if st.session_state.filtro_stati:    filtri_attivi.append(f"Stati: **{', '.join(st.session_state.filtro_stati)}**")
     if filtri_attivi:
-        st.info("🔍 Filtri attivi — " + " | ".join(filtri_attivi) + f" — {len(df_view)} ordini | Clicca stesso elemento per deselezionare")
+        st.info("🔍 Filtri attivi — " + " | ".join(filtri_attivi) + f" — {len(df_view)} ordini trovati")
+    else:
+        st.caption(f"Tutti gli ordini: {len(df_view)}")
 
     st.markdown("---")
     for art, g in df_view.groupby('ART_KEY'):
