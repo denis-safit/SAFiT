@@ -43,6 +43,17 @@ def clean_num(serie):
         return val.replace('.', '').replace(',', '.') if ',' in val and '.' in val else val.replace(',', '.')
     return pd.to_numeric(s.apply(fix_val), errors='coerce').fillna(0)
 
+def normalize_art_code(val):
+    """
+    Normalizza codici articolo per evitare mismatch tra Excel (spazi invisibili, NBSP, ecc).
+    """
+    if val is None:
+        return ''
+    s = str(val)
+    # Rimuove NBSP e caratteri invisibili comuni (es. zero-width space).
+    s = s.replace('\xa0', '').replace('\u200b', '').replace('\ufeff', '')
+    return s.strip().upper()
+
 def to_excel(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -80,7 +91,7 @@ def load_and_process():
             # `PROD` deve rappresentare solo la produzione (non doppiare la parte di acquisto).
             prod_cols = ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'TRF']
             for _, r in df_acc.iterrows():
-                art_code = str(r['CODICE']).strip().upper()
+                art_code = normalize_art_code(r.get('CODICE', ''))
                 gia = clean_num(pd.Series([r.get('GIA', 0)])).iloc[0]
                 # Se nel file coesistono entrambe le colonne, usiamo `INACQ` se valorizzata,
                 # altrimenti `ACQ` (fallback).
@@ -95,7 +106,7 @@ def load_and_process():
         curr_stocks = {k: v.copy() for k, v in stock_map.items()}
 
         for index, row in df_orders.iterrows():
-            art_code = str(row[c_art]).strip().upper()
+            art_code = normalize_art_code(row.get(c_art, ''))
             qta_ordine = float(row[c_qta])
             fonte = get_coverage(art_code, qta_ordine, curr_stocks)
             
@@ -244,6 +255,13 @@ def render_vista_cliente(df_cli, stock_raw):
                 f"**Disponibile: {qta_pronta:,} / {qta_tot:,} pz**".replace(",","."),
             )
             st.markdown(pbar_html(pct_art, bar_col), unsafe_allow_html=True)
+
+            # Debug cliente: usa la stessa logica admin su `stock_raw`
+            s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
+            st.markdown(
+                f'<div class="debug-box"><span>📦 GIA: {int(s_i["GIA"])}</span><span>🚚 ACQ: {int(s_i["ACQ"])}</span><span>⚙️ PROD: {int(s_i["PROD"])}</span></div>',
+                unsafe_allow_html=True
+            )
 
             # Righe ordine
             for _, r in g.iterrows():
@@ -403,7 +421,7 @@ if not df_res.empty:
     st.markdown("---")
     for art, g in df_view.groupby('ART_KEY'):
         with st.expander(f"📦 {art} - {g['Articolo D'].iloc[0]} ({len(g)} ordini)"):
-            s_i = stock_raw.get(art, {'GIA': 0, 'ACQ': 0, 'PROD': 0})
+            s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
             st.markdown(f'<div class="debug-box"><span>📦 GIA: {int(s_i["GIA"])}</span><span>🚚 ACQ: {int(s_i["ACQ"])}</span><span>⚙️ PROD: {int(s_i["PROD"])}</span></div>', unsafe_allow_html=True)
             for _, r in g.iterrows():
                 tag = "📋 [PREV]" if r['Codice Documento'] == "OCA" else "🛒 [ORD]"
