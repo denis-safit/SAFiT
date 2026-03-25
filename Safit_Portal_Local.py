@@ -201,9 +201,47 @@ def render_vista_cliente(df_cli, stock_raw):
 
     # KPI cliente
     tot_qta   = int(df_cli['Qta Residua'].sum())
-    n_pronti  = int(df_cli[df_cli['ST'].isin(['DISPONIBILE','COPERTO BOM'])]['Qta Residua'].sum())
-    n_lavoro  = int(df_cli[df_cli['ST'].isin(['ACQUISTO','PRODUZIONE'])]['Qta Residua'].sum())
-    n_mancanti= int(df_cli[df_cli['ST'].isin(['MANCANTE','DA PIANIFICARE'])]['Qta Residua'].sum())
+    # Calcolo allocando la disponibilità (GIA/ACQ/PROD) sulle righe di ciascun articolo
+    # in ordine di consegna: così le quantità coperte "in parte" da GIA finiscono nei PRONTI.
+    pronti_gia = 0.0
+    in_acquisto = 0.0
+    in_produzione = 0.0
+    mancanti = 0.0
+    for art, g in df_cli.groupby('ART_KEY'):
+        s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
+        gia_left = float(s_i.get('GIA', 0))
+        acq_left = float(s_i.get('ACQ', 0))
+        prod_left = float(s_i.get('PROD', 0))
+        g_sorted = g.sort_values(by='DT_EXP') if 'DT_EXP' in g.columns else g
+        for _, r in g_sorted.iterrows():
+            q = float(r.get('Qta Residua', 0))
+            if q <= 0:
+                continue
+            # Prima copertura con GIA
+            take = min(gia_left, q)
+            pronti_gia += take
+            gia_left -= take
+            q -= take
+            if q <= 0:
+                continue
+            # Poi copertura con ACQ
+            take = min(acq_left, q)
+            in_acquisto += take
+            acq_left -= take
+            q -= take
+            if q <= 0:
+                continue
+            # Poi copertura con PROD
+            take = min(prod_left, q)
+            in_produzione += take
+            prod_left -= take
+            q -= take
+            if q > 0:
+                mancanti += q
+
+    n_pronti = int(round(pronti_gia))
+    n_lavoro = int(round(in_acquisto + in_produzione))
+    n_mancanti = int(round(mancanti))
     pct_pronto = round(n_pronti / tot_qta * 100) if tot_qta > 0 else 0
 
     k1, k2, k3, k4 = st.columns(4)
@@ -280,10 +318,6 @@ def render_vista_cliente(df_cli, stock_raw):
                 f"**Disponibile: {qta_pronta:,} / {qta_tot:,} pz**".replace(",","."),
             )
             st.markdown(pbar_html(pct_art, bar_col), unsafe_allow_html=True)
-
-            # Debug cliente: usa la stessa logica admin su `stock_raw`
-            # Usiamo `st.caption` invece di HTML per renderlo sempre visibile in UI.
-            st.caption(f"DEBUG stock -> GIA: {int(s_i['GIA'])} | ACQ: {int(s_i['ACQ'])} | PROD: {int(s_i['PROD'])}")
 
             # Righe ordine
             for _, r in g.iterrows():
