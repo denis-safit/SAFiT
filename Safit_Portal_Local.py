@@ -77,11 +77,17 @@ def load_and_process():
         stock_map = {}
         if not df_acc.empty:
             df_acc.columns = [str(c).strip().upper() for c in df_acc.columns]
+            # `PROD` deve rappresentare solo la produzione (non doppiare la parte di acquisto).
+            prod_cols = ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'TRF']
             for _, r in df_acc.iterrows():
                 art_code = str(r['CODICE']).strip().upper()
                 gia = clean_num(pd.Series([r.get('GIA', 0)])).iloc[0]
-                acq = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
-                prod = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'ACQ', 'TRF']])
+                # Se nel file coesistono entrambe le colonne, usiamo `INACQ` se valorizzata,
+                # altrimenti `ACQ` (fallback).
+                inacq_val = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
+                acq_val = clean_num(pd.Series([r.get('ACQ', 0)])).iloc[0]
+                acq = inacq_val if float(inacq_val) != 0 else acq_val
+                prod = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in prod_cols])
                 stock_map[art_code] = {'GIA': gia, 'ACQ': acq, 'PROD': prod, 'FIGLIO': str(r.get('FIGLIO', 'NAN'))}
 
         df_orders = df_arca.sort_values(by=[c_art, c_dat])
