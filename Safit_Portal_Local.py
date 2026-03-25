@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from io import BytesIO
 import plotly.express as px
+import re
 from bom_engine import get_coverage  
 
 # --- 1. CONFIGURAZIONE ---
@@ -50,9 +51,19 @@ def normalize_art_code(val):
     if val is None:
         return ''
     s = str(val)
-    # Rimuove NBSP e caratteri invisibili comuni (es. zero-width space).
-    s = s.replace('\xa0', '').replace('\u200b', '').replace('\ufeff', '')
-    return s.strip().upper()
+    # Rimuove NBSP e varianti di whitespace invisibili.
+    s = s.replace('\xa0', ' ').replace('\u202f', ' ').replace('\u2009', ' ')
+    # Rimuove caratteri invisibili/di controllo comuni (zero-width, BOM, joiners).
+    s = (
+        s.replace('\u200b', '')  # zero-width space
+         .replace('\u200c', '') # zero-width non-joiner
+         .replace('\u200d', '') # zero-width joiner
+         .replace('\u2060', '') # word joiner
+         .replace('\ufeff', '') # BOM
+    )
+    # Rimuove qualsiasi whitespace rimanente (anche unicode) e fa uppercase.
+    s = re.sub(r'\s+', '', s).strip()
+    return s.upper()
 
 def to_excel(df):
     output = BytesIO()
@@ -258,10 +269,8 @@ def render_vista_cliente(df_cli, stock_raw):
 
             # Debug cliente: usa la stessa logica admin su `stock_raw`
             s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
-            st.markdown(
-                f'<div class="debug-box"><span>📦 GIA: {int(s_i["GIA"])}</span><span>🚚 ACQ: {int(s_i["ACQ"])}</span><span>⚙️ PROD: {int(s_i["PROD"])}</span></div>',
-                unsafe_allow_html=True
-            )
+            # Usiamo `st.caption` invece di HTML per renderlo sempre visibile in UI.
+            st.caption(f"DEBUG stock -> GIA: {int(s_i['GIA'])} | ACQ: {int(s_i['ACQ'])} | PROD: {int(s_i['PROD'])}")
 
             # Righe ordine
             for _, r in g.iterrows():
