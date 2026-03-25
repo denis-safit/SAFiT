@@ -259,7 +259,21 @@ def render_vista_cliente(df_cli, stock_raw):
 
         with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pz".replace(",",".")):
             # Barra avanzamento articolo
-            qta_pronta = int(g[g['ST'].isin(['DISPONIBILE','COPERTO BOM'])]['Qta Residua'].sum())
+            # "Disponibile" per il cliente deve riflettere quanta parte della richiesta
+            # può essere coperta dalla sola GIACENZA (GIA), anche se la riga è classificata
+            # come "ACQUISTO" perché la GIA non è sufficiente a coprire tutto.
+            s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
+            gia_left = float(s_i.get('GIA', 0))
+            qta_pronta = 0.0
+            g_sorted = g.sort_values(by='DT_EXP') if 'DT_EXP' in g.columns else g
+            for _, r in g_sorted.iterrows():
+                q = float(r.get('Qta Residua', 0))
+                take = min(gia_left, q)
+                qta_pronta += take
+                gia_left -= take
+                if gia_left <= 0:
+                    break
+            qta_pronta = int(round(qta_pronta))
             pct_art    = round(qta_pronta / qta_tot * 100) if qta_tot > 0 else 0
             bar_col    = '#4caf50' if pct_art >= 100 else ('#fbc02d' if pct_art > 0 else '#f44336')
             st.markdown(
@@ -268,7 +282,6 @@ def render_vista_cliente(df_cli, stock_raw):
             st.markdown(pbar_html(pct_art, bar_col), unsafe_allow_html=True)
 
             # Debug cliente: usa la stessa logica admin su `stock_raw`
-            s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
             # Usiamo `st.caption` invece di HTML per renderlo sempre visibile in UI.
             st.caption(f"DEBUG stock -> GIA: {int(s_i['GIA'])} | ACQ: {int(s_i['ACQ'])} | PROD: {int(s_i['PROD'])}")
 
