@@ -250,10 +250,73 @@ def render_vista_cliente(df_cli, stock_raw):
     k3.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#2196f3">IN LAVORAZIONE</div><div class="kpi-val">{n_lavoro:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
     k4.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#f44336">DA PIANIFICARE</div><div class="kpi-val">{n_mancanti:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
 
-    # Grafico torta stato ordini cliente
-    df_cli_chart = df_cli.copy()
-    df_cli_chart['Stato Cliente'] = df_cli_chart['ST'].map(lambda x: LABEL_CLI.get(x, (x,'#aaa',''))[0])
-    df_torta = df_cli_chart.groupby('Stato Cliente')['Qta Residua'].sum().reset_index()
+    # Grafico torta stato ordini cliente (calcolato coerentemente con KPI/Disponibile)
+    # Nota: sommare direttamente per `ST` non è più corretto quando una riga è classificata
+    # come ACQUISTO/PRODUZIONE ma una parte è coperta da GIA.
+    label_key_by_st = {
+        'DISPONIBILE': 'Pronto per la spedizione',
+        'COPERTO BOM': 'Pronto (componente)',
+        'ACQUISTO': 'In arrivo a magazzino',
+        'PRODUZIONE': 'In lavorazione',
+        'MANCANTE': 'In pianificazione',
+        'DA PIANIFICARE': 'Da confermare',
+    }
+    # Accumulo per etichetta del grafico
+    qty_by_label = {k: 0.0 for k in label_key_by_st.values()}
+
+    for art, g in df_cli.groupby('ART_KEY'):
+        s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
+        gia_left = float(s_i.get('GIA', 0))
+        acq_left = float(s_i.get('ACQ', 0))
+        prod_left = float(s_i.get('PROD', 0))
+        g_sorted = g.sort_values(by='DT_EXP') if 'DT_EXP' in g.columns else g
+
+        for _, r in g_sorted.iterrows():
+            q = float(r.get('Qta Residua', 0))
+            if q <= 0:
+                continue
+
+            # Portion split: GIA -> PRONTI, poi ACQ -> IN ARRIVO, poi PROD -> IN LAVORAZIONE
+            take_gia = min(gia_left, q)
+            gia_left -= take_gia
+            q_rem = q - take_gia
+
+            if take_gia > 0:
+                gia_label = 'Pronto (componente)' if str(r.get('ST', '')).strip().upper() == 'COPERTO BOM' else 'Pronto per la spedizione'
+                qty_by_label[gia_label] += take_gia
+
+            if q_rem <= 0:
+                continue
+
+            take_acq = min(acq_left, q_rem)
+            acq_left -= take_acq
+            q_rem -= take_acq
+            if take_acq > 0:
+                qty_by_label['In arrivo a magazzino'] += take_acq
+
+            if q_rem <= 0:
+                continue
+
+            take_prod = min(prod_left, q_rem)
+            prod_left -= take_prod
+            q_rem -= take_prod
+            if take_prod > 0:
+                qty_by_label['In lavorazione'] += take_prod
+
+            # Resto scoperto: usiamo lo stato originale (MANCANTE/DA PIANIFICARE)
+            if q_rem > 0:
+                st_line = str(r.get('ST', '')).strip().upper()
+                if st_line == 'DA PIANIFICARE':
+                    qty_by_label['Da confermare'] += q_rem
+                else:
+                    qty_by_label['In pianificazione'] += q_rem
+
+    df_torta = (
+        pd.DataFrame(
+            [{'Stato Cliente': k, 'Qta Residua': int(round(v))} for k, v in qty_by_label.items() if v > 0]
+        )
+        .sort_values('Qta Residua', ascending=False)
+    )
     col_t, col_info = st.columns([1, 1])
     with col_t:
         fig_cli = px.pie(df_torta, values='Qta Residua', names='Stato Cliente',
@@ -382,12 +445,95 @@ if not df_res.empty:
                                file_name=f"Safit_Report_{datetime.now().strftime('%d%m')}.xlsx",
                                use_container_width=True)
 
+    # ===========================================================
+    # VISTA ADMIN: calcoli coerenti con la vista cliente
+    # (allocazione PRONTI/ACQUISTO/PRODUZIONE basata su `stock_raw`)
+    # ===========================================================
+    def allocate_admin_states(df_in, stock_raw_in):
+        qty_by_st = {
+            'DISPONIBILE': 0.0,
+            'COPERTO BOM': 0.0,
+            'ACQUISTO': 0.0,
+            'PRODUZIONE': 0.0,
+            'MANCANTE': 0.0,
+            'DA PIANIFICARE': 0.0,
+        }
+
+        for art, g in df_in.groupby('ART_KEY'):
+            s_i = stock_raw_in.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0, 'FIGLIO': 'NAN'})
+            gia_left = float(s_i.get('GIA', 0))
+            acq_left = float(s_i.get('ACQ', 0))
+            prod_left = float(s_i.get('PROD', 0))
+
+            figlio_code = str(s_i.get('FIGLIO', 'NAN')).strip().upper()
+            figlio_gia_left = 0.0
+            if figlio_code and figlio_code != 'NAN':
+                figlio_gia_left = float(stock_raw_in.get(figlio_code, {}).get('GIA', 0))
+
+            g_sorted = g.sort_values(by='DT_EXP') if 'DT_EXP' in g.columns else g
+            for _, r in g_sorted.iterrows():
+                q = float(r.get('Qta Residua', 0))
+                if q <= 0:
+                    continue
+
+                st_line = str(r.get('ST', '')).strip().upper()
+
+                # Manteniamo la classificazione "full cover" del motore per DISPONIBILE/COPERTO BOM
+                if st_line == 'DISPONIBILE':
+                    qty_by_st['DISPONIBILE'] += q
+                    gia_left = max(gia_left - q, 0.0)
+                    continue
+                if st_line == 'COPERTO BOM':
+                    qty_by_st['COPERTO BOM'] += q
+                    if figlio_code and figlio_code != 'NAN':
+                        figlio_gia_left = max(figlio_gia_left - q, 0.0)
+                    continue
+
+                # Altrimenti splittiamo: GIA -> DISPONIBILE, poi ACQ -> ACQUISTO, poi PROD -> PRODUZIONE
+                take_gia = min(gia_left, q)
+                qty_by_st['DISPONIBILE'] += take_gia
+                gia_left -= take_gia
+                q_rem = q - take_gia
+
+                if q_rem <= 0:
+                    continue
+
+                take_acq = min(acq_left, q_rem)
+                qty_by_st['ACQUISTO'] += take_acq
+                acq_left -= take_acq
+                q_rem -= take_acq
+
+                if q_rem <= 0:
+                    continue
+
+                take_prod = min(prod_left, q_rem)
+                qty_by_st['PRODUZIONE'] += take_prod
+                prod_left -= take_prod
+                q_rem -= take_prod
+
+                if q_rem <= 0:
+                    continue
+
+                # Resto scoperto: usiamo lo stato originale (MANCANTE/DA PIANIFICARE)
+                if st_line == 'DA PIANIFICARE':
+                    qty_by_st['DA PIANIFICARE'] += q_rem
+                else:
+                    qty_by_st['MANCANTE'] += q_rem
+
+        return qty_by_st
+
+    alloc_admin = allocate_admin_states(df_f, stock_raw)
+    n_pronti_admin = int(round(alloc_admin['DISPONIBILE']))
+    n_bom_admin = int(round(alloc_admin['COPERTO BOM']))
+    n_mancanti_admin = int(round(alloc_admin['MANCANTE']))
+    # ===========================================================
+
     st.title("Pannello Controllo Safit")
     k1, k2, k3, k4 = st.columns(4)
     k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">FILTRATI</div><div class="kpi-val">{int(df_f["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
-    k2.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#4caf50">PRONTI (GIA)</div><div class="kpi-val">{int(df_f[df_f["ST"]=="DISPONIBILE"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
-    k3.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#9c27b0">BOM (FIGLI)</div><div class="kpi-val">{int(df_f[df_f["ST"]=="COPERTO BOM"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
-    k4.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#f44336">MANCANTI</div><div class="kpi-val">{int(df_f[df_f["ST"]=="MANCANTE"]["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
+    k2.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#4caf50">PRONTI (GIA)</div><div class="kpi-val">{n_pronti_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
+    k3.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#9c27b0">BOM (FIGLI)</div><div class="kpi-val">{n_bom_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
+    k4.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#f44336">MANCANTI</div><div class="kpi-val">{n_mancanti_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
 
     df_f = df_f.copy()
     df_f['Famiglia'] = df_f['Articolo D'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
@@ -399,8 +545,14 @@ if not df_res.empty:
     if 'filtro_famiglie' not in st.session_state: st.session_state.filtro_famiglie = []
 
     df_fam_chart   = df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
-    df_stato_chart = df_f.groupby('ST')['Qta Residua'].sum().sort_values(ascending=False).reset_index()
-    stati_disponibili    = df_stato_chart['ST'].tolist()
+    df_stato_chart = (
+        pd.DataFrame(
+            [{'ST': k, 'Qta Residua': int(round(v))} for k, v in alloc_admin.items()]
+        )
+        .sort_values('Qta Residua', ascending=False)
+        .reset_index(drop=True)
+    )
+    stati_disponibili = df_stato_chart[df_stato_chart['Qta Residua'] > 0]['ST'].tolist()
     famiglie_disponibili = df_fam_chart['Famiglia'].tolist()
 
     st.markdown("""<style>
