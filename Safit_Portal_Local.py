@@ -116,8 +116,18 @@ def load_and_process():
                 inacq_val = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
                 acq_val = clean_num(pd.Series([r.get('ACQ', 0)])).iloc[0]
                 acq = inacq_val if float(inacq_val) != 0 else acq_val
-                prod = sum([clean_num(pd.Series([r.get(f, 0)])).iloc[0] for f in prod_cols])
-                stock_map[art_code] = {'GIA': gia, 'ACQ': acq, 'PROD': prod, 'FIGLIO': str(r.get('FIGLIO', 'NAN'))}
+                # Componenti produzione: servono anche per export (es. GRZ).
+                prod_components = {}
+                for f in prod_cols:
+                    prod_components[f] = clean_num(pd.Series([r.get(f, 0)])).iloc[0]
+                prod = sum(prod_components.values())
+                stock_map[art_code] = {
+                    'GIA': gia,
+                    'ACQ': acq,
+                    'PROD': prod,
+                    'FIGLIO': str(r.get('FIGLIO', 'NAN')),
+                    **prod_components,
+                }
 
         df_orders = df_arca.sort_values(by=[c_art, c_dat])
         final_results = []
@@ -626,9 +636,99 @@ if not df_res.empty:
 
     # Download Excel: include TUTTI i campi del dataset filtrato in base
     # alle selezioni attive (famiglie/stati) che l'utente vede a schermo.
+    # Arricchimento export: per ogni riga d'ordine aggiungiamo disponibilita`
+    # e quantita` coperte (GIA/ACQ/GRZ + BOM) basandoci su `stock_raw` e sullo stato riga.
+    prod_cols_export = ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'TRF']
+    df_export = df_view.copy()
+
+    # Pre-crea colonne per evitare KeyError su DataFrame
+    for col in ['FIGLIO', 'GIA', 'ACQ', 'PROD', 'DISP_BOM_GIA']:
+        if col not in df_export.columns:
+            df_export[col] = 0.0
+    for f in prod_cols_export:
+        if f not in df_export.columns:
+            df_export[f] = 0.0
+
+    for col in [
+        'COP_GIA', 'COP_ACQ', 'COP_PROD', 'COP_BOM',
+        'COP_GRZ', 'MANCANTE_QTA',
+    ]:
+        if col not in df_export.columns:
+            df_export[col] = 0.0
+
+    for i, row in df_export.iterrows():
+        art = row.get('ART_KEY', '')
+        art_n = normalize_art_code(art)
+        q = float(row.get('Qta Residua', 0) or 0)
+        s = stock_raw.get(art_n, {'GIA': 0.0, 'ACQ': 0.0, 'PROD': 0.0, 'FIGLIO': 'NAN'})
+        figlio_code = normalize_art_code(s.get('FIGLIO', 'NAN'))
+        figlio_code = figlio_code if figlio_code and figlio_code != 'NAN' else ''
+        s_figlio = stock_raw.get(figlio_code, {}) if figlio_code else {}
+
+        gia_disp = float(s.get('GIA', 0) or 0)
+        acq_disp = float(s.get('ACQ', 0) or 0)
+        prod_disp = float(s.get('PROD', 0) or 0)
+        df_export.at[i, 'GIA'] = gia_disp
+        df_export.at[i, 'ACQ'] = acq_disp
+        df_export.at[i, 'PROD'] = prod_disp
+        df_export.at[i, 'FIGLIO'] = s.get('FIGLIO', 'NAN')
+        df_export.at[i, 'DISP_BOM_GIA'] = float(s_figlio.get('GIA', 0) or 0)
+        for f in prod_cols_export:
+            df_export.at[i, f] = float(s.get(f, 0) or 0)
+
+        st_line = str(row.get('ST', '')).strip().upper()
+        cop_gia = 0.0
+        cop_acq = 0.0
+        cop_prod = 0.0
+        cop_bom = 0.0
+        cop_grz = 0.0
+        manc = 0.0
+
+        if q <= 0:
+            manc = 0.0
+        elif st_line == 'DISPONIBILE':
+            cop_gia = min(gia_disp, q)
+            manc = q - cop_gia
+        elif st_line == 'COPERTO BOM':
+            cop_bom = q
+        else:
+            # Splitting per ordine: GIA -> ACQ -> PROD (con breakdown su componenti in ordine elenco)
+            q_rem = q
+            take_gia = min(gia_disp, q_rem)
+            cop_gia = take_gia
+            q_rem -= take_gia
+
+            take_acq = min(acq_disp, q_rem)
+            cop_acq = take_acq
+            q_rem -= take_acq
+
+            take_prod = min(prod_disp, q_rem)
+            cop_prod = take_prod
+            q_rem -= take_prod
+
+            # Breakdown PROD su componenti (utile per vedere GRZ)
+            prod_left = cop_prod
+            for f in prod_cols_export:
+                if prod_left <= 0:
+                    break
+                avail = float(s.get(f, 0) or 0)
+                take_f = min(avail, prod_left)
+                if f == 'GRZ':
+                    cop_grz += take_f
+                prod_left -= take_f
+
+            manc = q_rem
+
+        df_export.at[i, 'COP_GIA'] = cop_gia
+        df_export.at[i, 'COP_ACQ'] = cop_acq
+        df_export.at[i, 'COP_PROD'] = cop_prod
+        df_export.at[i, 'COP_BOM'] = cop_bom
+        df_export.at[i, 'COP_GRZ'] = cop_grz
+        df_export.at[i, 'MANCANTE_QTA'] = manc
+
     st.sidebar.download_button(
-        "📊 Esporta Report (filtri attivi, completo)",
-        data=to_excel_full(df_view),
+        "📊 Esporta Report (filtri attivi, completo + stock)",
+        data=to_excel_full(df_export),
         file_name=f"Safit_Report_{datetime.now().strftime('%d%m')}.xlsx",
         use_container_width=True,
     )
