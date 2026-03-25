@@ -71,6 +71,13 @@ def to_excel(df):
         df.drop(columns=['CS', 'DT_EXP', 'ART_KEY', 'ST'], errors='ignore').to_excel(writer, index=False)
     return output.getvalue()
 
+def to_excel_full(df):
+    """Esporta l'intero DataFrame senza scartare colonne (export 'completo')."""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False)
+    return output.getvalue()
+
 def smart_load(filename, key_col):
     if not os.path.exists(filename): return pd.DataFrame()
     df_p = pd.read_excel(filename, header=None, nrows=20)
@@ -441,9 +448,8 @@ if not df_res.empty:
     # ===========================================================
     # VISTA ADMIN (tutto il pannello originale)
     # ===========================================================
-    st.sidebar.download_button("📊 Esporta Report", data=to_excel(df_f),
-                               file_name=f"Safit_Report_{datetime.now().strftime('%d%m')}.xlsx",
-                               use_container_width=True)
+    # Nota: il download/export lo impostiamo più avanti usando `df_view`,
+    # così rispetta anche i filtri selezionati per stato/famiglia.
 
     # ===========================================================
     # VISTA ADMIN: calcoli coerenti con la vista cliente
@@ -617,6 +623,15 @@ if not df_res.empty:
         df_view = df_view[df_view['Famiglia'].isin(st.session_state.filtro_famiglie)]
     if st.session_state.filtro_stati:
         df_view = df_view[df_view['ST'].isin(st.session_state.filtro_stati)]
+
+    # Download Excel: include TUTTI i campi del dataset filtrato in base
+    # alle selezioni attive (famiglie/stati) che l'utente vede a schermo.
+    st.sidebar.download_button(
+        "📊 Esporta Report (filtri attivi, completo)",
+        data=to_excel_full(df_view),
+        file_name=f"Safit_Report_{datetime.now().strftime('%d%m')}.xlsx",
+        use_container_width=True,
+    )
 
     filtri_attivi = []
     if st.session_state.filtro_famiglie: filtri_attivi.append(f"Famiglie: **{', '.join(st.session_state.filtro_famiglie)}**")
