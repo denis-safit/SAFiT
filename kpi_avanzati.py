@@ -34,21 +34,25 @@ KPI_CSS = """
     border:1px solid #e3e8f0; border-left:4px solid #1f77b4;
     padding:14px 16px; border-radius:10px; margin-bottom:6px;
     box-shadow:0 2px 6px rgba(0,0,0,0.05);
+    color:#1a1a2e !important;
 }
+.kpi-adv * { color:#1a1a2e !important; }
 .kpi-adv.g { border-left-color:#4caf50; }
 .kpi-adv.o { border-left-color:#ff9800; }
 .kpi-adv.r { border-left-color:#f44336; }
 .kpi-adv.p { border-left-color:#9c27b0; }
-.kpi-adv-t { font-size:10px; color:#999; text-transform:uppercase;
+.kpi-adv-t { font-size:10px; color:#888 !important; text-transform:uppercase;
              letter-spacing:.5px; margin-bottom:3px; }
-.kpi-adv-v { font-size:26px; font-weight:700; color:#1a1a2e; line-height:1; }
-.kpi-adv-s { font-size:11px; color:#777; margin-top:3px; }
-.sec-h { font-size:16px; font-weight:700; color:#1a1a2e;
+.kpi-adv-v { font-size:26px; font-weight:700; color:#1a1a2e !important; line-height:1; }
+.kpi-adv-s { font-size:11px; color:#555 !important; margin-top:3px; }
+.sec-h { font-size:16px; font-weight:700; color:#1a1a2e !important;
          border-bottom:2px solid #e3e8f0; padding-bottom:5px;
          margin:20px 0 12px 0; }
 .alert-box { background:#fff8e1; border-left:4px solid #ff9800;
              padding:10px 14px; border-radius:6px; margin:6px 0;
-             font-size:13px; }
+             font-size:13px; color:#1a1a1a !important; }
+.alert-box b { color:#1a1a1a !important; }
+.alert-box * { color:#1a1a1a !important; }
 </style>
 """
 
@@ -477,15 +481,20 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None):
                 values='N_Ordini', aggfunc='sum', fill_value=0
             )
             if pivot.shape[0] > 1 and pivot.shape[1] > 1:
+                # Ordina clienti (righe) per totale decrescente — top 15
                 top_cli = pivot.sum(axis=1).sort_values(ascending=False).head(15).index
                 pivot = pivot.loc[top_cli]
+                # Ordina famiglie (colonne) per totale decrescente
+                top_fam = pivot.sum(axis=0).sort_values(ascending=False).index
+                pivot = pivot[top_fam]
                 fig_heat = px.imshow(
                     pivot,
                     labels=dict(x="Famiglia", y="Cliente", color="N° Ordini"),
                     color_continuous_scale="Blues", aspect="auto",
-                    title="N° Ordini per Cliente × Famiglia"
+                    title="N° Ordini per Cliente × Famiglia (ordinati per volume)"
                 )
                 fig_heat.update_layout(height=420, margin=dict(t=40,b=0,l=0,r=0))
+                fig_heat.update_xaxes(tickangle=-35)
                 st.plotly_chart(fig_heat, use_container_width=True)
 
             # Alert: articoli vicini al prossimo riordino atteso (±14 gg)
@@ -512,6 +521,68 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None):
                             f'</div>',
                             unsafe_allow_html=True
                         )
+
+            # ── Export solleciti raggruppati per cliente / famiglia ─────────
+            if not df_prossimi.empty:
+                df_sol = df_prossimi.copy()
+
+                # Formattazione date leggibili
+                df_sol['Ultimo_Ordine_fmt'] = pd.to_datetime(
+                    df_sol['Ultimo_Ordine'], errors='coerce'
+                ).dt.strftime('%d/%m/%Y')
+                df_sol['Riordino_Atteso'] = df_sol.apply(
+                    lambda r: f"tra {int(r['Giorni_Al_Riordino'])} gg"
+                    if r['Giorni_Al_Riordino'] >= 0
+                    else f"in ritardo di {abs(int(r['Giorni_Al_Riordino']))} gg",
+                    axis=1
+                )
+
+                # Colonne pulite per export
+                df_export_sol = df_sol[[
+                    'Cliente', 'Famiglia', 'Articolo C', 'Articolo D',
+                    'N_Ordini', 'Qta_Totale', 'Intervallo_Medio_gg',
+                    'Ultimo_Ordine_fmt', 'Giorni_Da_Ultimo', 'Riordino_Atteso'
+                ]].rename(columns={
+                    'Articolo C':          'Codice Articolo',
+                    'Articolo D':          'Descrizione',
+                    'N_Ordini':            'N° Ordini Storici',
+                    'Qta_Totale':          'Qta Totale Storica',
+                    'Intervallo_Medio_gg': 'Intervallo Medio (gg)',
+                    'Ultimo_Ordine_fmt':   'Ultimo Ordine',
+                    'Giorni_Da_Ultimo':    'Giorni Da Ultimo Ordine',
+                    'Riordino_Atteso':     'Riordino Atteso',
+                }).sort_values(['Cliente', 'Famiglia', 'Riordino_Atteso'])
+
+                # Foglio riepilogo per cliente
+                df_riepilogo = df_export_sol.groupby(['Cliente', 'Famiglia']).agg(
+                    N_Articoli=('Codice Articolo', 'count'),
+                    Qta_Totale_Storica=('Qta Totale Storica', 'sum'),
+                ).reset_index().sort_values(['Cliente', 'N_Articoli'], ascending=[True, False])
+
+                buf_sol = BytesIO()
+                with pd.ExcelWriter(buf_sol, engine='xlsxwriter') as w:
+                    # Foglio 1: dettaglio articolo per articolo
+                    df_export_sol.to_excel(w, sheet_name='Dettaglio_Articoli', index=False)
+                    # Foglio 2: riepilogo per cliente/famiglia
+                    df_riepilogo.to_excel(w, sheet_name='Riepilogo_Cliente_Famiglia', index=False)
+                    # Formattazione base
+                    wb = w.book
+                    fmt_header = wb.add_format({'bold': True, 'bg_color': '#1F4E79',
+                                                'font_color': 'white', 'border': 1})
+                    fmt_red    = wb.add_format({'bg_color': '#FFCCCC', 'border': 1})
+                    fmt_green  = wb.add_format({'bg_color': '#CCFFCC', 'border': 1})
+                    for sheet_name in ['Dettaglio_Articoli', 'Riepilogo_Cliente_Famiglia']:
+                        ws = w.sheets[sheet_name]
+                        ws.set_column(0, 10, 22)
+
+                st.download_button(
+                    label=f"📥 Esporta Solleciti ({len(df_export_sol)} articoli) — raggruppati per Cliente/Famiglia",
+                    data=buf_sol.getvalue(),
+                    file_name=f"Solleciti_Riordino_{datetime.now().strftime('%d%m%Y')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key=f"btn_solleciti_{_key_suffix}"
+                )
 
             with st.expander("📋 Dettaglio frequenza riordino"):
                 show_r = df_riord.copy()
