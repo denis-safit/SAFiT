@@ -166,6 +166,7 @@ def calcola_frequenza_riordino(df_ordini):
             intervallo = round(float(np.mean(delta)), 1)
 
         ultimo = max(date_ordini) if date_ordini else pd.NaT
+        qta_media = round(g['Qta Doc'].mean(), 0) if len(g) > 0 else 0
         risultati.append({
             'Articolo C':          art,
             'Articolo D':          g['Articolo D'].iloc[0],
@@ -174,6 +175,7 @@ def calcola_frequenza_riordino(df_ordini):
             'Cod_Cliente':         g['Cod_Cliente'].iloc[0],
             'N_Ordini':            len(date_ordini),
             'Qta_Totale':          g['Qta Doc'].sum(),
+            'Qta_Media_Ordine':    qta_media,
             'Intervallo_Medio_gg': intervallo,
             'Ultimo_Ordine':       ultimo,
             'Giorni_Da_Ultimo':    (datetime.now() - ultimo).days if pd.notnull(ultimo) else None,
@@ -471,9 +473,10 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None):
                 art_top = df_con_int.sort_values('N_Ordini', ascending=False).iloc[0]
                 kpi_card(r2, "Intervallo medio globale",
                          f"{media_g} gg", "tra riordini consecutivi")
+                qta_m = int(art_top['Qta_Media_Ordine']) if 'Qta_Media_Ordine' in art_top else 0
                 kpi_card(r3, "Articolo più riordinato",
                          art_top['Articolo C'],
-                         f"{int(art_top['N_Ordini'])} ordini — {art_top['Cliente'][:25]}", "p")
+                         f"{int(art_top['N_Ordini'])} ordini | ~{qta_m:,} pz/ordine — {art_top['Cliente'][:20]}".replace(",","."), "p")
 
             # Heatmap clienti × famiglie
             pivot = df_riord.pivot_table(
@@ -514,10 +517,12 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None):
                         ico  = "🟢" if gg_r > 0 else "🔴"
                         txt  = f"tra **{gg_r} gg**" if gg_r >= 0 else f"**in ritardo di {abs(gg_r)} gg**"
                         ult  = r['Ultimo_Ordine'].strftime('%d/%m/%Y') if pd.notnull(r['Ultimo_Ordine']) else 'N/D'
+                        qta_att = int(r['Qta_Media_Ordine']) if 'Qta_Media_Ordine' in r else 0
                         st.markdown(
                             f'<div class="alert-box">{ico} <b>{r["Articolo C"]}</b> — '
                             f'{r["Cliente"]} | Atteso {txt} | '
-                            f'Ultimo ordine: {ult} | Intervallo medio: {r["Intervallo_Medio_gg"]} gg'
+                            f'Qta stimata: <b>~{qta_att:,} pz</b> | '.replace(",",".")
+                            + f'Ultimo ordine: {ult} | Intervallo medio: {r["Intervallo_Medio_gg"]} gg'
                             f'</div>',
                             unsafe_allow_html=True
                         )
@@ -540,13 +545,16 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None):
                 # Colonne pulite per export — ordina per cliente, famiglia, giorni (numerico)
                 df_export_sol = df_sol[[
                     'Cliente', 'Famiglia', 'Articolo C', 'Articolo D',
-                    'N_Ordini', 'Qta_Totale', 'Intervallo_Medio_gg',
+                    'N_Ordini', 'Qta_Totale', 'Qta_Media_Ordine', 'Intervallo_Medio_gg',
                     'Ultimo_Ordine_fmt', 'Giorni_Da_Ultimo', 'Giorni_Al_Riordino', 'Riordino_Atteso'
-                ]].sort_values(['Cliente', 'Famiglia', 'Giorni_Al_Riordino']).rename(columns={
+                ]].sort_values(
+                    ['Cliente', 'Giorni_Al_Riordino']   # ordinato per cliente poi urgenza
+                ).rename(columns={
                     'Articolo C':           'Codice Articolo',
                     'Articolo D':           'Descrizione',
                     'N_Ordini':             'N° Ordini Storici',
                     'Qta_Totale':           'Qta Totale Storica',
+                    'Qta_Media_Ordine':     'Qta Stimata Prossimo Ordine',
                     'Intervallo_Medio_gg':  'Intervallo Medio (gg)',
                     'Ultimo_Ordine_fmt':    'Ultimo Ordine',
                     'Giorni_Da_Ultimo':     'Giorni Da Ultimo Ordine',
@@ -554,27 +562,23 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None):
                     'Riordino_Atteso':      'Riordino Atteso',
                 })
 
-                # Foglio riepilogo per cliente
-                df_riepilogo = df_export_sol.groupby(['Cliente', 'Famiglia']).agg(
-                    N_Articoli=('Codice Articolo', 'count'),
-                    Qta_Totale_Storica=('Qta Totale Storica', 'sum'),
-                ).reset_index().sort_values(['Cliente', 'N_Articoli'], ascending=[True, False])
-
                 buf_sol = BytesIO()
                 with pd.ExcelWriter(buf_sol, engine='xlsxwriter') as w:
-                    # Foglio 1: dettaglio articolo per articolo
-                    df_export_sol.to_excel(w, sheet_name='Dettaglio_Articoli', index=False)
-                    # Foglio 2: riepilogo per cliente/famiglia
-                    df_riepilogo.to_excel(w, sheet_name='Riepilogo_Cliente_Famiglia', index=False)
-                    # Formattazione base
+                    df_export_sol.to_excel(w, sheet_name='Solleciti_Riordino', index=False)
                     wb = w.book
-                    fmt_header = wb.add_format({'bold': True, 'bg_color': '#1F4E79',
-                                                'font_color': 'white', 'border': 1})
-                    fmt_red    = wb.add_format({'bg_color': '#FFCCCC', 'border': 1})
-                    fmt_green  = wb.add_format({'bg_color': '#CCFFCC', 'border': 1})
-                    for sheet_name in ['Dettaglio_Articoli', 'Riepilogo_Cliente_Famiglia']:
-                        ws = w.sheets[sheet_name]
-                        ws.set_column(0, 10, 22)
+                    ws = w.sheets['Solleciti_Riordino']
+                    ws.set_column(0, 11, 24)
+                    # Header blu
+                    fmt_h = wb.add_format({'bold': True, 'bg_color': '#1F4E79',
+                                           'font_color': 'white', 'border': 1})
+                    for col_num, col_name in enumerate(df_export_sol.columns):
+                        ws.write(0, col_num, col_name, fmt_h)
+                    # Righe in ritardo in rosso chiaro
+                    fmt_red = wb.add_format({'bg_color': '#FFCCCC'})
+                    for row_num in range(1, len(df_export_sol) + 1):
+                        gg_val = df_export_sol.iloc[row_num-1].get('Giorni Al Riordino', 0)
+                        if pd.notnull(gg_val) and float(gg_val) < 0:
+                            ws.set_row(row_num, None, fmt_red)
 
                 st.download_button(
                     label=f"📥 Esporta Solleciti ({len(df_export_sol)} articoli) — raggruppati per Cliente/Famiglia",
