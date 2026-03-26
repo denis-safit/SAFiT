@@ -268,9 +268,13 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None):
         df_dvf = get_dvf(df_all)
 
         # Filtro cliente pre-applicato (da vista cliente o selezione admin)
+        # Il valore dalla sidebar ha formato "C000744 - SPIRALE SRL"
+        # Il campo Cliente nel file storico ha solo "SPIRALE SRL"
+        # → estraiamo solo la parte dopo " - " se presente
         if filtro_cliente:
-            df_oci = df_oci[df_oci['Cliente'].str.contains(filtro_cliente, case=False, na=False)]
-            df_dvf = df_dvf[df_dvf['Cliente'].str.contains(filtro_cliente, case=False, na=False)]
+            nome_cli = filtro_cliente.split(' - ', 1)[-1].strip() if ' - ' in filtro_cliente else filtro_cliente.strip()
+            df_oci = df_oci[df_oci['Cliente'].str.contains(nome_cli, case=False, na=False, regex=False)]
+            df_dvf = df_dvf[df_dvf['Cliente'].str.contains(nome_cli, case=False, na=False, regex=False)]
 
         st.caption(
             f"📁 Storico caricato: **{len(df_all):,}** righe totali | "
