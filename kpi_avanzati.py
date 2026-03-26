@@ -537,21 +537,22 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None):
                     axis=1
                 )
 
-                # Colonne pulite per export
+                # Colonne pulite per export — ordina per cliente, famiglia, giorni (numerico)
                 df_export_sol = df_sol[[
                     'Cliente', 'Famiglia', 'Articolo C', 'Articolo D',
                     'N_Ordini', 'Qta_Totale', 'Intervallo_Medio_gg',
-                    'Ultimo_Ordine_fmt', 'Giorni_Da_Ultimo', 'Riordino_Atteso'
-                ]].rename(columns={
-                    'Articolo C':          'Codice Articolo',
-                    'Articolo D':          'Descrizione',
-                    'N_Ordini':            'N° Ordini Storici',
-                    'Qta_Totale':          'Qta Totale Storica',
-                    'Intervallo_Medio_gg': 'Intervallo Medio (gg)',
-                    'Ultimo_Ordine_fmt':   'Ultimo Ordine',
-                    'Giorni_Da_Ultimo':    'Giorni Da Ultimo Ordine',
-                    'Riordino_Atteso':     'Riordino Atteso',
-                }).sort_values(['Cliente', 'Famiglia', 'Riordino_Atteso'])
+                    'Ultimo_Ordine_fmt', 'Giorni_Da_Ultimo', 'Giorni_Al_Riordino', 'Riordino_Atteso'
+                ]].sort_values(['Cliente', 'Famiglia', 'Giorni_Al_Riordino']).rename(columns={
+                    'Articolo C':           'Codice Articolo',
+                    'Articolo D':           'Descrizione',
+                    'N_Ordini':             'N° Ordini Storici',
+                    'Qta_Totale':           'Qta Totale Storica',
+                    'Intervallo_Medio_gg':  'Intervallo Medio (gg)',
+                    'Ultimo_Ordine_fmt':    'Ultimo Ordine',
+                    'Giorni_Da_Ultimo':     'Giorni Da Ultimo Ordine',
+                    'Giorni_Al_Riordino':   'Giorni Al Riordino',
+                    'Riordino_Atteso':      'Riordino Atteso',
+                })
 
                 # Foglio riepilogo per cliente
                 df_riepilogo = df_export_sol.groupby(['Cliente', 'Famiglia']).agg(
