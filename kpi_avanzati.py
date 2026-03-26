@@ -24,7 +24,9 @@ from io import BytesIO
 import os
 
 # ── Percorso file storico ARCA ────────────────────────────────────────────────
-PATH_STORICO = "righe_ordini_storico_con_date.xlsx"
+import os
+_DIR = os.path.dirname(os.path.abspath(__file__))
+PATH_STORICO = os.path.join(_DIR, "righe_ordini_storico_con_date.xlsx")
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 KPI_CSS = """
