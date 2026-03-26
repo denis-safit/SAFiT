@@ -153,7 +153,7 @@ def load_and_process():
             if row[c_tipo] == 'OCA' and stato == "MANCANTE": stato, colore = "DA PIANIFICARE", "oca-row"
             
             res = row.to_dict()
-            res.update({'ST': stato, 'CS': colore, 'ART_KEY': art_code, 'DT_EXP': row[c_dat], 'CLI_NAME': str(row[c_cli])})
+            res.update({'ST': stato, 'CS': colore, 'ART_KEY': art_code, 'DT_EXP': row[c_dat], 'CLI_NAME': str(row[c_cli]), 'DATA_ORD': pd.to_datetime(row.get('Data', None), errors='coerce')})
             final_results.append(res)
                 
         return pd.DataFrame(final_results), stock_map
@@ -206,6 +206,78 @@ def pbar_html(pct, color):
         '</div>'
         '<div style="font-size:10px;color:#555;text-align:right;margin-top:-6px;">' + outside + '</div>'
     )
+
+def tbar_html(data_ordine, data_consegna, oggi=None):
+    """
+    Barra temporale: mostra il progresso tra data ordine e data consegna.
+    Verde = tempo trascorso, grigio = tempo rimanente, rosso = ritardo.
+    """
+    if oggi is None:
+        oggi = datetime.now()
+
+    # Gestione tipi
+    try:
+        d_ord  = pd.Timestamp(data_ordine)
+        d_cons = pd.Timestamp(data_consegna)
+        d_oggi = pd.Timestamp(oggi)
+    except Exception:
+        return ""
+
+    if pd.isnull(d_ord) or pd.isnull(d_cons):
+        return ""
+
+    durata_tot = (d_cons - d_ord).days
+    if durata_tot <= 0:
+        durata_tot = 1
+
+    giorni_passati  = (d_oggi - d_ord).days
+    giorni_mancanti = (d_cons - d_oggi).days
+
+    in_ritardo = d_oggi > d_cons
+
+    if in_ritardo:
+        # Tutta la barra è rossa + overflow
+        ritardo_gg = (d_oggi - d_cons).days
+        pct_verde  = 100
+        colore_barra = "#f44336"
+        label_stato  = f'<span style="color:#f44336;font-weight:700;font-size:11px;">⚠️ In ritardo di {ritardo_gg} giorni</span>'
+    else:
+        pct_verde    = min(round(giorni_passati / durata_tot * 100), 100)
+        colore_barra = "#4caf50" if pct_verde < 85 else "#ff9800"
+        label_stato  = f'<span style="color:#4caf50;font-size:11px;">✅ Mancano <b>{giorni_mancanti}</b> giorni</span>'
+
+    str_ord  = d_ord.strftime("%d/%m/%y")
+    str_cons = d_cons.strftime("%d/%m/%y")
+    str_oggi = d_oggi.strftime("%d/%m/%y")
+
+    # Marcatore "oggi" sulla barra
+    marker_pct = min(max(pct_verde, 0), 98)
+
+    return f"""
+<div style="margin:6px 0 10px 0;">
+  <div style="display:flex;justify-content:space-between;font-size:10px;
+              color:#888;margin-bottom:3px;">
+    <span>📋 Ordine: <b style="color:#333;">{str_ord}</b></span>
+    <span>{label_stato}</span>
+    <span>🎯 Consegna: <b style="color:#333;">{str_cons}</b></span>
+  </div>
+  <div style="position:relative;background:#e9ecef;border-radius:20px;
+              height:18px;width:100%;overflow:visible;">
+    <div style="width:{pct_verde}%;background:{colore_barra};height:100%;
+                border-radius:20px;transition:width .3s;"></div>
+    <div style="position:absolute;top:-3px;left:{marker_pct}%;
+                transform:translateX(-50%);width:6px;height:24px;
+                background:#1a1a2e;border-radius:3px;opacity:.7;"
+         title="Oggi: {str_oggi}"></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;
+              font-size:10px;color:#aaa;margin-top:3px;">
+    <span>Inizio</span>
+    <span style="color:#555;">Oggi: {str_oggi}</span>
+    <span>Scadenza</span>
+  </div>
+</div>
+"""
 
 def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
     """Vista pulita per il cliente — nessun dato interno visibile."""
@@ -403,6 +475,14 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
                 f"**Disponibile: {qta_pronta:,} / {qta_tot:,} pz**".replace(",","."),
             )
             st.markdown(pbar_html(pct_art, bar_col), unsafe_allow_html=True)
+
+            # Barra temporale: per ogni riga mostra avanzamento vs data consegna
+            for _, r_t in g_sorted.iterrows():
+                d_ord_r  = r_t.get('Data', None) or r_t.get('DT_EXP', None)
+                d_cons_r = r_t.get('DT_EXP', None)
+                if pd.notnull(d_ord_r) and pd.notnull(d_cons_r):
+                    st.markdown(tbar_html(d_ord_r, d_cons_r), unsafe_allow_html=True)
+                    break  # una sola barra per articolo (prima riga)
 
             # Righe ordine
             for _, r in g.iterrows():
@@ -764,6 +844,18 @@ if not df_res.empty:
         with st.expander(f"📦 {art} - {g['Articolo D'].iloc[0]} ({len(g)} ordini)"):
             s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
             st.markdown(f'<div class="debug-box"><span>📦 GIA: {int(s_i["GIA"])}</span><span>🚚 ACQ: {int(s_i["ACQ"])}</span><span>⚙️ PROD: {int(s_i["PROD"])}</span></div>', unsafe_allow_html=True)
+            # Barra temporale per l'articolo (usa prima riga con date valide)
+            g_date = g.sort_values('DT_EXP')
+            for _, r_t in g_date.iterrows():
+                d_ord_admin  = r_t.get('DATA_ORD', None)
+                d_cons_admin = r_t.get('DT_EXP', None)
+                if not pd.notnull(d_ord_admin):
+                    # Fallback: stima data ordine come 30gg prima della consegna
+                    d_ord_admin = pd.Timestamp(d_cons_admin) - pd.Timedelta(days=30) if pd.notnull(d_cons_admin) else None
+                if d_ord_admin is not None and pd.notnull(d_cons_admin):
+                    st.markdown(tbar_html(d_ord_admin, d_cons_admin), unsafe_allow_html=True)
+                    break
+
             for _, r in g.iterrows():
                 tag = "📋 [PREV]" if r['Codice Documento'] == "OCA" else "🛒 [ORD]"
                 st.markdown(f'<div class="status-row {r["CS"]}"><span>{tag} 📅 {r["DT_EXP"].strftime("%d/%m/%Y")} | Q: {int(r["Qta Residua"])} | {r["CLI_NAME"]}</span><span><b>{r["ST"]}</b></span></div>', unsafe_allow_html=True)
