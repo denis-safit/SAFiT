@@ -280,17 +280,21 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None):
         # ── Filtri ────────────────────────────────────────────────────────────
         # Il filtro cliente viene dalla sidebar del portale (filtro_cliente).
         # Qui gestiamo solo periodo e famiglia.
+        # Key univoca per evitare conflitti quando si cambia cliente dalla sidebar
+        _key_suffix = str(filtro_cliente or "tutti").lower().replace(" ", "_")[:20]
+
         c1, c2 = st.columns([1, 2])
         with c1:
             periodo = st.selectbox(
                 "Periodo", ["Ultimi 90 gg", "Ultimi 6 mesi",
                             "Ultimo anno", "Tutto lo storico"],
-                index=2, key="kpi_periodo"
+                index=2, key=f"kpi_periodo_{_key_suffix}"
             )
         with c2:
             famiglie = sorted(df_oci['Famiglia'].dropna().unique().tolist())
             sel_fam  = st.multiselect("Famiglia", famiglie,
-                                       key="kpi_fam", placeholder="Tutte le famiglie")
+                                       key=f"kpi_fam_{_key_suffix}",
+                                       placeholder="Tutte le famiglie")
 
         if filtro_cliente:
             st.caption(f"👤 Dati filtrati per cliente: **{filtro_cliente}**")
