@@ -28,8 +28,9 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- CONFIGURAZIONE BTL ---
-ANTICIPO_BTL_GG     = 3  # giorni anticipo BTL (Barletta → Friola)
-ANTICIPO_ATOPLAST_GG = 3  # giorni anticipo Atoplast → Friola
+ANTICIPO_BTL_GG      = 3   # giorni anticipo BTL (Barletta → Friola)
+ANTICIPO_ATOPLAST_GG = 3   # giorni anticipo Atoplast → Friola
+PATH_STORICO_DATE    = "righe_ordini_storico_con_date.xlsx"
 
 # --- 2. FUNZIONI TECNICHE ---
 @st.cache_data
@@ -666,7 +667,7 @@ if not df_res.empty:
                 st.rerun()
         with col_b:
             if st.button("🔄 Aggiorna", use_container_width=True):
-                st.cache_data.clear()
+                st.cache_data.clear()  # svuota TUTTA la cache incluso BTL/storico
                 st.session_state.last_update = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
                 st.rerun()
         st.caption("📅 Dati al: " + st.session_state.get('last_update', '--'))
