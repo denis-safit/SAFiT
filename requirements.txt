@@ -4,4 +4,3 @@ xlsxwriter
 openpyxl
 plotly
 streamlit-plotly-events==0.0.6
-righe_ordini_storico_con_date.xlsx
