@@ -28,7 +28,8 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- CONFIGURAZIONE BTL ---
-ANTICIPO_BTL_GG = 3
+ANTICIPO_BTL_GG     = 3  # giorni anticipo BTL (Barletta → Friola)
+ANTICIPO_ATOPLAST_GG = 3  # giorni anticipo Atoplast → Friola
 
 # --- 2. FUNZIONI TECNICHE ---
 @st.cache_data
@@ -39,7 +40,7 @@ def get_user_db():
             df_u.columns = [str(c).strip() for c in df_u.columns]
             return df_u.set_index('username')[['password', 'cliente_arca']].T.to_dict('list')
         except: pass
-    return {"safit_admin": ["admin2026", "TUTTI"], "btl": ["btl2026", "BTL"]}
+    return {"safit_admin": ["admin2026", "TUTTI"], "btl": ["btl2026", "BTL"], "atoplast": ["atoplast2026", "ATOPLAST"]}
 
 def clean_num(serie):
     s = serie.astype(str).str.replace(' ', '').str.replace('\xa0', '')
@@ -91,7 +92,9 @@ def smart_load(filename, key_col):
             h_row = i; break
     df = pd.read_excel(filename, skiprows=h_row)
     df.columns = [str(c).strip() for c in df.columns]
-    if "CODICE" not in key_col: df = df.ffill() 
+    if "CODICE" not in key_col: df = df.ffill()
+    # Rimuove righe completamente vuote che ffill potrebbe aver riempito
+    df = df.dropna(how='all')
     return df
 
 # --- 3. MOTORE DI CALCOLO ---
@@ -105,6 +108,8 @@ def load_and_process():
         df_arca[c_qta] = clean_num(df_arca[c_qta]).abs()
         df_arca[c_dat] = pd.to_datetime(df_arca[c_dat], errors='coerce')
         df_arca = df_arca[df_arca[c_tipo].isin(['OCI', 'OCA']) & (df_arca[c_qta] > 0)].dropna(subset=[c_dat, c_art])
+        # Rimuove righe duplicate esatte per evitare ordini doppi da export ARCA
+        df_arca = df_arca.drop_duplicates()
 
         df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
         stock_map = {}
@@ -287,7 +292,10 @@ def render_vista_btl(df_res):
     st.title("🏭 Lavorazioni BTL")
     st.caption(f"Anticipo consegna a Friola: **{ANTICIPO_BTL_GG} giorni** prima della data cliente")
 
-    df_btl = df_res[df_res['ST'] == 'PRODUZIONE'].copy()
+    df_btl = df_res[
+        (df_res['ST'] == 'PRODUZIONE') &
+        (~df_res['ART_KEY'].str.startswith('PCP', na=False))
+    ].copy()
     if df_btl.empty:
         st.success("✅ Nessuna lavorazione in corso al momento.")
         return
@@ -330,6 +338,59 @@ def render_vista_btl(df_res):
                 cli   = str(r.get('CLI_NAME', '')).split(' - ')[-1].strip()
                 d_fri = r['DT_EXP'] - pd.Timedelta(days=ANTICIPO_BTL_GG)
                 st.markdown(f'<div class="status-row prod-row" style="color:#1a1a1a!important;"><span>🏭 Q: <b>{int(r["Qta Residua"]):,}</b> pz | 📦 A Friola: <b>{d_fri.strftime("%d/%m/%Y")}</b> | 👤 {cli}</span></div>'.replace(",","."), unsafe_allow_html=True)
+
+def render_vista_atoplast(df_res):
+    """Vista dedicata ad Atoplast — solo articoli PRODUZIONE con codice PCP*****."""
+    st.title("🏭 Lavorazioni Atoplast")
+    st.caption(f"Anticipo consegna a Friola: **{ANTICIPO_ATOPLAST_GG} giorni** prima della data cliente")
+
+    df_atp = df_res[
+        (df_res['ST'] == 'PRODUZIONE') &
+        (df_res['ART_KEY'].str.startswith('PCP', na=False))
+    ].copy()
+
+    if df_atp.empty:
+        st.success("✅ Nessuna lavorazione Atoplast in corso al momento.")
+        return
+
+    k1, k2, k3 = st.columns(3)
+    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#9c27b0">ARTICOLI PCP IN LAVORAZIONE</div><div class="kpi-val">{df_atp["ART_KEY"].nunique()}</div></div>', unsafe_allow_html=True)
+    k2.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#9c27b0">QUANTITÀ TOTALE</div><div class="kpi-val">{int(df_atp["Qta Residua"].sum()):,}</div></div>'.replace(",","."), unsafe_allow_html=True)
+    urgenti = df_atp[df_atp['DT_EXP'] <= pd.Timestamp(datetime.now()) + pd.Timedelta(days=7)]
+    k3.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#f44336">URGENTI ≤7gg</div><div class="kpi-val">{urgenti["ART_KEY"].nunique()}</div></div>', unsafe_allow_html=True)
+    st.markdown("---")
+
+    for art, g in df_atp.sort_values('DT_EXP').groupby('ART_KEY', sort=False):
+        desc           = g['Articolo D'].iloc[0]
+        qta_tot        = int(g['Qta Residua'].sum())
+        d_cons_cliente = g['DT_EXP'].min()
+        d_cons_friola  = d_cons_cliente - pd.Timedelta(days=ANTICIPO_ATOPLAST_GG)
+        giorni_friola  = (d_cons_friola - pd.Timestamp(datetime.now())).days
+
+        if giorni_friola < 0:
+            badge, urgenza, col_u = "🔴", f"IN RITARDO di {abs(giorni_friola)} gg", "#f44336"
+        elif giorni_friola <= 3:
+            badge, urgenza, col_u = "🟠", f"URGENTE — {giorni_friola} gg", "#ff9800"
+        elif giorni_friola <= 7:
+            badge, urgenza, col_u = "🟡", f"A BREVE — {giorni_friola} gg", "#fbc02d"
+        else:
+            badge, urgenza, col_u = "🟢", f"Mancano {giorni_friola} gg", "#4caf50"
+
+        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pz | 📦 Friola: {d_cons_friola.strftime('%d/%m/%Y')}".replace(",",".")):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Qta da produrre", f"{qta_tot:,} pz".replace(",","."))
+            c2.metric("Consegna a Friola", d_cons_friola.strftime("%d/%m/%Y"))
+            c3.metric("Scadenza cliente", d_cons_cliente.strftime("%d/%m/%Y"))
+            st.markdown(f'<div style="background:#f3e5f5;border-left:4px solid {col_u};padding:8px 14px;border-radius:6px;margin:6px 0;color:#1a1a1a!important;font-weight:600;">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
+
+            d_ord_atp = g['DATA_ORD'].min() if 'DATA_ORD' in g.columns and g['DATA_ORD'].notna().any() else d_cons_friola - pd.Timedelta(days=30)
+            st.markdown(tbar_html(d_ord_atp, d_cons_friola), unsafe_allow_html=True)
+
+            st.markdown("**Dettaglio ordini:**")
+            for _, r in g.sort_values('DT_EXP').iterrows():
+                cli   = str(r.get('CLI_NAME', '')).split(' - ')[-1].strip()
+                d_fri = r['DT_EXP'] - pd.Timedelta(days=ANTICIPO_ATOPLAST_GG)
+                st.markdown(f'<div class="status-row bom-row" style="color:#1a1a1a!important;"><span>🏭 Q: <b>{int(r["Qta Residua"]):,}</b> pz | 📦 A Friola: <b>{d_fri.strftime("%d/%m/%Y")}</b> | 👤 {cli}</span></div>'.replace(",","."), unsafe_allow_html=True)
 
 def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
     """Vista pulita per il cliente — nessun dato interno visibile."""
@@ -578,7 +639,8 @@ if not df_res.empty:
         st.markdown("---")
 
         is_admin = st.session_state.permesso == "TUTTI"
-        is_btl   = st.session_state.permesso == "BTL"
+        is_btl      = st.session_state.permesso == "BTL"
+        is_atoplast = st.session_state.permesso == "ATOPLAST"
         if is_admin:
             sel_cli = st.selectbox("Seleziona Cliente:", ["TUTTI"] + sorted(df_res['CLI_NAME'].unique().tolist()))
         else:
@@ -594,6 +656,10 @@ if not df_res.empty:
     # ===========================================================
     if is_btl:
         render_vista_btl(df_res)
+        st.stop()
+
+    if is_atoplast:
+        render_vista_atoplast(df_res)
         st.stop()
 
     if not is_admin:
@@ -691,8 +757,8 @@ if not df_res.empty:
 
     st.title("Pannello Controllo Safit")
 
-    tab_det, tab_op, tab_kpi, tab_btl = st.tabs(
-        ["🔍 Dettaglio Ordini", "📋 KPI Operativi", "📊 KPI Avanzati", "🏭 Lavorazioni BTL"]
+    tab_det, tab_op, tab_kpi, tab_btl, tab_atp = st.tabs(
+        ["🔍 Dettaglio Ordini", "📋 KPI Operativi", "📊 KPI Avanzati", "🏭 Lavorazioni BTL", "🔵 Lavorazioni Atoplast"]
     )
 
     with tab_op:
@@ -889,6 +955,9 @@ if not df_res.empty:
 
     with tab_btl:
         render_vista_btl(df_res)
+
+    with tab_atp:
+        render_vista_atoplast(df_res)
 
     with tab_det:
       filtri_attivi = []
