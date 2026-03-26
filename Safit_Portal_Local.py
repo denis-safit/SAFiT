@@ -290,9 +290,8 @@ def tbar_html(data_ordine, data_consegna, oggi=None):
 @st.cache_data(ttl=1800)
 def carica_btl_da_storico():
     """Carica OFR + OFF di BTL dal file storico con date."""
-    import os as _os
-    path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), PATH_STORICO_DATE)
-    if not _os.path.exists(path):
+    path = PATH_STORICO_DATE  # file nella stessa cartella del portale
+    if not os.path.exists(path):
         return pd.DataFrame()
     try:
         df = pd.read_excel(path, skiprows=2)
