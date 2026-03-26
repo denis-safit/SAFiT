@@ -6,6 +6,7 @@ from io import BytesIO
 import plotly.express as px
 import re
 from bom_engine import get_coverage  
+from kpi_avanzati import render_kpi_avanzati
 
 # --- 1. CONFIGURAZIONE ---
 st.set_page_config(page_title="Safit Portal v3.8", layout="wide")
@@ -206,7 +207,7 @@ def pbar_html(pct, color):
         '<div style="font-size:10px;color:#555;text-align:right;margin-top:-6px;">' + outside + '</div>'
     )
 
-def render_vista_cliente(df_cli, stock_raw):
+def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
     """Vista pulita per il cliente — nessun dato interno visibile."""
     COLOR_MAP_CLI = {v[0]: v[1] for v in LABEL_CLI.values()}
 
@@ -362,8 +363,12 @@ def render_vista_cliente(df_cli, stock_raw):
 
     st.markdown("---")
 
-    # Dettaglio ordini per articolo
-    for art, g in df_cli.groupby('ART_KEY'):
+    # Tab vista cliente
+    tab_ord_cli, tab_kpi_cli = st.tabs(["📦 I miei Ordini", "📊 Statistiche"])
+
+    with tab_ord_cli:
+      # Dettaglio ordini per articolo
+      for art, g in df_cli.groupby('ART_KEY'):
         desc     = g['Articolo D'].iloc[0]
         qta_tot  = int(g['Qta Residua'].sum())
         stati_g  = g['ST'].tolist()
@@ -411,6 +416,9 @@ def render_vista_cliente(df_cli, stock_raw):
                     unsafe_allow_html=True
                 )
 
+    with tab_kpi_cli:
+        render_kpi_avanzati(filtro_cliente=nome_cliente)
+
 # ===========================================================
 # --- 5. DASHBOARD ---
 # ===========================================================
@@ -452,7 +460,7 @@ if not df_res.empty:
     # VISTA CLIENTE
     # ===========================================================
     if not is_admin:
-        render_vista_cliente(df_f, stock_raw)
+        render_vista_cliente(df_f, stock_raw, nome_cliente=sel_cli if sel_cli != 'TUTTI' else '')
         st.stop()
 
     # ===========================================================
@@ -545,7 +553,13 @@ if not df_res.empty:
     # ===========================================================
 
     st.title("Pannello Controllo Safit")
-    k1, k2, k3, k4 = st.columns(4)
+
+    tab_op, tab_kpi, tab_det = st.tabs(
+        ["📋 KPI Operativi", "📊 KPI Avanzati", "🔍 Dettaglio Ordini"]
+    )
+
+    with tab_op:
+      k1, k2, k3, k4 = st.columns(4)
     k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">FILTRATI</div><div class="kpi-val">{int(df_f["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
     k2.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#4caf50">PRONTI (GIA)</div><div class="kpi-val">{n_pronti_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
     k3.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#9c27b0">BOM (FIGLI)</div><div class="kpi-val">{n_bom_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
@@ -733,16 +747,20 @@ if not df_res.empty:
         use_container_width=True,
     )
 
-    filtri_attivi = []
-    if st.session_state.filtro_famiglie: filtri_attivi.append(f"Famiglie: **{', '.join(st.session_state.filtro_famiglie)}**")
-    if st.session_state.filtro_stati:    filtri_attivi.append(f"Stati: **{', '.join(st.session_state.filtro_stati)}**")
-    if filtri_attivi:
-        st.info("🔍 Filtri attivi — " + " | ".join(filtri_attivi) + f" — {len(df_view)} ordini trovati")
-    else:
-        st.caption(f"Tutti gli ordini: {len(df_view)}")
+    with tab_kpi:
+        render_kpi_avanzati(filtro_cliente=sel_cli if sel_cli != "TUTTI" else None)
 
-    st.markdown("---")
-    for art, g in df_view.groupby('ART_KEY'):
+    with tab_det:
+      filtri_attivi = []
+      if st.session_state.filtro_famiglie: filtri_attivi.append(f"Famiglie: **{', '.join(st.session_state.filtro_famiglie)}**")
+      if st.session_state.filtro_stati:    filtri_attivi.append(f"Stati: **{', '.join(st.session_state.filtro_stati)}**")
+      if filtri_attivi:
+          st.info("🔍 Filtri attivi — " + " | ".join(filtri_attivi) + f" — {len(df_view)} ordini trovati")
+      else:
+          st.caption(f"Tutti gli ordini: {len(df_view)}")
+
+      st.markdown("---")
+      for art, g in df_view.groupby('ART_KEY'):
         with st.expander(f"📦 {art} - {g['Articolo D'].iloc[0]} ({len(g)} ordini)"):
             s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
             st.markdown(f'<div class="debug-box"><span>📦 GIA: {int(s_i["GIA"])}</span><span>🚚 ACQ: {int(s_i["ACQ"])}</span><span>⚙️ PROD: {int(s_i["PROD"])}</span></div>', unsafe_allow_html=True)
