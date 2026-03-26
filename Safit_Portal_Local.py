@@ -554,8 +554,8 @@ if not df_res.empty:
 
     st.title("Pannello Controllo Safit")
 
-    tab_op, tab_kpi, tab_det = st.tabs(
-        ["📋 KPI Operativi", "📊 KPI Avanzati", "🔍 Dettaglio Ordini"]
+    tab_det, tab_op, tab_kpi = st.tabs(
+        ["🔍 Dettaglio Ordini", "📋 KPI Operativi", "📊 KPI Avanzati"]
     )
 
     with tab_op:
@@ -748,7 +748,7 @@ if not df_res.empty:
     )
 
     with tab_kpi:
-        render_kpi_avanzati(filtro_cliente=sel_cli if sel_cli != "TUTTI" else None)
+        render_kpi_avanzati(filtro_cliente=sel_cli if sel_cli != "TUTTI" else None, filtro_articolo=search if search else None)
 
     with tab_det:
       filtri_attivi = []

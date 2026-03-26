@@ -24,7 +24,9 @@ from io import BytesIO
 import os
 
 # ── Percorso file storico ARCA ────────────────────────────────────────────────
-PATH_STORICO = "righe_ordini_storico_con_date.xlsx"
+import os as _os
+_DIR = _os.path.dirname(_os.path.abspath(__file__))
+PATH_STORICO = _os.path.join(_DIR, "righe_ordini_storico_con_date.xlsx")
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 KPI_CSS = """
@@ -252,7 +254,7 @@ def kpi_card(col, title, value, sub="", color=""):
 
 # ── Rendering principale ──────────────────────────────────────────────────────
 
-def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None):
+def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_articolo=None):
     """
     Punto di ingresso. Da chiamare nella vista admin del portale.
     """
@@ -274,13 +276,15 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None):
         df_dvf = get_dvf(df_all)
 
         # Filtro cliente pre-applicato (da vista cliente o selezione admin)
-        # Il valore dalla sidebar ha formato "C000744 - SPIRALE SRL"
-        # Il campo Cliente nel file storico ha solo "SPIRALE SRL"
-        # → estraiamo solo la parte dopo " - " se presente
         if filtro_cliente:
             nome_cli = filtro_cliente.split(' - ', 1)[-1].strip() if ' - ' in filtro_cliente else filtro_cliente.strip()
             df_oci = df_oci[df_oci['Cliente'].str.contains(nome_cli, case=False, na=False, regex=False)]
             df_dvf = df_dvf[df_dvf['Cliente'].str.contains(nome_cli, case=False, na=False, regex=False)]
+
+        # Filtro articolo dalla sidebar (Cerca Articolo)
+        if filtro_articolo:
+            df_oci = df_oci[df_oci['Articolo C'].str.contains(filtro_articolo.upper(), case=False, na=False, regex=False)]
+            df_dvf = df_dvf[df_dvf['Articolo C'].str.contains(filtro_articolo.upper(), case=False, na=False, regex=False)]
 
         st.caption(
             f"📁 Storico caricato: **{len(df_all):,}** righe totali | "
@@ -308,6 +312,8 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None):
 
         if filtro_cliente:
             st.caption(f"👤 Dati filtrati per cliente: **{filtro_cliente}**")
+        if filtro_articolo:
+            st.caption(f"🔍 Dati filtrati per articolo: **{filtro_articolo.upper()}**")
 
         # Applica filtri temporali
         gg_map = {"Ultimi 90 gg": 90, "Ultimi 6 mesi": 180,
