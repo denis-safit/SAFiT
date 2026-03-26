@@ -24,9 +24,7 @@ from io import BytesIO
 import os
 
 # ── Percorso file storico ARCA ────────────────────────────────────────────────
-import os
-_DIR = os.path.dirname(os.path.abspath(__file__))
-PATH_STORICO = os.path.join(_DIR, "righe_ordini_storico_con_date.xlsx")
+PATH_STORICO = "righe_ordini_storico_con_date.xlsx"
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 KPI_CSS = """
@@ -280,25 +278,22 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None):
         )
 
         # ── Filtri ────────────────────────────────────────────────────────────
-        # Se filtro_cliente è pre-impostato (vista cliente), nasconde il selettore
-        _show_cli_filter = not bool(filtro_cliente)
-        c1, c2, c3 = st.columns([1, 1, 2]) if _show_cli_filter else st.columns([1, 1])
+        # Il filtro cliente viene dalla sidebar del portale (filtro_cliente).
+        # Qui gestiamo solo periodo e famiglia.
+        c1, c2 = st.columns([1, 2])
         with c1:
             periodo = st.selectbox(
                 "Periodo", ["Ultimi 90 gg", "Ultimi 6 mesi",
                             "Ultimo anno", "Tutto lo storico"],
                 index=2, key="kpi_periodo"
             )
-        if _show_cli_filter:
-          with c2:
-            clienti = ["Tutti"] + sorted(df_oci['Cliente'].dropna().unique().tolist())
-            sel_cli = st.selectbox("Cliente", clienti, key="kpi_cli")
-        else:
-            sel_cli = "Tutti"  # già filtrato sopra
-        with (c3 if _show_cli_filter else c2):
+        with c2:
             famiglie = sorted(df_oci['Famiglia'].dropna().unique().tolist())
             sel_fam  = st.multiselect("Famiglia", famiglie,
-                                       key="kpi_fam", placeholder="Tutte")
+                                       key="kpi_fam", placeholder="Tutte le famiglie")
+
+        if filtro_cliente:
+            st.caption(f"👤 Dati filtrati per cliente: **{filtro_cliente}**")
 
         # Applica filtri temporali
         gg_map = {"Ultimi 90 gg": 90, "Ultimi 6 mesi": 180,
@@ -309,16 +304,12 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None):
         df_f = df_oci.copy()
         if gg < 9999:
             df_f = df_f[df_f['Data'] >= cutoff]
-        if sel_cli != "Tutti":
-            df_f = df_f[df_f['Cliente'] == sel_cli]
         if sel_fam:
             df_f = df_f[df_f['Famiglia'].isin(sel_fam)]
 
         df_dvf_f = df_dvf.copy()
         if gg < 9999:
             df_dvf_f = df_dvf_f[df_dvf_f['Data'] >= cutoff]
-        if sel_cli != "Tutti":
-            df_dvf_f = df_dvf_f[df_dvf_f['Cliente'] == sel_cli]
 
         if df_f.empty:
             st.warning("Nessun dato per i filtri selezionati.")
