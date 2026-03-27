@@ -396,63 +396,107 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo','')) else 'acq-row'
                 st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pz | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
 
-def render_vista_atoplast(df_res, filtro_famiglie=None):
-    """Vista dedicata ad Atoplast — solo articoli PRODUZIONE con codice PCP*****."""
-    st.title("🏭 Lavorazioni Atoplast")
-    st.caption(f"Anticipo consegna a Friola: **{ANTICIPO_ATOPLAST_GG} giorni** prima della data cliente")
+@st.cache_data(ttl=1800)
+def carica_atoplast_da_storico():
+    """
+    Carica OFR + OFF di Atoplast dal file storico con date.
+    Stesso approccio di BTL — legge Qta Residua, esclude righe evase.
+    """
+    path = PATH_STORICO_DATE
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        df = pd.read_excel(path, skiprows=2)
+        df.columns = [str(c).strip() for c in df.columns]
+        df['Codice Documento'] = df['Codice Documento'].ffill()
+        df = df[~df['Codice Documento'].astype(str).str.contains('Totale|NaN|nan', na=True)]
+        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str) != '(vuoto)')]
+        df['Data']          = pd.to_datetime(df['Data'],          errors='coerce')
+        df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
+        df['Qta Doc']       = pd.to_numeric(df['Qta Doc'],        errors='coerce').fillna(0)
+        df['Qta Residua']   = pd.to_numeric(df.get('Qta Residua', 0), errors='coerce').fillna(0)
+        df['Data Consegna'] = df['Data Consegna'].fillna(df['Data'])
 
-    df_atp = df_res[
-        (df_res['ST'] == 'PRODUZIONE') &
-        (df_res['ART_KEY'].str.startswith('PCP', na=False))
-    ].copy()
+        df_atp = df[
+            df['Cliente Fornitore CD'].str.contains('ATOPLAST', case=False, na=False) &
+            df['Codice Documento'].isin(['OFR', 'OFF']) &
+            (df['Qta Residua'] > 0)
+        ].copy()
+        df_atp['Tipo']    = df_atp['Codice Documento'].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
+        df_atp['Qta Doc'] = df_atp['Qta Residua']
+        return df_atp
+    except Exception as e:
+        return pd.DataFrame()
 
-    # Applica filtro famiglie se attivo
+
+def render_vista_atoplast(df_res=None, filtro_famiglie=None):
+    """Vista Atoplast — OFR (lavorazioni) + OFF (acquisti) dal file storico."""
+    st.title("🏭 Lavorazioni & Acquisti Atoplast")
+    st.caption(f"Anticipo consegna a Friola: **{ANTICIPO_ATOPLAST_GG} giorni** prima della data consegna")
+
+    df_atp_storico = carica_atoplast_da_storico()
+    if df_atp_storico.empty:
+        st.info("Nessun ordine Atoplast trovato. Verifica che il file righe_ordini_storico_con_date.xlsx sia presente.")
+        return
+
+    df_atp = df_atp_storico.copy()
+
     if filtro_famiglie:
         df_atp['_Famiglia'] = df_atp['Articolo D'].apply(lambda x: ' '.join(str(x).split()[:2]).upper())
         df_atp = df_atp[df_atp['_Famiglia'].isin(filtro_famiglie)]
 
     if df_atp.empty:
-        st.success("✅ Nessuna lavorazione Atoplast in corso al momento.")
+        st.success("✅ Nessuna lavorazione Atoplast aperta al momento.")
         return
 
+    n_lav   = df_atp[df_atp['Codice Documento'] == 'OFR']['Articolo C'].nunique()
+    n_acq   = df_atp[df_atp['Codice Documento'] == 'OFF']['Articolo C'].nunique()
+    urgenti = df_atp[df_atp['Data Consegna'].notna() &
+                     (df_atp['Data Consegna'] <= pd.Timestamp(datetime.now()) + pd.Timedelta(days=7))]
     k1, k2, k3 = st.columns(3)
-    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#9c27b0">ARTICOLI PCP IN LAVORAZIONE</div><div class="kpi-val">{df_atp["ART_KEY"].nunique()}</div></div>', unsafe_allow_html=True)
-    k2.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#9c27b0">QUANTITÀ TOTALE</div><div class="kpi-val">{int(df_atp["Qta Residua"].sum()):,}</div></div>'.replace(",","."), unsafe_allow_html=True)
-    urgenti = df_atp[df_atp['DT_EXP'] <= pd.Timestamp(datetime.now()) + pd.Timedelta(days=7)]
-    k3.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#f44336">URGENTI ≤7gg</div><div class="kpi-val">{urgenti["ART_KEY"].nunique()}</div></div>', unsafe_allow_html=True)
+    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#9c27b0">🔧 IN LAVORAZIONE</div><div class="kpi-val">{n_lav}</div></div>', unsafe_allow_html=True)
+    k2.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#2196f3">🛒 IN ACQUISTO</div><div class="kpi-val">{n_acq}</div></div>', unsafe_allow_html=True)
+    k3.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#f44336">⚠️ URGENTI ≤7gg</div><div class="kpi-val">{urgenti["Articolo C"].nunique()}</div></div>', unsafe_allow_html=True)
     st.markdown("---")
 
-    for art, g in df_atp.sort_values('DT_EXP').groupby('ART_KEY', sort=False):
-        desc           = g['Articolo D'].iloc[0]
-        qta_tot        = int(g['Qta Residua'].sum())
-        d_cons_cliente = g['DT_EXP'].min()
-        d_cons_friola  = d_cons_cliente - pd.Timedelta(days=ANTICIPO_ATOPLAST_GG)
-        giorni_friola  = (d_cons_friola - pd.Timestamp(datetime.now())).days
+    for art, g in df_atp.sort_values('Data Consegna', na_position='last').groupby('Articolo C', sort=False):
+        desc    = g['Articolo D'].iloc[0]
+        qta_tot = int(g['Qta Doc'].sum())
+        tipi    = ' + '.join(g['Tipo'].unique().tolist())
+        d_cons  = g['Data Consegna'].dropna().min() if g['Data Consegna'].notna().any() else None
+        d_ord   = g['Data'].dropna().min()           if g['Data'].notna().any()          else None
 
-        if giorni_friola < 0:
-            badge, urgenza, col_u = "🔴", f"IN RITARDO di {abs(giorni_friola)} gg", "#f44336"
-        elif giorni_friola <= 3:
-            badge, urgenza, col_u = "🟠", f"URGENTE — {giorni_friola} gg", "#ff9800"
-        elif giorni_friola <= 7:
-            badge, urgenza, col_u = "🟡", f"A BREVE — {giorni_friola} gg", "#fbc02d"
+        if d_cons is not None:
+            d_friola      = d_cons - pd.Timedelta(days=ANTICIPO_ATOPLAST_GG)
+            giorni_friola = (d_friola - pd.Timestamp(datetime.now())).days
+            if giorni_friola < 0:
+                badge, urgenza, col_u = "🔴", f"IN RITARDO di {abs(giorni_friola)} gg", "#f44336"
+            elif giorni_friola <= 3:
+                badge, urgenza, col_u = "🟠", f"URGENTE — {giorni_friola} gg", "#ff9800"
+            elif giorni_friola <= 7:
+                badge, urgenza, col_u = "🟡", f"A BREVE — {giorni_friola} gg", "#fbc02d"
+            else:
+                badge, urgenza, col_u = "🟢", f"Mancano {giorni_friola} gg", "#4caf50"
+            data_label = f"📦 Friola: {d_friola.strftime('%d/%m/%Y')}"
         else:
-            badge, urgenza, col_u = "🟢", f"Mancano {giorni_friola} gg", "#4caf50"
+            badge, urgenza, col_u, d_friola, data_label = "⚪", "Data N/D", "#9e9e9e", None, "📦 Data N/D"
 
-        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pz | 📦 Friola: {d_cons_friola.strftime('%d/%m/%Y')}".replace(",",".")):
+        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pz | {tipi} | {data_label}".replace(",",".")):
             c1, c2, c3 = st.columns(3)
-            c1.metric("Qta da produrre", f"{qta_tot:,} pz".replace(",","."))
-            c2.metric("Consegna a Friola", d_cons_friola.strftime("%d/%m/%Y"))
-            c3.metric("Scadenza cliente", d_cons_cliente.strftime("%d/%m/%Y"))
-            st.markdown(f'<div style="background:#f3e5f5;border-left:4px solid {col_u};padding:8px 14px;border-radius:6px;margin:6px 0;color:#1a1a1a!important;font-weight:600;">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
-
-            d_ord_atp = g['DATA_ORD'].min() if 'DATA_ORD' in g.columns and g['DATA_ORD'].notna().any() else d_cons_friola - pd.Timedelta(days=30)
-            st.markdown(tbar_html(d_ord_atp, d_cons_friola), unsafe_allow_html=True)
-
-            st.markdown("**Dettaglio ordini:**")
-            for _, r in g.sort_values('DT_EXP').iterrows():
-                cli   = str(r.get('CLI_NAME', '')).split(' - ')[-1].strip()
-                d_fri = r['DT_EXP'] - pd.Timedelta(days=ANTICIPO_ATOPLAST_GG)
-                st.markdown(f'<div class="status-row bom-row" style="color:#1a1a1a!important;"><span>🏭 Q: <b>{int(r["Qta Residua"]):,}</b> pz | 📦 A Friola: <b>{d_fri.strftime("%d/%m/%Y")}</b> | 👤 {cli}</span></div>'.replace(",","."), unsafe_allow_html=True)
+            c1.metric("Quantità", f"{qta_tot:,} pz".replace(",","."))
+            c2.metric("A Friola entro", d_friola.strftime("%d/%m/%Y") if d_friola else "N/D")
+            c3.metric("Data consegna", d_cons.strftime("%d/%m/%Y") if d_cons else "N/D")
+            if d_friola:
+                st.markdown(f'<div style="background:#f3e5f5;border-left:4px solid {col_u};padding:8px 14px;border-radius:6px;margin:6px 0;color:#1a1a1a!important;font-weight:600;">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
+                d_start = d_ord if d_ord is not None else d_friola - pd.Timedelta(days=30)
+                st.markdown(tbar_html(d_start, d_friola), unsafe_allow_html=True)
+            st.markdown("**Dettaglio righe:**")
+            for _, r in g.sort_values('Data Consegna', na_position='last').iterrows():
+                d_c  = r['Data Consegna']
+                d_fs = (d_c - pd.Timedelta(days=ANTICIPO_ATOPLAST_GG)).strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
+                d_cs = d_c.strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
+                css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo', '')) else 'acq-row'
+                st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pz | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
 
 def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
     """Vista pulita per il cliente — nessun dato interno visibile."""
@@ -700,9 +744,10 @@ if not df_res.empty:
         st.caption("📅 Dati al: " + st.session_state.get('last_update', '--'))
         st.markdown("---")
 
-        is_admin = st.session_state.permesso == "TUTTI"
-        is_btl      = st.session_state.permesso == "BTL"
-        is_atoplast = st.session_state.permesso == "ATOPLAST"
+        is_admin    = st.session_state.permesso == "TUTTI"
+        permesso_up = st.session_state.permesso.upper()
+        is_btl      = "BTL" in permesso_up and permesso_up != "TUTTI"
+        is_atoplast = "ATOPLAST" in permesso_up and permesso_up != "TUTTI"
         if is_admin:
             sel_cli = st.selectbox("Seleziona Cliente:", ["TUTTI"] + sorted(df_res['CLI_NAME'].unique().tolist()))
         else:
@@ -712,14 +757,13 @@ if not df_res.empty:
 
     # Ridichiarate fuori dal with sidebar per essere visibili nel resto del codice
     is_admin    = st.session_state.permesso == "TUTTI"
-    is_btl      = st.session_state.permesso == "BTL"
-    is_atoplast = st.session_state.permesso == "ATOPLAST"
-
-    df_f = df_res[df_res['CLI_NAME'] == sel_cli] if sel_cli != "TUTTI" else df_res.copy()
-    if search: df_f = df_f[df_f['ART_KEY'].str.contains(search)]
+    permesso_up = st.session_state.permesso.upper()
+    is_btl      = "BTL" in permesso_up and permesso_up != "TUTTI"
+    is_atoplast = "ATOPLAST" in permesso_up and permesso_up != "TUTTI"
 
     # ===========================================================
-    # VISTA CLIENTE
+    # VISTE FORNITORI/SPECIALI — gestite prima del filtro cliente
+    # (BTL e ATOPLAST non sono clienti, non usano df_f)
     # ===========================================================
     if is_btl:
         render_vista_btl(df_res)
@@ -728,6 +772,18 @@ if not df_res.empty:
     if is_atoplast:
         render_vista_atoplast(df_res)
         st.stop()
+
+    # Filtro cliente — solo per utenti cliente normali e admin
+    if sel_cli == "TUTTI":
+        df_f = df_res.copy()
+    else:
+        # Cerca il codice cliente (es. "C001163") dentro CLI_NAME
+        cod_match = sel_cli.split(' - ')[0].strip().upper()
+        df_f = df_res[df_res['CLI_NAME'].str.upper().str.contains(cod_match, regex=False)]
+        if df_f.empty:
+            df_f = df_res[df_res['CLI_NAME'] == sel_cli]
+    if search:
+        df_f = df_f[df_f['ART_KEY'].str.contains(search)]
 
     if not is_admin:
         render_vista_cliente(df_f, stock_raw, nome_cliente=sel_cli if sel_cli != 'TUTTI' else '')
