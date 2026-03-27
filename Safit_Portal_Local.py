@@ -396,6 +396,68 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo','')) else 'acq-row'
                 st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pz | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
 
+            # ── Istruzioni di lavorazione ──────────────────────────────
+            istr_map = carica_istruzioni_btl()
+            art_up   = str(art).strip().upper()
+            istr_list = istr_map.get(art_up, [])
+            if istr_list:
+                st.markdown("**📋 Istruzioni di lavorazione:**")
+                for istr in istr_list:
+                    tipo_doc  = str(istr.get('Tipo Doc', '')).strip()
+                    n_doc     = istr.get('N. Doc', '')
+                    data_i    = istr.get('Data', '')
+                    data_str  = data_i.strftime('%d/%m/%Y') if hasattr(data_i, 'strftime') else str(data_i)[:10]
+                    piegatura = str(istr.get('Piegatura', 'n.a.')).strip()
+                    tempra    = str(istr.get('Tempra',    'n.a.')).strip()
+                    vern      = str(istr.get('Verniciatura', 'n.a.')).strip()
+                    tipo_vern = str(istr.get('Tipo Vernice', '')).strip()
+                    scatola   = str(istr.get('Scatola',   'n.a.')).strip()
+                    pz_sc     = istr.get('Pz x Scatola', '')
+                    note      = str(istr.get('Note', '')).strip()
+                    qta_i     = int(istr.get('Quantità', 0))
+
+                    vern_label = f"{vern}" + (f" ({tipo_vern})" if tipo_vern and tipo_vern not in ['nan','n.a.',''] else "")
+                    pz_label   = f"{int(pz_sc)} pz/scatola" if pz_sc and str(pz_sc) not in ['nan',''] else ""
+                    scatola_label = scatola + (f" — {pz_label}" if pz_label else "")
+
+                    st.markdown(
+                        f'''<div style="background:#f3e5f5;border-left:4px solid #9c27b0;padding:10px 14px;
+                        border-radius:6px;margin:6px 0;font-size:13px;color:#1a1a1a;">
+                        <b>{tipo_doc} n.{n_doc} del {data_str}</b> — Q.tà: {qta_i:,} pz<br>
+                        🔧 <b>Piegatura:</b> {piegatura} &nbsp;|&nbsp;
+                        🔥 <b>Tempra:</b> {tempra} &nbsp;|&nbsp;
+                        🎨 <b>Verniciatura:</b> {vern_label}<br>
+                        📦 <b>Scatola:</b> {scatola_label}
+                        {"<br>📝 <b>Note:</b> " + note if note and note not in ["nan",""] else ""}
+                        </div>'''.replace(",","."),
+                        unsafe_allow_html=True
+                    )
+            else:
+                st.caption("ℹ️ Nessuna istruzione di lavorazione disponibile per questo articolo.")
+
+@st.cache_data(ttl=1800)
+def carica_istruzioni_btl():
+    """
+    Legge btl_istruzioni.xlsx (consolidato dalla cartella locale BTL).
+    Restituisce un dict  Articolo → lista di dict con istruzioni di lavorazione.
+    """
+    path = 'btl_istruzioni.xlsx'
+    if not os.path.exists(path):
+        return {}
+    try:
+        df = pd.read_excel(path)
+        df.columns = [str(c).strip() for c in df.columns]
+        if 'Articolo' not in df.columns:
+            return {}
+        df['Articolo'] = df['Articolo'].astype(str).str.strip().str.upper()
+        istruzioni = {}
+        for art, g in df.groupby('Articolo'):
+            istruzioni[art] = g.to_dict('records')
+        return istruzioni
+    except Exception as e:
+        return {}
+
+
 @st.cache_data(ttl=1800)
 def carica_atoplast_da_storico():
     """
