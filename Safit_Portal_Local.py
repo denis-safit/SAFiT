@@ -1,724 +1,1052 @@
-# ==============================================================================
-# kpi_avanzati.py — Modulo KPI Avanzati per Safit Portal  v2.0
-# ==============================================================================
-# Struttura attesa del file ARCA (righe_ordini_storico_con_date.xlsx):
-#   Colonne: Codice Documento | Data Consegna | Numero Documento |
-#            Articolo C | Articolo D | Cliente Fornitore CD | Data | Qta Doc | Valore
-#
-# INTEGRAZIONE in Safit_Portal_Local.py:
-#   1. Copia kpi_avanzati.py nella stessa cartella del portale
-#   2. Aggiungi in cima:  from kpi_avanzati import render_kpi_avanzati
-#   3. Alla fine della vista admin (dopo il download button):
-#        st.markdown("---")
-#        render_kpi_avanzati()
-# ==============================================================================
-
 import streamlit as st
 import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
-from io import BytesIO
 import os
+from datetime import datetime
+from io import BytesIO
+import plotly.express as px
+import re
+from bom_engine import get_coverage  
+from kpi_avanzati import render_kpi_avanzati
 
-# ── Percorso file storico ARCA ────────────────────────────────────────────────
-import os as _os
-_DIR = _os.path.dirname(_os.path.abspath(__file__))
-PATH_STORICO = _os.path.join(_DIR, "righe_ordini_storico_con_date.xlsx")
+# --- 1. CONFIGURAZIONE ---
+st.set_page_config(page_title="Safit Portal v3.8", layout="wide")
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
-KPI_CSS = """
-<style>
-.kpi-adv {
-    background: linear-gradient(135deg,#ffffff,#f8faff);
-    border:1px solid #e3e8f0; border-left:4px solid #1f77b4;
-    padding:14px 16px; border-radius:10px; margin-bottom:6px;
-    box-shadow:0 2px 6px rgba(0,0,0,0.05);
-    color:#1a1a2e !important;
+st.markdown("""
+    <style>
+    .status-row { display: flex; justify-content: space-between; padding: 10px; border-radius: 8px; margin-bottom: 6px; border: 1px solid #ddd; color: #000 !important; font-size: 14px; }
+    .on-time-row { background-color: #e8f5e9 !important; border-left: 6px solid #4caf50; } 
+    .acq-row { background-color: #e3f2fd !important; border-left: 6px solid #2196f3; }    
+    .prod-row { background-color: #fffde7 !important; border-left: 6px solid #fbc02d; }   
+    .urgent-row { background-color: #ffebee !important; border-left: 8px solid #f44336; } 
+    .oca-row { background-color: #f5f5f5 !important; border-left: 8px solid #9e9e9e; color: #666 !important; }
+    .bom-row { background-color: #f3e5f5 !important; border-left: 8px solid #9c27b0; }
+    .debug-box { background-color: #f8f9fa !important; color: #333 !important; padding: 12px; border-radius: 8px; border: 1px dotted #bbb; margin-bottom: 10px; display: flex; justify-content: space-around; font-size: 13px; font-weight: bold; }
+    .kpi-card { background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px; border-radius: 10px; text-align: center; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
+    .kpi-val { font-size: 24px; font-weight: bold; color: #1f77b4; }
+    .user-info { padding: 10px; background: #f8f9fa; border-radius: 5px; border: 1px solid #eee; margin-bottom: 20px; text-align: center; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- CONFIGURAZIONE BTL ---
+ANTICIPO_BTL_GG      = 3   # giorni anticipo BTL (Barletta → Friola)
+ANTICIPO_ATOPLAST_GG = 3   # giorni anticipo Atoplast → Friola
+PATH_STORICO_DATE    = "righe_ordini_storico_con_date.xlsx"
+
+# --- 2. FUNZIONI TECNICHE ---
+@st.cache_data
+def get_user_db():
+    if os.path.exists('utenti.xlsx'):
+        try:
+            df_u = pd.read_excel('utenti.xlsx')
+            df_u.columns = [str(c).strip() for c in df_u.columns]
+            return df_u.set_index('username')[['password', 'cliente_arca']].T.to_dict('list')
+        except: pass
+    return {"safit_admin": ["admin2026", "TUTTI"], "btl": ["btl2026", "BTL"], "atoplast": ["atoplast2026", "ATOPLAST"]}
+
+def clean_num(serie):
+    s = serie.astype(str).str.replace(' ', '').str.replace('\xa0', '')
+    def fix_val(val):
+        if val.lower() in ['nan', '', 'none']: return '0'
+        return val.replace('.', '').replace(',', '.') if ',' in val and '.' in val else val.replace(',', '.')
+    return pd.to_numeric(s.apply(fix_val), errors='coerce').fillna(0)
+
+def normalize_art_code(val):
+    """
+    Normalizza codici articolo per evitare mismatch tra Excel (spazi invisibili, NBSP, ecc).
+    """
+    if val is None:
+        return ''
+    s = str(val)
+    # Rimuove NBSP e varianti di whitespace invisibili.
+    s = s.replace('\xa0', ' ').replace('\u202f', ' ').replace('\u2009', ' ')
+    # Rimuove caratteri invisibili/di controllo comuni (zero-width, BOM, joiners).
+    s = (
+        s.replace('\u200b', '')  # zero-width space
+         .replace('\u200c', '') # zero-width non-joiner
+         .replace('\u200d', '') # zero-width joiner
+         .replace('\u2060', '') # word joiner
+         .replace('\ufeff', '') # BOM
+    )
+    # Rimuove qualsiasi whitespace rimanente (anche unicode) e fa uppercase.
+    s = re.sub(r'\s+', '', s).strip()
+    return s.upper()
+
+def to_excel(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.drop(columns=['CS', 'DT_EXP', 'ART_KEY', 'ST'], errors='ignore').to_excel(writer, index=False)
+    return output.getvalue()
+
+def to_excel_full(df):
+    """Esporta l'intero DataFrame senza scartare colonne (export 'completo')."""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False)
+    return output.getvalue()
+
+def smart_load(filename, key_col):
+    if not os.path.exists(filename): return pd.DataFrame()
+    df_p = pd.read_excel(filename, header=None, nrows=20)
+    h_row = 0
+    for i, row in df_p.iterrows():
+        if key_col in row.astype(str).values:
+            h_row = i; break
+    df = pd.read_excel(filename, skiprows=h_row)
+    df.columns = [str(c).strip() for c in df.columns]
+    if "CODICE" not in key_col: df = df.ffill()
+    # Rimuove righe completamente vuote che ffill potrebbe aver riempito
+    df = df.dropna(how='all')
+    return df
+
+# --- 3. MOTORE DI CALCOLO ---
+@st.cache_data(ttl=1800)
+def load_and_process():
+    try:
+        df_arca = smart_load('righe_Ordini_ARCA.xlsx', "Articolo C")
+        if df_arca.empty: return pd.DataFrame(), {}
+        
+        c_tipo, c_art, c_qta, c_dat, c_cli = "Codice Documento", "Articolo C", "Qta Residua", "Data Consegna", "Cliente Fornitore CD"
+        df_arca[c_qta] = clean_num(df_arca[c_qta]).abs()
+        df_arca[c_dat] = pd.to_datetime(df_arca[c_dat], errors='coerce')
+        df_arca = df_arca[df_arca[c_tipo].isin(['OCI', 'OCA']) & (df_arca[c_qta] > 0)].dropna(subset=[c_dat, c_art])
+        # Rimuove righe duplicate esatte per evitare ordini doppi da export ARCA
+        df_arca = df_arca.drop_duplicates()
+
+        df_acc = smart_load('Avanzamento_access.xlsx', "CODICE")
+        stock_map = {}
+        if not df_acc.empty:
+            df_acc.columns = [str(c).strip().upper() for c in df_acc.columns]
+            # `PROD` deve rappresentare solo la produzione (non doppiare la parte di acquisto).
+            prod_cols = ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'TRF']
+            for _, r in df_acc.iterrows():
+                art_code = normalize_art_code(r.get('CODICE', ''))
+                gia = clean_num(pd.Series([r.get('GIA', 0)])).iloc[0]
+                # Se nel file coesistono entrambe le colonne, usiamo `INACQ` se valorizzata,
+                # altrimenti `ACQ` (fallback).
+                inacq_val = clean_num(pd.Series([r.get('INACQ', 0)])).iloc[0]
+                acq_val = clean_num(pd.Series([r.get('ACQ', 0)])).iloc[0]
+                acq = inacq_val if float(inacq_val) != 0 else acq_val
+                # Componenti produzione: servono anche per export (es. GRZ).
+                prod_components = {}
+                for f in prod_cols:
+                    prod_components[f] = clean_num(pd.Series([r.get(f, 0)])).iloc[0]
+                prod = sum(prod_components.values())
+                stock_map[art_code] = {
+                    'GIA': gia,
+                    'ACQ': acq,
+                    'PROD': prod,
+                    'FIGLIO': str(r.get('FIGLIO', 'NAN')),
+                    **prod_components,
+                }
+
+        df_orders = df_arca.sort_values(by=[c_art, c_dat])
+        final_results = []
+        curr_stocks = {k: v.copy() for k, v in stock_map.items()}
+
+        for index, row in df_orders.iterrows():
+            art_code = normalize_art_code(row.get(c_art, ''))
+            qta_ordine = float(row[c_qta])
+            fonte = get_coverage(art_code, qta_ordine, curr_stocks)
+            
+            if fonte:
+                if str(fonte).strip().upper() == art_code:
+                    stato, colore = "DISPONIBILE", "on-time-row"
+                else:
+                    stato, colore = "COPERTO BOM", "bom-row"
+            else:
+                s = curr_stocks.get(art_code, {'GIA':0, 'ACQ': 0, 'PROD': 0})
+                if (s['GIA'] + s['ACQ']) >= qta_ordine: stato, colore = "ACQUISTO", "acq-row"
+                elif (s['GIA'] + s['ACQ'] + s['PROD']) >= qta_ordine: stato, colore = "PRODUZIONE", "prod-row"
+                else: stato, colore = "MANCANTE", "urgent-row"
+            
+            if row[c_tipo] == 'OCA' and stato == "MANCANTE": stato, colore = "DA PIANIFICARE", "oca-row"
+            
+            res = row.to_dict()
+            res.update({'ST': stato, 'CS': colore, 'ART_KEY': art_code, 'DT_EXP': row[c_dat], 'CLI_NAME': str(row[c_cli]), 'DATA_ORD': pd.to_datetime(row.get('Data', None), errors='coerce')})
+            final_results.append(res)
+                
+        return pd.DataFrame(final_results), stock_map
+    except Exception as e:
+        st.error(f"Errore Motore: {e}")
+        return pd.DataFrame(), {}
+
+# --- 4. GESTIONE ACCESSO ---
+if "auth" not in st.session_state: 
+    st.session_state.auth = False
+
+if not st.session_state.auth:
+    USER_DB = get_user_db()
+    col1, col2, col3 = st.columns([1, 1.5, 1])
+    with col2:
+        if os.path.exists('Logo SAFIT.JPG'): st.image('Logo SAFIT.JPG', width=250)
+        u = st.text_input("Username").strip()
+        p = st.text_input("Password", type="password").strip()
+        if st.button("Accedi", use_container_width=True):
+            if u in USER_DB and str(USER_DB[u][0]) == p:
+                st.session_state.auth = True
+                st.session_state.user = u
+                st.session_state.permesso = USER_DB[u][1]
+                st.rerun()
+            else:
+                st.error("Credenziali errate.")
+    st.stop()
+
+# ===========================================================
+# FUNZIONI VISTA CLIENTE
+# ===========================================================
+LABEL_CLI = {
+    'DISPONIBILE':    ('Pronto per la spedizione', '#4caf50', 'on-time-row'),
+    'COPERTO BOM':    ('Pronto (componente)',       '#4caf50', 'on-time-row'),
+    'ACQUISTO':       ('In arrivo a magazzino',     '#2196f3', 'acq-row'),
+    'PRODUZIONE':     ('In lavorazione',            '#fbc02d', 'prod-row'),
+    'MANCANTE':       ('In pianificazione',         '#f44336', 'urgent-row'),
+    'DA PIANIFICARE': ('Da confermare',             '#9e9e9e', 'oca-row'),
 }
-.kpi-adv * { color:#1a1a2e !important; }
-.kpi-adv.g { border-left-color:#4caf50; }
-.kpi-adv.o { border-left-color:#ff9800; }
-.kpi-adv.r { border-left-color:#f44336; }
-.kpi-adv.p { border-left-color:#9c27b0; }
-.kpi-adv-t { font-size:10px; color:#888 !important; text-transform:uppercase;
-             letter-spacing:.5px; margin-bottom:3px; }
-.kpi-adv-v { font-size:26px; font-weight:700; color:#1a1a2e !important; line-height:1; }
-.kpi-adv-s { font-size:11px; color:#555 !important; margin-top:3px; }
-.sec-h { font-size:16px; font-weight:700; color:#1a1a2e !important;
-         border-bottom:2px solid #e3e8f0; padding-bottom:5px;
-         margin:20px 0 12px 0; }
-.alert-box { background:#fff8e1; border-left:4px solid #ff9800;
-             padding:10px 14px; border-radius:6px; margin:6px 0;
-             font-size:13px; color:#1a1a1a !important; }
-.alert-box b { color:#1a1a1a !important; }
-.alert-box * { color:#1a1a1a !important; }
-</style>
+
+def pbar_html(pct, color):
+    p = min(max(float(pct), 0), 100)
+    inside  = str(round(p)) + "%" if p > 15 else ""
+    outside = str(round(p)) + "%" if p <= 15 else ""
+    return (
+        '<div style="background:#e9ecef;border-radius:20px;height:16px;width:100%;overflow:hidden;margin:4px 0 8px 0;">'
+        '<div style="width:' + str(round(p,1)) + '%;background:' + color + ';height:100%;border-radius:20px;'
+        'display:flex;align-items:center;justify-content:flex-end;padding-right:6px;'
+        'font-size:10px;font-weight:700;color:#fff;box-sizing:border-box;">' + inside + '</div>'
+        '</div>'
+        '<div style="font-size:10px;color:#555;text-align:right;margin-top:-6px;">' + outside + '</div>'
+    )
+
+def tbar_html(data_ordine, data_consegna, oggi=None):
+    """
+    Barra temporale: mostra il progresso tra data ordine e data consegna.
+    Verde = tempo trascorso, grigio = tempo rimanente, rosso = ritardo.
+    """
+    if oggi is None:
+        oggi = datetime.now()
+
+    # Gestione tipi
+    try:
+        d_ord  = pd.Timestamp(data_ordine)
+        d_cons = pd.Timestamp(data_consegna)
+        d_oggi = pd.Timestamp(oggi)
+    except Exception:
+        return ""
+
+    if pd.isnull(d_ord) or pd.isnull(d_cons):
+        return ""
+
+    durata_tot = (d_cons - d_ord).days
+    if durata_tot <= 0:
+        durata_tot = 1
+
+    giorni_passati  = (d_oggi - d_ord).days
+    giorni_mancanti = (d_cons - d_oggi).days
+
+    in_ritardo = d_oggi > d_cons
+
+    if in_ritardo:
+        # Tutta la barra è rossa + overflow
+        ritardo_gg = (d_oggi - d_cons).days
+        pct_verde  = 100
+        colore_barra = "#f44336"
+        label_stato  = f'<span style="color:#f44336;font-weight:700;font-size:11px;">⚠️ In ritardo di {ritardo_gg} giorni</span>'
+    else:
+        pct_verde    = min(round(giorni_passati / durata_tot * 100), 100)
+        colore_barra = "#4caf50" if pct_verde < 85 else "#ff9800"
+        label_stato  = f'<span style="color:#4caf50;font-size:11px;">✅ Mancano <b>{giorni_mancanti}</b> giorni</span>'
+
+    str_ord  = d_ord.strftime("%d/%m/%y")
+    str_cons = d_cons.strftime("%d/%m/%y")
+    str_oggi = d_oggi.strftime("%d/%m/%y")
+
+    # Marcatore "oggi" sulla barra
+    marker_pct = min(max(pct_verde, 0), 98)
+
+    return f"""
+<div style="margin:6px 0 10px 0;">
+  <div style="display:flex;justify-content:space-between;font-size:10px;
+              color:#888;margin-bottom:3px;">
+    <span>📋 Ordine: <b style="color:#333;">{str_ord}</b></span>
+    <span>{label_stato}</span>
+    <span>🎯 Consegna: <b style="color:#333;">{str_cons}</b></span>
+  </div>
+  <div style="position:relative;background:#e9ecef;border-radius:20px;
+              height:18px;width:100%;overflow:visible;">
+    <div style="width:{pct_verde}%;background:{colore_barra};height:100%;
+                border-radius:20px;transition:width .3s;"></div>
+    <div style="position:absolute;top:-3px;left:{marker_pct}%;
+                transform:translateX(-50%);width:6px;height:24px;
+                background:#1a1a2e;border-radius:3px;opacity:.7;"
+         title="Oggi: {str_oggi}"></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;
+              font-size:10px;color:#aaa;margin-top:3px;">
+    <span>Inizio</span>
+    <span style="color:#555;">Oggi: {str_oggi}</span>
+    <span>Scadenza</span>
+  </div>
+</div>
 """
 
-
-# ── Caricamento e pulizia dati ────────────────────────────────────────────────
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def carica_storico_arca(path=PATH_STORICO):
+@st.cache_data(ttl=1800)
+def carica_btl_da_storico():
     """
-    Carica e normalizza il file export ARCA con struttura pivot.
-    Gestisce: header a riga 2, Codice Documento con ffill,
-    righe di totale, campi vuoti '(vuoto)'.
+    Carica OFR + OFF di BTL dal file storico con date.
+    Usa Qta Residua già presente nel file — esclude righe già evase (Qta Residua = 0).
+    Fallback: se Data Consegna mancante usa Data emissione.
     """
+    path = PATH_STORICO_DATE
     if not os.path.exists(path):
         return pd.DataFrame()
     try:
         df = pd.read_excel(path, skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
-
-        # Propaga Codice Documento (struttura pivot ARCA)
         df['Codice Documento'] = df['Codice Documento'].ffill()
+        df = df[~df['Codice Documento'].astype(str).str.contains('Totale|NaN|nan', na=True)]
+        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str) != '(vuoto)')]
+        df['Data']         = pd.to_datetime(df['Data'],         errors='coerce')
+        df['Data Consegna']= pd.to_datetime(df['Data Consegna'],errors='coerce')
+        df['Qta Doc']      = pd.to_numeric(df['Qta Doc'],       errors='coerce').fillna(0)
+        df['Qta Residua']  = pd.to_numeric(df.get('Qta Residua', 0), errors='coerce').fillna(0)
 
-        # Rimuovi righe di totale e righe vuote
-        mask_totale = df['Codice Documento'].astype(str).str.contains(
-            'Totale|NaN|nan', na=True
-        )
-        df = df[~mask_totale].copy()
-        df = df[
-            df['Articolo C'].notna() &
-            (df['Articolo C'].astype(str) != '(vuoto)')
+        # Fallback: se Data Consegna mancante usa Data emissione
+        df['Data Consegna'] = df['Data Consegna'].fillna(df['Data'])
+
+        # Filtra BTL OFR+OFF con quantità residua ancora aperta
+        df_btl = df[
+            df['Cliente Fornitore CD'].str.contains('BTL', case=False, na=False) &
+            df['Codice Documento'].isin(['OFR', 'OFF']) &
+            (df['Qta Residua'] > 0)
         ].copy()
-
-        # Normalizza date
-        df['Data']          = pd.to_datetime(df['Data'],          errors='coerce')
-        df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
-
-        # Propaga Data Consegna all'interno dello stesso documento
-        df['Data Consegna'] = df.groupby('Numero Documento')['Data Consegna'].ffill()
-
-        # Normalizza quantità
-        df['Qta Doc'] = pd.to_numeric(df['Qta Doc'], errors='coerce').fillna(0)
-        df['Valore']  = pd.to_numeric(df['Valore'],  errors='coerce').fillna(0)
-
-        # Estrai cliente (es. "C000289 - ORION CALZATURIFICIO SPA" → "ORION CALZATURIFICIO SPA")
-        df['Cliente'] = df['Cliente Fornitore CD'].astype(str).str.split(' - ', n=1).str[-1].str.strip()
-        df['Cod_Cliente'] = df['Cliente Fornitore CD'].astype(str).str.split(' - ', n=1).str[0].str.strip()
-
-        # Famiglia da prime 2 parole Articolo D
-        df['Famiglia'] = df['Articolo D'].apply(
-            lambda x: ' '.join(str(x).split()[:2]).upper()
-        )
-
-        return df
+        df_btl['Tipo']    = df_btl['Codice Documento'].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
+        df_btl['Qta Doc'] = df_btl['Qta Residua']  # usa sempre la quantità residua
+        return df_btl
     except Exception as e:
-        st.warning(f"Errore lettura storico ARCA: {e}")
         return pd.DataFrame()
 
 
-def get_oci_oca(df):
-    """Filtra solo OCI e OCA con quantità > 0."""
-    return df[
-        df['Codice Documento'].isin(['OCI', 'OCA']) &
-        (df['Qta Doc'] > 0)
+def render_vista_btl(df_res=None, filtro_famiglie=None):
+    """Vista BTL — OFR (lavorazioni) + OFF (acquisti). Usa Qta Residua da ARCA per quantità aperte."""
+    st.title("🏭 Lavorazioni & Acquisti BTL")
+    st.caption(f"Anticipo consegna a Friola: **{ANTICIPO_BTL_GG} giorni** prima della data consegna")
+
+    df_btl_storico = carica_btl_da_storico()
+    if df_btl_storico.empty:
+        st.info("Nessun ordine BTL trovato. Verifica che il file righe_ordini_storico_con_date.xlsx sia presente.")
+        return
+
+    # Qta Residua già filtrata in carica_btl_da_storico — nessun join necessario
+    df_btl = df_btl_storico.copy()
+
+    # Applica filtro famiglie se attivo
+    if filtro_famiglie:
+        df_btl['_Famiglia'] = df_btl['Articolo D'].apply(lambda x: ' '.join(str(x).split()[:2]).upper())
+        df_btl = df_btl[df_btl['_Famiglia'].isin(filtro_famiglie)]
+
+    if df_btl.empty:
+        st.success("✅ Nessuna lavorazione BTL aperta al momento.")
+        return
+
+    n_lav = df_btl[df_btl['Codice Documento']=='OFR']['Articolo C'].nunique()
+    n_acq = df_btl[df_btl['Codice Documento']=='OFF']['Articolo C'].nunique()
+    urgenti = df_btl[df_btl['Data Consegna'].notna() &
+                     (df_btl['Data Consegna'] <= pd.Timestamp(datetime.now()) + pd.Timedelta(days=7))]
+    k1, k2, k3 = st.columns(3)
+    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#fbc02d">🔧 IN LAVORAZIONE</div><div class="kpi-val">{n_lav}</div></div>', unsafe_allow_html=True)
+    k2.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#2196f3">🛒 IN ACQUISTO</div><div class="kpi-val">{n_acq}</div></div>', unsafe_allow_html=True)
+    k3.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#f44336">⚠️ URGENTI ≤7gg</div><div class="kpi-val">{urgenti["Articolo C"].nunique()}</div></div>', unsafe_allow_html=True)
+    st.markdown("---")
+
+    for art, g in df_btl.sort_values('Data Consegna', na_position='last').groupby('Articolo C', sort=False):
+        desc    = g['Articolo D'].iloc[0]
+        qta_tot = int(g['Qta Doc'].sum())
+        tipi    = ' + '.join(g['Tipo'].unique().tolist())
+        d_cons  = g['Data Consegna'].dropna().min() if g['Data Consegna'].notna().any() else None
+        d_ord   = g['Data'].dropna().min()           if g['Data'].notna().any()          else None
+
+        if d_cons is not None:
+            d_friola      = d_cons - pd.Timedelta(days=ANTICIPO_BTL_GG)
+            giorni_friola = (d_friola - pd.Timestamp(datetime.now())).days
+            if giorni_friola < 0:
+                badge, urgenza, col_u = "🔴", f"IN RITARDO di {abs(giorni_friola)} gg", "#f44336"
+            elif giorni_friola <= 3:
+                badge, urgenza, col_u = "🟠", f"URGENTE — {giorni_friola} gg", "#ff9800"
+            elif giorni_friola <= 7:
+                badge, urgenza, col_u = "🟡", f"A BREVE — {giorni_friola} gg", "#fbc02d"
+            else:
+                badge, urgenza, col_u = "🟢", f"Mancano {giorni_friola} gg", "#4caf50"
+            data_label = f"📦 Friola: {d_friola.strftime('%d/%m/%Y')}"
+        else:
+            badge, urgenza, col_u, d_friola, data_label = "⚪", "Data N/D", "#9e9e9e", None, "📦 Data N/D"
+
+        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pz | {tipi} | {data_label}".replace(",",".")):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Quantità", f"{qta_tot:,} pz".replace(",","."))
+            c2.metric("A Friola entro", d_friola.strftime("%d/%m/%Y") if d_friola else "N/D")
+            c3.metric("Data consegna", d_cons.strftime("%d/%m/%Y") if d_cons else "N/D")
+            if d_friola:
+                st.markdown(f'<div style="background:#fff8e1;border-left:4px solid {col_u};padding:8px 14px;border-radius:6px;margin:6px 0;color:#1a1a1a!important;font-weight:600;">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
+                d_start = d_ord if d_ord is not None else d_friola - pd.Timedelta(days=30)
+                st.markdown(tbar_html(d_start, d_friola), unsafe_allow_html=True)
+            st.markdown("**Dettaglio righe:**")
+            for _, r in g.sort_values('Data Consegna', na_position='last').iterrows():
+                d_c  = r['Data Consegna']
+                d_fs = (d_c - pd.Timedelta(days=ANTICIPO_BTL_GG)).strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
+                d_cs = d_c.strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
+                css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo','')) else 'acq-row'
+                st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pz | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
+
+def render_vista_atoplast(df_res, filtro_famiglie=None):
+    """Vista dedicata ad Atoplast — solo articoli PRODUZIONE con codice PCP*****."""
+    st.title("🏭 Lavorazioni Atoplast")
+    st.caption(f"Anticipo consegna a Friola: **{ANTICIPO_ATOPLAST_GG} giorni** prima della data cliente")
+
+    df_atp = df_res[
+        (df_res['ST'] == 'PRODUZIONE') &
+        (df_res['ART_KEY'].str.startswith('PCP', na=False))
     ].copy()
 
+    # Applica filtro famiglie se attivo
+    if filtro_famiglie:
+        df_atp['_Famiglia'] = df_atp['Articolo D'].apply(lambda x: ' '.join(str(x).split()[:2]).upper())
+        df_atp = df_atp[df_atp['_Famiglia'].isin(filtro_famiglie)]
 
-def get_dvf(df):
-    """Restituisce i DVF (documenti di vendita = evasioni reali)."""
-    return df[df['Codice Documento'] == 'DVF'].copy()
+    if df_atp.empty:
+        st.success("✅ Nessuna lavorazione Atoplast in corso al momento.")
+        return
 
+    k1, k2, k3 = st.columns(3)
+    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#9c27b0">ARTICOLI PCP IN LAVORAZIONE</div><div class="kpi-val">{df_atp["ART_KEY"].nunique()}</div></div>', unsafe_allow_html=True)
+    k2.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#9c27b0">QUANTITÀ TOTALE</div><div class="kpi-val">{int(df_atp["Qta Residua"].sum()):,}</div></div>'.replace(",","."), unsafe_allow_html=True)
+    urgenti = df_atp[df_atp['DT_EXP'] <= pd.Timestamp(datetime.now()) + pd.Timedelta(days=7)]
+    k3.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#f44336">URGENTI ≤7gg</div><div class="kpi-val">{urgenti["ART_KEY"].nunique()}</div></div>', unsafe_allow_html=True)
+    st.markdown("---")
 
-# ── Calcoli KPI ───────────────────────────────────────────────────────────────
+    for art, g in df_atp.sort_values('DT_EXP').groupby('ART_KEY', sort=False):
+        desc           = g['Articolo D'].iloc[0]
+        qta_tot        = int(g['Qta Residua'].sum())
+        d_cons_cliente = g['DT_EXP'].min()
+        d_cons_friola  = d_cons_cliente - pd.Timedelta(days=ANTICIPO_ATOPLAST_GG)
+        giorni_friola  = (d_cons_friola - pd.Timestamp(datetime.now())).days
 
-def calcola_storicita_rotazione(df_ordini):
-    """Storicità e rotazione per articolo."""
-    if df_ordini.empty:
-        return pd.DataFrame()
-
-    grp = df_ordini.groupby(['Articolo C', 'Articolo D', 'Famiglia']).agg(
-        N_Ordini        =('Data', 'count'),
-        Qta_Totale      =('Qta Doc', 'sum'),
-        Valore_Totale   =('Valore', 'sum'),
-        Prima_Richiesta =('Data', 'min'),
-        Ultima_Richiesta=('Data', 'max'),
-        N_Clienti       =('Cliente', 'nunique'),
-    ).reset_index()
-
-    grp['Giorni_Attivita'] = (
-        grp['Ultima_Richiesta'] - grp['Prima_Richiesta']
-    ).dt.days.clip(lower=1)
-    grp['Freq_Settimanale'] = (
-        grp['N_Ordini'] / (grp['Giorni_Attivita'] / 7)
-    ).round(2)
-
-    return grp.sort_values('Qta_Totale', ascending=False).reset_index(drop=True)
-
-
-def calcola_frequenza_riordino(df_ordini):
-    """Intervallo medio di riordino per articolo × cliente."""
-    if df_ordini.empty:
-        return pd.DataFrame()
-
-    risultati = []
-    for (art, cli), g in df_ordini.groupby(['Articolo C', 'Cliente']):
-        date_ordini = sorted(g['Data'].dropna().tolist())
-        if len(date_ordini) < 2:
-            intervallo = None
+        if giorni_friola < 0:
+            badge, urgenza, col_u = "🔴", f"IN RITARDO di {abs(giorni_friola)} gg", "#f44336"
+        elif giorni_friola <= 3:
+            badge, urgenza, col_u = "🟠", f"URGENTE — {giorni_friola} gg", "#ff9800"
+        elif giorni_friola <= 7:
+            badge, urgenza, col_u = "🟡", f"A BREVE — {giorni_friola} gg", "#fbc02d"
         else:
-            delta = [(date_ordini[i+1]-date_ordini[i]).days
-                     for i in range(len(date_ordini)-1)]
-            intervallo = round(float(np.mean(delta)), 1)
+            badge, urgenza, col_u = "🟢", f"Mancano {giorni_friola} gg", "#4caf50"
 
-        ultimo = max(date_ordini) if date_ordini else pd.NaT
-        qta_media = round(g['Qta Doc'].mean(), 0) if len(g) > 0 else 0
-        risultati.append({
-            'Articolo C':          art,
-            'Articolo D':          g['Articolo D'].iloc[0],
-            'Famiglia':            g['Famiglia'].iloc[0],
-            'Cliente':             cli,
-            'Cod_Cliente':         g['Cod_Cliente'].iloc[0],
-            'N_Ordini':            len(date_ordini),
-            'Qta_Totale':          g['Qta Doc'].sum(),
-            'Qta_Media_Ordine':    qta_media,
-            'Intervallo_Medio_gg': intervallo,
-            'Ultimo_Ordine':       ultimo,
-            'Giorni_Da_Ultimo':    (datetime.now() - ultimo).days if pd.notnull(ultimo) else None,
-        })
+        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pz | 📦 Friola: {d_cons_friola.strftime('%d/%m/%Y')}".replace(",",".")):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Qta da produrre", f"{qta_tot:,} pz".replace(",","."))
+            c2.metric("Consegna a Friola", d_cons_friola.strftime("%d/%m/%Y"))
+            c3.metric("Scadenza cliente", d_cons_cliente.strftime("%d/%m/%Y"))
+            st.markdown(f'<div style="background:#f3e5f5;border-left:4px solid {col_u};padding:8px 14px;border-radius:6px;margin:6px 0;color:#1a1a1a!important;font-weight:600;">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
 
-    return pd.DataFrame(risultati).sort_values('N_Ordini', ascending=False)
+            d_ord_atp = g['DATA_ORD'].min() if 'DATA_ORD' in g.columns and g['DATA_ORD'].notna().any() else d_cons_friola - pd.Timedelta(days=30)
+            st.markdown(tbar_html(d_ord_atp, d_cons_friola), unsafe_allow_html=True)
 
+            st.markdown("**Dettaglio ordini:**")
+            for _, r in g.sort_values('DT_EXP').iterrows():
+                cli   = str(r.get('CLI_NAME', '')).split(' - ')[-1].strip()
+                d_fri = r['DT_EXP'] - pd.Timedelta(days=ANTICIPO_ATOPLAST_GG)
+                st.markdown(f'<div class="status-row bom-row" style="color:#1a1a1a!important;"><span>🏭 Q: <b>{int(r["Qta Residua"]):,}</b> pz | 📦 A Friola: <b>{d_fri.strftime("%d/%m/%Y")}</b> | 👤 {cli}</span></div>'.replace(",","."), unsafe_allow_html=True)
 
-def calcola_scostamento_consegna(df_ordini, df_dvf):
-    """
-    Scostamento data consegna prevista (OCI) vs data evasione reale (DVF).
-    Incrocia su Articolo C + Cliente.
-    """
-    if df_ordini.empty or df_dvf.empty:
-        return pd.DataFrame(), {}
+def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
+    """Vista pulita per il cliente — nessun dato interno visibile."""
+    COLOR_MAP_CLI = {v[0]: v[1] for v in LABEL_CLI.values()}
 
-    # Per ogni articolo+cliente: ultima data DVF come proxy "data evasione"
-    df_dvf_grp = df_dvf.groupby(['Articolo C', 'Cliente'])['Data'].max().reset_index()
-    df_dvf_grp.columns = ['Articolo C', 'Cliente', 'Data_Evasione']
+    st.title("📦 I tuoi Ordini")
 
-    df_join = df_ordini.merge(df_dvf_grp, on=['Articolo C', 'Cliente'], how='inner')
-    df_join = df_join.dropna(subset=['Data Consegna', 'Data_Evasione'])
+    if df_cli.empty:
+        st.info("Nessun ordine aperto al momento.")
+        return
 
-    if df_join.empty:
-        return pd.DataFrame(), {}
+    # KPI cliente
+    tot_qta   = int(df_cli['Qta Residua'].sum())
+    # Calcolo allocando la disponibilità (GIA/ACQ/PROD) sulle righe di ciascun articolo
+    # in ordine di consegna: così le quantità coperte "in parte" da GIA finiscono nei PRONTI.
+    pronti_gia = 0.0
+    in_acquisto = 0.0
+    in_produzione = 0.0
+    mancanti = 0.0
+    for art, g in df_cli.groupby('ART_KEY'):
+        s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
+        gia_left = float(s_i.get('GIA', 0))
+        acq_left = float(s_i.get('ACQ', 0))
+        prod_left = float(s_i.get('PROD', 0))
+        g_sorted = g.sort_values(by='DT_EXP') if 'DT_EXP' in g.columns else g
+        for _, r in g_sorted.iterrows():
+            q = float(r.get('Qta Residua', 0))
+            if q <= 0:
+                continue
+            # Prima copertura con GIA
+            take = min(gia_left, q)
+            pronti_gia += take
+            gia_left -= take
+            q -= take
+            if q <= 0:
+                continue
+            # Poi copertura con ACQ
+            take = min(acq_left, q)
+            in_acquisto += take
+            acq_left -= take
+            q -= take
+            if q <= 0:
+                continue
+            # Poi copertura con PROD
+            take = min(prod_left, q)
+            in_produzione += take
+            prod_left -= take
+            q -= take
+            if q > 0:
+                mancanti += q
 
-    df_join['Scostamento_gg'] = (
-        df_join['Data_Evasione'] - df_join['Data Consegna']
-    ).dt.days
+    n_pronti = int(round(pronti_gia))
+    n_lavoro = int(round(in_acquisto + in_produzione))
+    n_mancanti = int(round(mancanti))
+    pct_pronto = round(n_pronti / tot_qta * 100) if tot_qta > 0 else 0
 
-    df_join['Stato_Consegna'] = df_join['Scostamento_gg'].apply(
-        lambda x: '✅ Puntuale'   if -2 <= x <= 2
-        else ('⚡ Anticipato'     if x < -2
-        else  '⚠️ In ritardo')
-    )
+    k1, k2, k3, k4 = st.columns(4)
+    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">TOTALE PEZZI</div><div class="kpi-val">{tot_qta:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
+    k2.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#4caf50">PRONTI</div><div class="kpi-val">{n_pronti:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
+    k3.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#2196f3">IN LAVORAZIONE</div><div class="kpi-val">{n_lavoro:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
+    k4.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#f44336">DA PIANIFICARE</div><div class="kpi-val">{n_mancanti:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
 
-    summary = {
-        'n_evasi':           len(df_join),
-        'media_scost':       round(df_join['Scostamento_gg'].mean(), 1),
-        'mediana_scost':     round(df_join['Scostamento_gg'].median(), 1),
-        'pct_puntuali':      round((df_join['Scostamento_gg'].between(-2, 2)).mean() * 100, 1),
-        'pct_ritardo':       round((df_join['Scostamento_gg'] > 2).mean() * 100, 1),
-        'pct_anticipati':    round((df_join['Scostamento_gg'] < -2).mean() * 100, 1),
+    # Grafico torta stato ordini cliente (calcolato coerentemente con KPI/Disponibile)
+    # Nota: sommare direttamente per `ST` non è più corretto quando una riga è classificata
+    # come ACQUISTO/PRODUZIONE ma una parte è coperta da GIA.
+    label_key_by_st = {
+        'DISPONIBILE': 'Pronto per la spedizione',
+        'COPERTO BOM': 'Pronto (componente)',
+        'ACQUISTO': 'In arrivo a magazzino',
+        'PRODUZIONE': 'In lavorazione',
+        'MANCANTE': 'In pianificazione',
+        'DA PIANIFICARE': 'Da confermare',
     }
-    return df_join, summary
+    # Accumulo per etichetta del grafico
+    qty_by_label = {k: 0.0 for k in label_key_by_st.values()}
 
+    for art, g in df_cli.groupby('ART_KEY'):
+        s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
+        gia_left = float(s_i.get('GIA', 0))
+        acq_left = float(s_i.get('ACQ', 0))
+        prod_left = float(s_i.get('PROD', 0))
+        g_sorted = g.sort_values(by='DT_EXP') if 'DT_EXP' in g.columns else g
 
-def calcola_trend_mensile(df_ordini):
-    """Volume ordini per mese."""
-    if df_ordini.empty or 'Data' not in df_ordini.columns:
-        return pd.DataFrame()
-    df = df_ordini.copy()
-    df['Mese'] = df['Data'].dt.to_period('M').astype(str)
-    return df.groupby('Mese').agg(
-        N_Righe=('Articolo C', 'count'),
-        Qta_Totale=('Qta Doc', 'sum'),
-        N_Clienti=('Cliente', 'nunique'),
-        N_Articoli=('Articolo C', 'nunique'),
-    ).reset_index().sort_values('Mese')
+        for _, r in g_sorted.iterrows():
+            q = float(r.get('Qta Residua', 0))
+            if q <= 0:
+                continue
 
+            # Portion split: GIA -> PRONTI, poi ACQ -> IN ARRIVO, poi PROD -> IN LAVORAZIONE
+            take_gia = min(gia_left, q)
+            gia_left -= take_gia
+            q_rem = q - take_gia
 
-# ── Helper UI ─────────────────────────────────────────────────────────────────
+            if take_gia > 0:
+                gia_label = 'Pronto (componente)' if str(r.get('ST', '')).strip().upper() == 'COPERTO BOM' else 'Pronto per la spedizione'
+                qty_by_label[gia_label] += take_gia
 
-def kpi_card(col, title, value, sub="", color=""):
-    col.markdown(
-        f'<div class="kpi-adv {color}">'
-        f'<div class="kpi-adv-t">{title}</div>'
-        f'<div class="kpi-adv-v">{value}</div>'
-        f'<div class="kpi-adv-s">{sub}</div>'
-        f'</div>',
-        unsafe_allow_html=True,
+            if q_rem <= 0:
+                continue
+
+            take_acq = min(acq_left, q_rem)
+            acq_left -= take_acq
+            q_rem -= take_acq
+            if take_acq > 0:
+                qty_by_label['In arrivo a magazzino'] += take_acq
+
+            if q_rem <= 0:
+                continue
+
+            take_prod = min(prod_left, q_rem)
+            prod_left -= take_prod
+            q_rem -= take_prod
+            if take_prod > 0:
+                qty_by_label['In lavorazione'] += take_prod
+
+            # Resto scoperto: usiamo lo stato originale (MANCANTE/DA PIANIFICARE)
+            if q_rem > 0:
+                st_line = str(r.get('ST', '')).strip().upper()
+                if st_line == 'DA PIANIFICARE':
+                    qty_by_label['Da confermare'] += q_rem
+                else:
+                    qty_by_label['In pianificazione'] += q_rem
+
+    df_torta = (
+        pd.DataFrame(
+            [{'Stato Cliente': k, 'Qta Residua': int(round(v))} for k, v in qty_by_label.items() if v > 0]
+        )
+        .sort_values('Qta Residua', ascending=False)
+    )
+    col_t, col_info = st.columns([1, 1])
+    with col_t:
+        fig_cli = px.pie(df_torta, values='Qta Residua', names='Stato Cliente',
+                         color='Stato Cliente',
+                         color_discrete_map={
+                             'Pronto per la spedizione':'#4caf50',
+                             'Pronto (componente)':     '#4caf50',
+                             'In arrivo a magazzino':   '#2196f3',
+                             'In lavorazione':          '#fbc02d',
+                             'In pianificazione':       '#f44336',
+                             'Da confermare':           '#9e9e9e',
+                         })
+        fig_cli.update_traces(textinfo='label+percent',
+                              hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<extra></extra>')
+        fig_cli.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=False, height=280)
+        st.plotly_chart(fig_cli, use_container_width=True)
+    with col_info:
+        st.markdown("##### Avanzamento complessivo")
+        st.markdown(f"**{pct_pronto}%** degli ordini è pronto per la spedizione")
+        st.markdown(pbar_html(pct_pronto, '#4caf50'), unsafe_allow_html=True)
+        st.markdown("---")
+        st.caption("🟢 Pronto — disponibile in magazzino")
+        st.caption("🔵 In arrivo — materiale in fase di acquisto")
+        st.caption("🟡 In lavorazione — in produzione")
+        st.caption("🔴 In pianificazione — da programmare")
+
+    st.markdown("---")
+
+    # Tab vista cliente
+    tab_ord_cli, tab_kpi_cli = st.tabs(["📦 I miei Ordini", "📊 Statistiche"])
+
+    with tab_ord_cli:
+      # Dettaglio ordini per articolo
+      for art, g in df_cli.groupby('ART_KEY'):
+        desc     = g['Articolo D'].iloc[0]
+        qta_tot  = int(g['Qta Residua'].sum())
+        stati_g  = g['ST'].tolist()
+        # Colore expander = stato peggiore
+        if 'MANCANTE' in stati_g or 'DA PIANIFICARE' in stati_g:
+            badge = "🔴"
+        elif 'PRODUZIONE' in stati_g or 'ACQUISTO' in stati_g:
+            badge = "🟡"
+        else:
+            badge = "🟢"
+
+        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pz".replace(",",".")):
+            # Barra avanzamento articolo
+            # "Disponibile" per il cliente deve riflettere quanta parte della richiesta
+            # può essere coperta dalla sola GIACENZA (GIA), anche se la riga è classificata
+            # come "ACQUISTO" perché la GIA non è sufficiente a coprire tutto.
+            s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
+            gia_left = float(s_i.get('GIA', 0))
+            qta_pronta = 0.0
+            g_sorted = g.sort_values(by='DT_EXP') if 'DT_EXP' in g.columns else g
+            for _, r in g_sorted.iterrows():
+                q = float(r.get('Qta Residua', 0))
+                take = min(gia_left, q)
+                qta_pronta += take
+                gia_left -= take
+                if gia_left <= 0:
+                    break
+            qta_pronta = int(round(qta_pronta))
+            pct_art    = round(qta_pronta / qta_tot * 100) if qta_tot > 0 else 0
+            bar_col    = '#4caf50' if pct_art >= 100 else ('#fbc02d' if pct_art > 0 else '#f44336')
+            st.markdown(
+                f"**Disponibile: {qta_pronta:,} / {qta_tot:,} pz**".replace(",","."),
+            )
+            st.markdown(pbar_html(pct_art, bar_col), unsafe_allow_html=True)
+
+            # Barra temporale: per ogni riga mostra avanzamento vs data consegna
+            for _, r_t in g_sorted.iterrows():
+                d_ord_r  = r_t.get('Data', None) or r_t.get('DT_EXP', None)
+                d_cons_r = r_t.get('DT_EXP', None)
+                if pd.notnull(d_ord_r) and pd.notnull(d_cons_r):
+                    st.markdown(tbar_html(d_ord_r, d_cons_r), unsafe_allow_html=True)
+                    break  # una sola barra per articolo (prima riga)
+
+            # Righe ordine
+            for _, r in g.iterrows():
+                testo, colore, css = LABEL_CLI.get(r['ST'], (r['ST'], '#aaa', 'oca-row'))
+                data_str = r['DT_EXP'].strftime("%d/%m/%Y") if pd.notnull(r['DT_EXP']) else "N.D."
+                st.markdown(
+                    f'<div class="status-row {css}">'
+                    f'<span>📅 Consegna: <b>{data_str}</b> | Q.tà: <b>{int(r["Qta Residua"]):,}</b></span>'.replace(",",".")
+                    + f'<span><b>{testo}</b></span>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
+    with tab_kpi_cli:
+        render_kpi_avanzati(filtro_cliente=nome_cliente)
+
+# ===========================================================
+# --- 5. DASHBOARD ---
+# ===========================================================
+df_res, stock_raw = load_and_process()
+if 'last_update' not in st.session_state:
+    st.session_state.last_update = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+
+if not df_res.empty:
+    # --- SIDEBAR COMUNE ---
+    with st.sidebar:
+        if os.path.exists('Logo SAFIT.JPG'):
+            st.image('Logo SAFIT.JPG', use_container_width=True)
+        st.markdown(f'<div class="user-info">👤 <b>{st.session_state.user}</b></div>', unsafe_allow_html=True)
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("🚪 Esci", use_container_width=True):
+                st.session_state.auth = False
+                st.rerun()
+        with col_b:
+            if st.button("🔄 Aggiorna", use_container_width=True):
+                st.cache_data.clear()  # svuota TUTTA la cache incluso BTL/storico
+                st.session_state.last_update = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+                st.rerun()
+        st.caption("📅 Dati al: " + st.session_state.get('last_update', '--'))
+        st.markdown("---")
+
+        is_admin = st.session_state.permesso == "TUTTI"
+        is_btl      = st.session_state.permesso == "BTL"
+        is_atoplast = st.session_state.permesso == "ATOPLAST"
+        if is_admin:
+            sel_cli = st.selectbox("Seleziona Cliente:", ["TUTTI"] + sorted(df_res['CLI_NAME'].unique().tolist()))
+        else:
+            sel_cli = st.session_state.permesso
+
+        search = st.text_input("🔍 Cerca Articolo:").upper()
+
+    df_f = df_res[df_res['CLI_NAME'] == sel_cli] if sel_cli != "TUTTI" else df_res.copy()
+    if search: df_f = df_f[df_f['ART_KEY'].str.contains(search)]
+
+    # ===========================================================
+    # VISTA CLIENTE
+    # ===========================================================
+    if is_btl:
+        render_vista_btl(df_res)
+        st.stop()
+
+    if is_atoplast:
+        render_vista_atoplast(df_res)
+        st.stop()
+
+    if not is_admin:
+        render_vista_cliente(df_f, stock_raw, nome_cliente=sel_cli if sel_cli != 'TUTTI' else '')
+        st.stop()
+
+    # ===========================================================
+    # VISTA ADMIN (tutto il pannello originale)
+    # ===========================================================
+    # Nota: il download/export lo impostiamo più avanti usando `df_view`,
+    # così rispetta anche i filtri selezionati per stato/famiglia.
+
+    # ===========================================================
+    # VISTA ADMIN: calcoli coerenti con la vista cliente
+    # (allocazione PRONTI/ACQUISTO/PRODUZIONE basata su `stock_raw`)
+    # ===========================================================
+    def allocate_admin_states(df_in, stock_raw_in):
+        qty_by_st = {
+            'DISPONIBILE': 0.0,
+            'COPERTO BOM': 0.0,
+            'ACQUISTO': 0.0,
+            'PRODUZIONE': 0.0,
+            'MANCANTE': 0.0,
+            'DA PIANIFICARE': 0.0,
+        }
+
+        for art, g in df_in.groupby('ART_KEY'):
+            s_i = stock_raw_in.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0, 'FIGLIO': 'NAN'})
+            gia_left = float(s_i.get('GIA', 0))
+            acq_left = float(s_i.get('ACQ', 0))
+            prod_left = float(s_i.get('PROD', 0))
+
+            figlio_code = str(s_i.get('FIGLIO', 'NAN')).strip().upper()
+            figlio_gia_left = 0.0
+            if figlio_code and figlio_code != 'NAN':
+                figlio_gia_left = float(stock_raw_in.get(figlio_code, {}).get('GIA', 0))
+
+            g_sorted = g.sort_values(by='DT_EXP') if 'DT_EXP' in g.columns else g
+            for _, r in g_sorted.iterrows():
+                q = float(r.get('Qta Residua', 0))
+                if q <= 0:
+                    continue
+
+                st_line = str(r.get('ST', '')).strip().upper()
+
+                # Manteniamo la classificazione "full cover" del motore per DISPONIBILE/COPERTO BOM
+                if st_line == 'DISPONIBILE':
+                    qty_by_st['DISPONIBILE'] += q
+                    gia_left = max(gia_left - q, 0.0)
+                    continue
+                if st_line == 'COPERTO BOM':
+                    qty_by_st['COPERTO BOM'] += q
+                    if figlio_code and figlio_code != 'NAN':
+                        figlio_gia_left = max(figlio_gia_left - q, 0.0)
+                    continue
+
+                # Altrimenti splittiamo: GIA -> DISPONIBILE, poi ACQ -> ACQUISTO, poi PROD -> PRODUZIONE
+                take_gia = min(gia_left, q)
+                qty_by_st['DISPONIBILE'] += take_gia
+                gia_left -= take_gia
+                q_rem = q - take_gia
+
+                if q_rem <= 0:
+                    continue
+
+                take_acq = min(acq_left, q_rem)
+                qty_by_st['ACQUISTO'] += take_acq
+                acq_left -= take_acq
+                q_rem -= take_acq
+
+                if q_rem <= 0:
+                    continue
+
+                take_prod = min(prod_left, q_rem)
+                qty_by_st['PRODUZIONE'] += take_prod
+                prod_left -= take_prod
+                q_rem -= take_prod
+
+                if q_rem <= 0:
+                    continue
+
+                # Resto scoperto: usiamo lo stato originale (MANCANTE/DA PIANIFICARE)
+                if st_line == 'DA PIANIFICARE':
+                    qty_by_st['DA PIANIFICARE'] += q_rem
+                else:
+                    qty_by_st['MANCANTE'] += q_rem
+
+        return qty_by_st
+
+    alloc_admin = allocate_admin_states(df_f, stock_raw)
+    n_pronti_admin = int(round(alloc_admin['DISPONIBILE']))
+    n_bom_admin = int(round(alloc_admin['COPERTO BOM']))
+    n_mancanti_admin = int(round(alloc_admin['MANCANTE']))
+    # ===========================================================
+
+    st.title("Pannello Controllo Safit")
+
+    # ── Prepara colonne e mappa colori ───────────────────────────────────────
+    df_f = df_f.copy()
+    df_f['Famiglia'] = df_f['Articolo D'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
+
+    COLOR_MAP = {'DISPONIBILE':'#4caf50','COPERTO BOM':'#9c27b0','ACQUISTO':'#2196f3',
+                 'PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}
+
+    if 'filtro_stati' not in st.session_state:    st.session_state.filtro_stati    = []
+    if 'filtro_famiglie' not in st.session_state: st.session_state.filtro_famiglie = []
+
+    # ── Applica filtri PRIMA di mostrare i widget (così df_view è corretto) ──
+    df_view = df_f.copy()
+    if st.session_state.filtro_famiglie:
+        df_view = df_view[df_view['Famiglia'].isin(st.session_state.filtro_famiglie)]
+    if st.session_state.filtro_stati:
+        df_view = df_view[df_view['ST'].isin(st.session_state.filtro_stati)]
+
+    # ── Filtri compatti su una riga ──────────────────────────────────────────
+    _fam_disp = df_f.groupby('Famiglia')['Qta Residua'].sum().sort_values(ascending=False).head(12).index.tolist()
+    _sta_disp = [s for s in COLOR_MAP if df_f[df_f['ST']==s]['Qta Residua'].sum() > 0]
+    _cf, _cs, _cr = st.columns([3, 2, 1])
+    # Pulisce i valori in sessione se non validi per il cliente corrente
+    _def_fam = [f for f in st.session_state.filtro_famiglie if f in _fam_disp]
+    _def_sta = [s for s in st.session_state.filtro_stati    if s in _sta_disp]
+    if _def_fam != st.session_state.filtro_famiglie:
+        st.session_state.filtro_famiglie = _def_fam
+    if _def_sta != st.session_state.filtro_stati:
+        st.session_state.filtro_stati = _def_sta
+
+    with _cf:
+        _sel_fam = st.multiselect(
+            "📂 Famiglia", _fam_disp, default=_def_fam,
+            placeholder="Tutte le famiglie", key="ms_famiglie", label_visibility="collapsed"
+        )
+        if _sel_fam != st.session_state.filtro_famiglie:
+            st.session_state.filtro_famiglie = _sel_fam
+            st.rerun()
+    with _cs:
+        _sel_sta = st.multiselect(
+            "🔵 Stato", _sta_disp, default=_def_sta,
+            placeholder="Tutti gli stati", key="ms_stati", label_visibility="collapsed"
+        )
+        if _sel_sta != st.session_state.filtro_stati:
+            st.session_state.filtro_stati = _sel_sta
+            st.rerun()
+    with _cr:
+        if st.button("✖ Reset", use_container_width=True, key="btn_reset_globale"):
+            st.session_state.filtro_famiglie = []
+            st.session_state.filtro_stati    = []
+            # Forza il reset dei widget multiselect cancellando le loro key
+            for k in ['ms_famiglie', 'ms_stati']:
+                if k in st.session_state:
+                    del st.session_state[k]
+            st.rerun()
+
+    tab_det, tab_op, tab_kpi, tab_btl, tab_atp = st.tabs(
+        ["🔍 Dettaglio Ordini", "📋 KPI Operativi", "📊 KPI Avanzati", "🏭 Lavorazioni BTL", "🔵 Lavorazioni Atoplast"]
     )
 
+    with tab_op:
+        k1, k2, k3, k4 = st.columns(4)
+        k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">FILTRATI</div><div class="kpi-val">{int(df_view["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
+        k2.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#4caf50">PRONTI (GIA)</div><div class="kpi-val">{n_pronti_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
+        k3.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#9c27b0">BOM (FIGLI)</div><div class="kpi-val">{n_bom_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
+        k4.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#f44336">MANCANTI</div><div class="kpi-val">{n_mancanti_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
 
-# ── Rendering principale ──────────────────────────────────────────────────────
-
-def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_articolo=None, filtro_famiglie=None):
-    """
-    Punto di ingresso. Da chiamare nella vista admin del portale.
-    """
-    st.markdown(KPI_CSS, unsafe_allow_html=True)
-
-    with st.expander("📊 KPI Avanzati — Storicità · Rotazione · Riordino · Puntualità",
-                     expanded=False):
-
-        # ── Caricamento ───────────────────────────────────────────────────────
-        with st.spinner("Caricamento dati ARCA..."):
-            df_all = carica_storico_arca(path_storico)
-
-        if df_all.empty:
-            st.warning(f"File non trovato: `{path_storico}`. "
-                       "Copia il file nella cartella del portale e ricarica.")
-            return
-
-        df_oci = get_oci_oca(df_all)
-        df_dvf = get_dvf(df_all)
-
-        # Filtro cliente pre-applicato (da vista cliente o selezione admin)
-        if filtro_cliente:
-            nome_cli = filtro_cliente.split(' - ', 1)[-1].strip() if ' - ' in filtro_cliente else filtro_cliente.strip()
-            df_oci = df_oci[df_oci['Cliente'].str.contains(nome_cli, case=False, na=False, regex=False)]
-            df_dvf = df_dvf[df_dvf['Cliente'].str.contains(nome_cli, case=False, na=False, regex=False)]
-
-        # Filtro articolo dalla sidebar (Cerca Articolo)
-        if filtro_articolo:
-            df_oci = df_oci[df_oci['Articolo C'].str.contains(filtro_articolo.upper(), case=False, na=False, regex=False)]
-            df_dvf = df_dvf[df_dvf['Articolo C'].str.contains(filtro_articolo.upper(), case=False, na=False, regex=False)]
-
-        # Filtro famiglie dai filtri globali del portale
-        if filtro_famiglie:
-            df_oci = df_oci[df_oci['Famiglia'].isin(filtro_famiglie)]
-            df_dvf = df_dvf[df_dvf['Famiglia'].isin(filtro_famiglie)]
-
-        st.caption(
-            f"📁 Storico caricato: **{len(df_all):,}** righe totali | "
-            f"**{len(df_oci):,}** OCI/OCA | **{len(df_dvf):,}** DVF".replace(",",".")
+        # Grafici copertura — usano df_view già filtrato per stato e famiglia
+        df_fam_chart   = df_view.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
+        df_stato_chart = (
+            df_view.groupby('ST')['Qta Residua'].sum().reset_index()
+            .rename(columns={'ST': 'ST', 'Qta Residua': 'Qta Residua'})
+            .sort_values('Qta Residua', ascending=False)
+            .reset_index(drop=True)
         )
 
-        # ── Filtri ────────────────────────────────────────────────────────────
-        # Il filtro cliente viene dalla sidebar del portale (filtro_cliente).
-        # Qui gestiamo solo periodo e famiglia.
-        # Key univoca per evitare conflitti quando si cambia cliente dalla sidebar
-        _key_suffix = str(filtro_cliente or "tutti").lower().replace(" ", "_")[:20]
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
+            st.markdown("##### Stato Copertura")
+            fig_stato = px.pie(df_stato_chart, values='Qta Residua', names='ST', color='ST', color_discrete_map=COLOR_MAP)
+            fig_stato.update_traces(textinfo='label+percent', hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>')
+            fig_stato.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=False, height=320)
+            st.plotly_chart(fig_stato, use_container_width=True)
+        with col_g2:
+            st.markdown("##### Top 10 Famiglie")
+            fig_fam = px.pie(df_fam_chart, values='Qta Residua', names='Famiglia', hole=0.35)
+            fig_fam.update_traces(textinfo='label+percent', hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>', sort=True)
+            fig_fam.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=False, height=320)
+            st.plotly_chart(fig_fam, use_container_width=True)
 
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            periodo = st.selectbox(
-                "Periodo", ["Ultimi 90 gg", "Ultimi 6 mesi",
-                            "Ultimo anno", "Tutto lo storico"],
-                index=2, key=f"kpi_periodo_{_key_suffix}"
-            )
-        with c2:
-            famiglie = sorted(df_oci['Famiglia'].dropna().unique().tolist())
-            sel_fam  = st.multiselect("Famiglia", famiglie,
-                                       key=f"kpi_fam_{_key_suffix}",
-                                       placeholder="Tutte le famiglie")
+    # Download Excel: include TUTTI i campi del dataset filtrato in base
+    # alle selezioni attive (famiglie/stati) che l'utente vede a schermo.
+    # Arricchimento export: per ogni riga d'ordine aggiungiamo disponibilita`
+    # e quantita` coperte (GIA/ACQ/GRZ + BOM) basandoci su `stock_raw` e sullo stato riga.
+    prod_cols_export = ['LANCIATI', 'GRZ', 'TMP', 'RWI', 'TRS', 'TRF']
+    df_export = df_view.copy()
 
-        if filtro_cliente:
-            st.caption(f"👤 Dati filtrati per cliente: **{filtro_cliente}**")
-        if filtro_articolo:
-            st.caption(f"🔍 Dati filtrati per articolo: **{filtro_articolo.upper()}**")
-        if filtro_famiglie:
-            st.caption(f"📂 Famiglie attive: **{', '.join(filtro_famiglie)}**")
+    # Pre-crea colonne per evitare KeyError su DataFrame
+    for col in ['FIGLIO', 'GIA', 'ACQ', 'PROD', 'DISP_BOM_GIA']:
+        if col not in df_export.columns:
+            df_export[col] = 0.0
+    for f in prod_cols_export:
+        if f not in df_export.columns:
+            df_export[f] = 0.0
 
-        # Applica filtri temporali
-        gg_map = {"Ultimi 90 gg": 90, "Ultimi 6 mesi": 180,
-                  "Ultimo anno": 365, "Tutto lo storico": 9999}
-        gg = gg_map[periodo]
-        cutoff = datetime.now() - timedelta(days=gg)
+    for col in [
+        'COP_GIA', 'COP_ACQ', 'COP_PROD', 'COP_BOM',
+        'COP_GRZ', 'MANCANTE_QTA',
+    ]:
+        if col not in df_export.columns:
+            df_export[col] = 0.0
 
-        df_f = df_oci.copy()
-        if gg < 9999:
-            df_f = df_f[df_f['Data'] >= cutoff]
-        if sel_fam:
-            df_f = df_f[df_f['Famiglia'].isin(sel_fam)]
+    for i, row in df_export.iterrows():
+        art = row.get('ART_KEY', '')
+        art_n = normalize_art_code(art)
+        q = float(row.get('Qta Residua', 0) or 0)
+        s = stock_raw.get(art_n, {'GIA': 0.0, 'ACQ': 0.0, 'PROD': 0.0, 'FIGLIO': 'NAN'})
+        figlio_code = normalize_art_code(s.get('FIGLIO', 'NAN'))
+        figlio_code = figlio_code if figlio_code and figlio_code != 'NAN' else ''
+        s_figlio = stock_raw.get(figlio_code, {}) if figlio_code else {}
 
-        df_dvf_f = df_dvf.copy()
-        if gg < 9999:
-            df_dvf_f = df_dvf_f[df_dvf_f['Data'] >= cutoff]
+        gia_disp = float(s.get('GIA', 0) or 0)
+        acq_disp = float(s.get('ACQ', 0) or 0)
+        prod_disp = float(s.get('PROD', 0) or 0)
+        df_export.at[i, 'GIA'] = gia_disp
+        df_export.at[i, 'ACQ'] = acq_disp
+        df_export.at[i, 'PROD'] = prod_disp
+        df_export.at[i, 'FIGLIO'] = s.get('FIGLIO', 'NAN')
+        df_export.at[i, 'DISP_BOM_GIA'] = float(s_figlio.get('GIA', 0) or 0)
+        for f in prod_cols_export:
+            df_export.at[i, f] = float(s.get(f, 0) or 0)
 
-        if df_f.empty:
-            st.warning("Nessun dato per i filtri selezionati.")
-            return
+        st_line = str(row.get('ST', '')).strip().upper()
+        cop_gia = 0.0
+        cop_acq = 0.0
+        cop_prod = 0.0
+        cop_bom = 0.0
+        cop_grz = 0.0
+        manc = 0.0
 
-        st.caption(
-            f"🔍 Filtro attivo: **{len(df_f):,}** righe | "
-            f"**{df_f['Articolo C'].nunique()}** articoli | "
-            f"**{df_f['Cliente'].nunique()}** clienti".replace(",",".")
-        )
-
-        # ════════════════════════════════════════════════════════════════════
-        # SEZIONE 1 — TREND VOLUMI
-        # ════════════════════════════════════════════════════════════════════
-        st.markdown('<div class="sec-h">📈 Trend Volumi Ordini</div>',
-                    unsafe_allow_html=True)
-
-        df_trend = calcola_trend_mensile(df_f)
-        if not df_trend.empty:
-            t1, t2, t3, t4 = st.columns(4)
-            kpi_card(t1, "Righe nel periodo",
-                     f"{int(df_f['Qta Doc'].count()):,}".replace(",","."),
-                     "ordini elaborati")
-            kpi_card(t2, "Quantità totale",
-                     f"{int(df_f['Qta Doc'].sum()):,}".replace(",","."),
-                     "pezzi ordinati", "g")
-            kpi_card(t3, "Articoli distinti",
-                     str(df_f['Articolo C'].nunique()),
-                     "codici unici", "p")
-            kpi_card(t4, "Valore ordini",
-                     f"€ {df_f['Valore'].sum():,.0f}".replace(",","."),
-                     "totale periodo", "o")
-
-            fig_trend = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_trend.add_trace(
-                go.Bar(x=df_trend['Mese'], y=df_trend['Qta_Totale'],
-                       name='Quantità', marker_color='#bbdefb', opacity=0.8),
-                secondary_y=False
-            )
-            fig_trend.add_trace(
-                go.Scatter(x=df_trend['Mese'], y=df_trend['N_Clienti'],
-                           name='N° Clienti', mode='lines+markers',
-                           line=dict(color='#1f77b4', width=2),
-                           marker=dict(size=6)),
-                secondary_y=True
-            )
-            fig_trend.update_layout(
-                height=280, margin=dict(t=10, b=40, l=0, r=0),
-                plot_bgcolor='rgba(0,0,0,0)',
-                legend=dict(orientation='h', y=-0.25)
-            )
-            fig_trend.update_yaxes(title_text="Quantità", secondary_y=False)
-            fig_trend.update_yaxes(title_text="N° Clienti", secondary_y=True)
-            st.plotly_chart(fig_trend, use_container_width=True)
-
-        # ════════════════════════════════════════════════════════════════════
-        # SEZIONE 2 — STORICITÀ E ROTAZIONE
-        # ════════════════════════════════════════════════════════════════════
-        st.markdown('<div class="sec-h">🔄 Storicità e Rotazione Articoli</div>',
-                    unsafe_allow_html=True)
-
-        df_rot = calcola_storicita_rotazione(df_f)
-
-        if not df_rot.empty:
-            tab_qta, tab_freq, tab_fam = st.tabs(
-                ["📊 Top 20 per Quantità", "🔁 Top 20 per Frequenza", "📂 Per Famiglia"]
-            )
-
-            with tab_qta:
-                top20 = df_rot.head(20)
-                fig = px.bar(
-                    top20, x='Articolo C', y='Qta_Totale', color='Famiglia',
-                    text='Qta_Totale',
-                    color_discrete_sequence=px.colors.qualitative.Set2,
-                    labels={'Qta_Totale': 'Quantità', 'Articolo C': ''},
-                )
-                fig.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
-                fig.update_layout(height=340, margin=dict(t=10,b=60,l=0,r=0),
-                                  xaxis_tickangle=-40, plot_bgcolor='rgba(0,0,0,0)',
-                                  showlegend=True)
-                st.plotly_chart(fig, use_container_width=True)
-
-            with tab_freq:
-                top20f = df_rot.sort_values('N_Ordini', ascending=False).head(20)
-                fig2 = px.bar(
-                    top20f, x='Articolo C', y='N_Ordini', color='Famiglia',
-                    text='N_Ordini',
-                    color_discrete_sequence=px.colors.qualitative.Pastel,
-                    labels={'N_Ordini': 'N° ordini', 'Articolo C': ''},
-                )
-                fig2.update_traces(texttemplate='%{text}', textposition='outside')
-                fig2.update_layout(height=340, margin=dict(t=10,b=60,l=0,r=0),
-                                   xaxis_tickangle=-40, plot_bgcolor='rgba(0,0,0,0)',
-                                   showlegend=True)
-                st.plotly_chart(fig2, use_container_width=True)
-
-            with tab_fam:
-                df_fam = df_rot.groupby('Famiglia').agg(
-                    Qta_Totale=('Qta_Totale','sum'),
-                    N_Articoli=('Articolo C','count'),
-                    N_Ordini=('N_Ordini','sum'),
-                ).reset_index().sort_values('Qta_Totale', ascending=False)
-
-                col_fa, col_fb = st.columns(2)
-                with col_fa:
-                    fig_fam = px.pie(
-                        df_fam.head(10), values='Qta_Totale', names='Famiglia',
-                        hole=0.4, title="Distribuzione quantità per famiglia",
-                        color_discrete_sequence=px.colors.qualitative.Set3,
-                    )
-                    fig_fam.update_traces(textinfo='label+percent')
-                    fig_fam.update_layout(height=320, margin=dict(t=40,b=0,l=0,r=0),
-                                          showlegend=False)
-                    st.plotly_chart(fig_fam, use_container_width=True)
-                with col_fb:
-                    st.dataframe(
-                        df_fam.rename(columns={
-                            'Qta_Totale':'Qta Totale',
-                            'N_Articoli':'N° Articoli',
-                            'N_Ordini':'N° Ordini'
-                        }),
-                        use_container_width=True, hide_index=True
-                    )
-
-            with st.expander("📋 Dettaglio completo rotazione"):
-                show_rot = df_rot.copy()
-                for c in ['Prima_Richiesta','Ultima_Richiesta']:
-                    show_rot[c] = pd.to_datetime(show_rot[c],errors='coerce').dt.strftime('%d/%m/%Y')
-                st.dataframe(show_rot, use_container_width=True, hide_index=True)
-
-        # ════════════════════════════════════════════════════════════════════
-        # SEZIONE 3 — FREQUENZA DI RIORDINO
-        # ════════════════════════════════════════════════════════════════════
-        st.markdown('<div class="sec-h">⏰ Frequenza di Riordino</div>',
-                    unsafe_allow_html=True)
-
-        df_riord = calcola_frequenza_riordino(df_f)
-
-        if not df_riord.empty:
-            df_con_int = df_riord.dropna(subset=['Intervallo_Medio_gg'])
-
-            r1, r2, r3 = st.columns(3)
-            kpi_card(r1, "Coppie Art.×Cliente con riordino",
-                     str(len(df_con_int)), "≥ 2 ordini nel periodo", "g")
-            if not df_con_int.empty:
-                media_g = round(df_con_int['Intervallo_Medio_gg'].mean(), 1)
-                art_top = df_con_int.sort_values('N_Ordini', ascending=False).iloc[0]
-                kpi_card(r2, "Intervallo medio globale",
-                         f"{media_g} gg", "tra riordini consecutivi")
-                qta_m = int(art_top['Qta_Media_Ordine']) if 'Qta_Media_Ordine' in art_top else 0
-                kpi_card(r3, "Articolo più riordinato",
-                         art_top['Articolo C'],
-                         f"{int(art_top['N_Ordini'])} ordini | ~{qta_m:,} pz/ordine — {art_top['Cliente'][:20]}".replace(",","."), "p")
-
-            # Heatmap clienti × famiglie
-            pivot = df_riord.pivot_table(
-                index='Cliente', columns='Famiglia',
-                values='N_Ordini', aggfunc='sum', fill_value=0
-            )
-            if pivot.shape[0] > 1 and pivot.shape[1] > 1:
-                # Ordina clienti (righe) per totale decrescente — top 15
-                top_cli = pivot.sum(axis=1).sort_values(ascending=False).head(15).index
-                pivot = pivot.loc[top_cli]
-                # Ordina famiglie (colonne) per totale decrescente
-                top_fam = pivot.sum(axis=0).sort_values(ascending=False).index
-                pivot = pivot[top_fam]
-                fig_heat = px.imshow(
-                    pivot,
-                    labels=dict(x="Famiglia", y="Cliente", color="N° Ordini"),
-                    color_continuous_scale="Blues", aspect="auto",
-                    title="N° Ordini per Cliente × Famiglia (ordinati per volume)"
-                )
-                fig_heat.update_layout(height=420, margin=dict(t=40,b=0,l=0,r=0))
-                fig_heat.update_xaxes(tickangle=-35)
-                st.plotly_chart(fig_heat, use_container_width=True)
-
-            # Alert: articoli vicini al prossimo riordino atteso (±14 gg)
-            if not df_con_int.empty:
-                df_alert = df_con_int.copy()
-                df_alert['Giorni_Al_Riordino'] = (
-                    df_alert['Intervallo_Medio_gg'] - df_alert['Giorni_Da_Ultimo']
-                ).round(0)
-                df_prossimi = df_alert[
-                    df_alert['Giorni_Al_Riordino'].between(-7, 14)
-                ].sort_values('Giorni_Al_Riordino')
-
-                if not df_prossimi.empty:
-                    st.markdown(f"**🔔 {len(df_prossimi)} articoli con riordino atteso entro 14 giorni:**")
-                    for _, r in df_prossimi.iterrows():
-                        gg_r = int(r['Giorni_Al_Riordino'])
-                        ico  = "🟢" if gg_r > 0 else "🔴"
-                        txt  = f"tra **{gg_r} gg**" if gg_r >= 0 else f"**in ritardo di {abs(gg_r)} gg**"
-                        ult  = r['Ultimo_Ordine'].strftime('%d/%m/%Y') if pd.notnull(r['Ultimo_Ordine']) else 'N/D'
-                        qta_att = int(r['Qta_Media_Ordine']) if 'Qta_Media_Ordine' in r else 0
-                        st.markdown(
-                            f'<div class="alert-box">{ico} <b>{r["Articolo C"]}</b> — '
-                            f'{r["Cliente"]} | Atteso {txt} | '
-                            f'Qta stimata: <b>~{qta_att:,} pz</b> | '.replace(",",".")
-                            + f'Ultimo ordine: {ult} | Intervallo medio: {r["Intervallo_Medio_gg"]} gg'
-                            f'</div>',
-                            unsafe_allow_html=True
-                        )
-
-            # ── Export solleciti raggruppati per cliente / famiglia ─────────
-            if not df_prossimi.empty:
-                df_sol = df_prossimi.copy()
-
-                # Formattazione date leggibili
-                df_sol['Ultimo_Ordine_fmt'] = pd.to_datetime(
-                    df_sol['Ultimo_Ordine'], errors='coerce'
-                ).dt.strftime('%d/%m/%Y')
-                df_sol['Riordino_Atteso'] = df_sol.apply(
-                    lambda r: f"tra {int(r['Giorni_Al_Riordino'])} gg"
-                    if r['Giorni_Al_Riordino'] >= 0
-                    else f"in ritardo di {abs(int(r['Giorni_Al_Riordino']))} gg",
-                    axis=1
-                )
-
-                # Colonne pulite per export — ordina per cliente, famiglia, giorni (numerico)
-                df_export_sol = df_sol[[
-                    'Cliente', 'Famiglia', 'Articolo C', 'Articolo D',
-                    'N_Ordini', 'Qta_Totale', 'Qta_Media_Ordine', 'Intervallo_Medio_gg',
-                    'Ultimo_Ordine_fmt', 'Giorni_Da_Ultimo', 'Giorni_Al_Riordino', 'Riordino_Atteso'
-                ]].sort_values(
-                    ['Cliente', 'Giorni_Al_Riordino']   # ordinato per cliente poi urgenza
-                ).rename(columns={
-                    'Articolo C':           'Codice Articolo',
-                    'Articolo D':           'Descrizione',
-                    'N_Ordini':             'N° Ordini Storici',
-                    'Qta_Totale':           'Qta Totale Storica',
-                    'Qta_Media_Ordine':     'Qta Stimata Prossimo Ordine',
-                    'Intervallo_Medio_gg':  'Intervallo Medio (gg)',
-                    'Ultimo_Ordine_fmt':    'Ultimo Ordine',
-                    'Giorni_Da_Ultimo':     'Giorni Da Ultimo Ordine',
-                    'Giorni_Al_Riordino':   'Giorni Al Riordino',
-                    'Riordino_Atteso':      'Riordino Atteso',
-                })
-
-                buf_sol = BytesIO()
-                with pd.ExcelWriter(buf_sol, engine='xlsxwriter') as w:
-                    df_export_sol.to_excel(w, sheet_name='Solleciti_Riordino', index=False)
-                    wb = w.book
-                    ws = w.sheets['Solleciti_Riordino']
-                    ws.set_column(0, 11, 24)
-                    # Header blu
-                    fmt_h = wb.add_format({'bold': True, 'bg_color': '#1F4E79',
-                                           'font_color': 'white', 'border': 1})
-                    for col_num, col_name in enumerate(df_export_sol.columns):
-                        ws.write(0, col_num, col_name, fmt_h)
-                    # Righe in ritardo in rosso chiaro
-                    fmt_red = wb.add_format({'bg_color': '#FFCCCC'})
-                    for row_num in range(1, len(df_export_sol) + 1):
-                        gg_val = df_export_sol.iloc[row_num-1].get('Giorni Al Riordino', 0)
-                        if pd.notnull(gg_val) and float(gg_val) < 0:
-                            ws.set_row(row_num, None, fmt_red)
-
-                st.download_button(
-                    label=f"📥 Esporta Solleciti ({len(df_export_sol)} articoli) — raggruppati per Cliente/Famiglia",
-                    data=buf_sol.getvalue(),
-                    file_name=f"Solleciti_Riordino_{datetime.now().strftime('%d%m%Y')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key=f"btn_solleciti_{_key_suffix}"
-                )
-
-            with st.expander("📋 Dettaglio frequenza riordino"):
-                show_r = df_riord.copy()
-                if 'Ultimo_Ordine' in show_r.columns:
-                    show_r['Ultimo_Ordine'] = pd.to_datetime(
-                        show_r['Ultimo_Ordine'], errors='coerce'
-                    ).dt.strftime('%d/%m/%Y')
-                st.dataframe(show_r, use_container_width=True, hide_index=True)
-
-        # ════════════════════════════════════════════════════════════════════
-        # SEZIONE 4 — SCOSTAMENTO DATE CONSEGNA
-        # ════════════════════════════════════════════════════════════════════
-        st.markdown('<div class="sec-h">📦 Puntualità Consegne (OCI vs DVF)</div>',
-                    unsafe_allow_html=True)
-
-        df_cons, summary = calcola_scostamento_consegna(df_f, df_dvf_f)
-
-        if df_cons.empty:
-            st.info(
-                "Nessun incrocio OCI↔DVF trovato nel periodo selezionato. "
-                "Allarga il periodo o verifica che il file contenga sia OCI che DVF "
-                "per gli stessi articoli e clienti."
-            )
+        if q <= 0:
+            manc = 0.0
+        elif st_line == 'DISPONIBILE':
+            cop_gia = min(gia_disp, q)
+            manc = q - cop_gia
+        elif st_line == 'COPERTO BOM':
+            cop_bom = q
         else:
-            p1, p2, p3, p4 = st.columns(4)
-            kpi_card(p1, "Confronti OCI↔DVF",
-                     f"{summary['n_evasi']:,}".replace(",","."),
-                     "righe incrociate")
-            col_p = "g" if summary['pct_puntuali'] >= 80 else "o"
-            kpi_card(p2, "% Consegne puntuali",
-                     f"{summary['pct_puntuali']}%",
-                     f"{summary['pct_ritardo']}% in ritardo", col_p)
-            col_m = "g" if summary['media_scost'] <= 2 else \
-                    "o" if summary['media_scost'] <= 7 else "r"
-            kpi_card(p3, "Scostamento medio",
-                     f"{summary['media_scost']} gg",
-                     "positivo = ritardo, negativo = anticipo", col_m)
-            kpi_card(p4, "Mediana scostamento",
-                     f"{summary['mediana_scost']} gg",
-                     "valore centrale", "p")
+            # Splitting per ordine: GIA -> ACQ -> PROD (con breakdown su componenti in ordine elenco)
+            q_rem = q
+            take_gia = min(gia_disp, q_rem)
+            cop_gia = take_gia
+            q_rem -= take_gia
 
-            # Distribuzione scostamento
-            fig_hist = px.histogram(
-                df_cons, x='Scostamento_gg',
-                color='Stato_Consegna', nbins=40,
-                color_discrete_map={
-                    '✅ Puntuale':    '#4caf50',
-                    '⚡ Anticipato': '#2196f3',
-                    '⚠️ In ritardo': '#f44336',
-                },
-                labels={'Scostamento_gg': 'Scostamento (gg)', 'count': 'N° confronti'},
-                title="Distribuzione scostamento data consegna prevista vs evasione DVF"
-            )
-            fig_hist.add_vline(x=0, line_dash="dash", line_color="#888",
-                               annotation_text=" Puntuale")
-            fig_hist.update_layout(height=300, margin=dict(t=40,b=0,l=0,r=0),
-                                   plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig_hist, use_container_width=True)
+            take_acq = min(acq_disp, q_rem)
+            cop_acq = take_acq
+            q_rem -= take_acq
 
-            # Trend mensile puntualità
-            df_cons['Mese'] = df_cons['Data'].dt.to_period('M').astype(str)
-            df_tm = df_cons.groupby('Mese').agg(
-                Pct_Puntuali=('Stato_Consegna',
-                              lambda x: round((x == '✅ Puntuale').mean()*100, 1)),
-                N_Evasi=('Scostamento_gg', 'count'),
-                Scost_Medio=('Scostamento_gg', 'mean'),
-            ).reset_index().sort_values('Mese')
+            take_prod = min(prod_disp, q_rem)
+            cop_prod = take_prod
+            q_rem -= take_prod
 
-            fig_tm = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_tm.add_trace(
-                go.Bar(x=df_tm['Mese'], y=df_tm['N_Evasi'],
-                       name='N° confronti', marker_color='#e3f2fd', opacity=0.8),
-                secondary_y=False
-            )
-            fig_tm.add_trace(
-                go.Scatter(x=df_tm['Mese'], y=df_tm['Pct_Puntuali'],
-                           name='% Puntuali', mode='lines+markers',
-                           line=dict(color='#4caf50', width=2),
-                           marker=dict(size=7)),
-                secondary_y=True
-            )
-            fig_tm.update_layout(
-                title="Trend mensile puntualità",
-                height=280, margin=dict(t=40,b=30,l=0,r=0),
-                plot_bgcolor='rgba(0,0,0,0)',
-                legend=dict(orientation='h', y=-0.3)
-            )
-            fig_tm.update_yaxes(title_text="N° confronti", secondary_y=False)
-            fig_tm.update_yaxes(title_text="% Puntuali", secondary_y=True,
-                                range=[0, 110], ticksuffix='%')
-            st.plotly_chart(fig_tm, use_container_width=True)
+            # Breakdown PROD su componenti (utile per vedere GRZ)
+            prod_left = cop_prod
+            for f in prod_cols_export:
+                if prod_left <= 0:
+                    break
+                avail = float(s.get(f, 0) or 0)
+                take_f = min(avail, prod_left)
+                if f == 'GRZ':
+                    cop_grz += take_f
+                prod_left -= take_f
 
-            # Peggiori per ritardo
-            with st.expander("📋 Top 30 ritardi maggiori"):
-                df_rit = df_cons[df_cons['Scostamento_gg'] > 2].sort_values(
-                    'Scostamento_gg', ascending=False
-                ).head(30)
-                cols = [c for c in ['Articolo C','Articolo D','Cliente',
-                                    'Data Consegna','Data_Evasione',
-                                    'Scostamento_gg','Qta Doc'] if c in df_rit.columns]
-                st.dataframe(df_rit[cols], use_container_width=True, hide_index=True)
+            manc = q_rem
 
-        # ── Export Excel ──────────────────────────────────────────────────────
-        st.markdown("---")
-        buf = BytesIO()
-        with pd.ExcelWriter(buf, engine='xlsxwriter') as w:
-            if not df_rot.empty:
-                df_rot.to_excel(w, sheet_name='Rotazione', index=False)
-            if not df_riord.empty:
-                df_riord.to_excel(w, sheet_name='Freq_Riordino', index=False)
-            if not df_cons.empty:
-                df_cons.to_excel(w, sheet_name='Puntualita_Consegne', index=False)
-            if not df_trend.empty:
-                df_trend.to_excel(w, sheet_name='Trend_Mensile', index=False)
+        df_export.at[i, 'COP_GIA'] = cop_gia
+        df_export.at[i, 'COP_ACQ'] = cop_acq
+        df_export.at[i, 'COP_PROD'] = cop_prod
+        df_export.at[i, 'COP_BOM'] = cop_bom
+        df_export.at[i, 'COP_GRZ'] = cop_grz
+        df_export.at[i, 'MANCANTE_QTA'] = manc
 
-        st.download_button(
-            "📥 Esporta tutti i KPI in Excel",
-            data=buf.getvalue(),
-            file_name=f"KPI_Safit_{datetime.now().strftime('%d%m%Y')}.xlsx",
-            use_container_width=True,
+    st.sidebar.download_button(
+        "📊 Esporta Report (filtri attivi, completo + stock)",
+        data=to_excel_full(df_export),
+        file_name=f"Safit_Report_{datetime.now().strftime('%d%m')}.xlsx",
+        use_container_width=True,
+    )
+
+    with tab_kpi:
+        render_kpi_avanzati(
+            filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
+            filtro_articolo=search if search else None,
+            filtro_famiglie=st.session_state.filtro_famiglie or None
         )
+
+    with tab_btl:
+        # Passa lista famiglie attive per filtrare gli articoli BTL
+        render_vista_btl(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
+
+    with tab_atp:
+        render_vista_atoplast(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
+
+    with tab_det:
+      filtri_attivi = []
+      if st.session_state.filtro_famiglie: filtri_attivi.append(f"Famiglie: **{', '.join(st.session_state.filtro_famiglie)}**")
+      if st.session_state.filtro_stati:    filtri_attivi.append(f"Stati: **{', '.join(st.session_state.filtro_stati)}**")
+      if filtri_attivi:
+          st.info("🔍 Filtri attivi — " + " | ".join(filtri_attivi) + f" — {len(df_view)} ordini trovati")
+      else:
+          st.caption(f"Tutti gli ordini: {len(df_view)}")
+
+      st.markdown("---")
+      for art, g in df_view.groupby('ART_KEY'):
+        with st.expander(f"📦 {art} - {g['Articolo D'].iloc[0]} ({len(g)} ordini)"):
+            s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
+            st.markdown(f'<div class="debug-box"><span>📦 GIA: {int(s_i["GIA"])}</span><span>🚚 ACQ: {int(s_i["ACQ"])}</span><span>⚙️ PROD: {int(s_i["PROD"])}</span></div>', unsafe_allow_html=True)
+            # Barra temporale per l'articolo (usa prima riga con date valide)
+            g_date = g.sort_values('DT_EXP')
+            for _, r_t in g_date.iterrows():
+                d_ord_admin  = r_t.get('DATA_ORD', None)
+                d_cons_admin = r_t.get('DT_EXP', None)
+                if not pd.notnull(d_ord_admin):
+                    # Fallback: stima data ordine come 30gg prima della consegna
+                    d_ord_admin = pd.Timestamp(d_cons_admin) - pd.Timedelta(days=30) if pd.notnull(d_cons_admin) else None
+                if d_ord_admin is not None and pd.notnull(d_cons_admin):
+                    st.markdown(tbar_html(d_ord_admin, d_cons_admin), unsafe_allow_html=True)
+                    break
+
+            for _, r in g.iterrows():
+                tag = "📋 [PREV]" if r['Codice Documento'] == "OCA" else "🛒 [ORD]"
+                st.markdown(f'<div class="status-row {r["CS"]}"><span>{tag} 📅 {r["DT_EXP"].strftime("%d/%m/%Y")} | Q: {int(r["Qta Residua"])} | {r["CLI_NAME"]}</span><span><b>{r["ST"]}</b></span></div>', unsafe_allow_html=True)
