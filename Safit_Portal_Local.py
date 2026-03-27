@@ -826,50 +826,42 @@ if not df_res.empty:
     COLOR_MAP = {'DISPONIBILE':'#4caf50','COPERTO BOM':'#9c27b0','ACQUISTO':'#2196f3',
                  'PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}
 
-    # ── Filtri: session_state è l'unica fonte di verità ─────────────────────
+    # ── Filtri globali ───────────────────────────────────────────────────────
     _fam_disp = df_f.groupby('Famiglia')['Qta Residua'].sum().sort_values(ascending=False).head(12).index.tolist()
     _sta_disp = [s for s in COLOR_MAP if df_f[df_f['ST']==s]['Qta Residua'].sum() > 0]
 
-    # Widget filtro — on_change aggiorna session_state immediatamente
-    def _aggiorna_fam():
-        st.session_state.filtro_famiglie = st.session_state['_ms_fam']
-    def _aggiorna_sta():
-        st.session_state.filtro_stati    = st.session_state['_ms_sta']
-
-    # Reset: svuota session_state e le key dei widget
-    if st.session_state.get('_do_reset', False):
-        st.session_state.filtro_famiglie = []
-        st.session_state.filtro_stati    = []
-        st.session_state['_ms_fam']      = []
-        st.session_state['_ms_sta']      = []
-        st.session_state['_do_reset']    = False
-
-    # Inizializza session_state se assente
+    # Inizializza
     if 'filtro_famiglie' not in st.session_state: st.session_state.filtro_famiglie = []
     if 'filtro_stati'    not in st.session_state: st.session_state.filtro_stati    = []
-    # Pulisce valori non più disponibili (cambio cliente)
+
+    # Pulisce valori non più validi (cambio cliente/contesto)
     st.session_state.filtro_famiglie = [f for f in st.session_state.filtro_famiglie if f in _fam_disp]
     st.session_state.filtro_stati    = [s for s in st.session_state.filtro_stati    if s in _sta_disp]
 
+    # Reset
+    if st.session_state.get('_do_reset', False):
+        st.session_state.filtro_famiglie = []
+        st.session_state.filtro_stati    = []
+        st.session_state['_do_reset']    = False
+
     _cf, _cs, _cr = st.columns([3, 2, 1])
     with _cf:
-        st.multiselect("Famiglia", _fam_disp,
+        # Niente default, niente key — leggo il valore restituito direttamente
+        _sel_fam = st.multiselect("Famiglia", _fam_disp,
             default=st.session_state.filtro_famiglie,
-            placeholder="Tutte le famiglie",
-            key="_ms_fam", label_visibility="collapsed",
-            on_change=_aggiorna_fam)
+            placeholder="Tutte le famiglie", label_visibility="collapsed")
+        st.session_state.filtro_famiglie = _sel_fam
     with _cs:
-        st.multiselect("Stato", _sta_disp,
+        _sel_sta = st.multiselect("Stato", _sta_disp,
             default=st.session_state.filtro_stati,
-            placeholder="Tutti gli stati",
-            key="_ms_sta", label_visibility="collapsed",
-            on_change=_aggiorna_sta)
+            placeholder="Tutti gli stati", label_visibility="collapsed")
+        st.session_state.filtro_stati = _sel_sta
     with _cr:
         if st.button("🗑️ Azzera filtri", use_container_width=True, key="btn_reset_globale"):
             st.session_state['_do_reset'] = True
             st.rerun()
 
-    # Applica filtri a df_view
+    # Applica filtri
     df_view = df_f.copy()
     if st.session_state.filtro_famiglie:
         df_view = df_view[df_view['Famiglia'].isin(st.session_state.filtro_famiglie)]
