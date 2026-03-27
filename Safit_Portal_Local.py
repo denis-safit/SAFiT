@@ -316,13 +316,30 @@ def carica_btl_da_storico():
 
 
 def render_vista_btl(df_res=None):
-    """Vista BTL — OFR (lavorazioni) + OFF (acquisti) da storico con date."""
+    """Vista BTL — OFR (lavorazioni) + OFF (acquisti). Usa Qta Residua da ARCA per quantità aperte."""
     st.title("🏭 Lavorazioni & Acquisti BTL")
     st.caption(f"Anticipo consegna a Friola: **{ANTICIPO_BTL_GG} giorni** prima della data consegna")
 
-    df_btl = carica_btl_da_storico()
-    if df_btl.empty:
+    df_btl_storico = carica_btl_da_storico()
+    if df_btl_storico.empty:
         st.info("Nessun ordine BTL trovato. Verifica che il file righe_ordini_storico_con_date.xlsx sia presente.")
+        return
+
+    # Usa Qta Residua da df_res (ARCA) dove disponibile, altrimenti Qta Doc dallo storico
+    if df_res is not None and not df_res.empty:
+        # Articoli BTL con quantità residua aperta da ARCA
+        art_btl = set(df_btl_storico['Articolo C'].unique())
+        df_arca_btl = df_res[df_res['ART_KEY'].isin(art_btl)][['ART_KEY','Qta Residua']].groupby('ART_KEY')['Qta Residua'].sum().reset_index()
+        df_arca_btl.columns = ['Articolo C', 'Qta Residua ARCA']
+        df_btl = df_btl_storico.merge(df_arca_btl, on='Articolo C', how='left')
+        # Se Qta Residua ARCA = 0 o NaN → ordine evaso, escludilo
+        df_btl = df_btl[df_btl['Qta Residua ARCA'].fillna(0) > 0].copy()
+        df_btl['Qta Doc'] = df_btl['Qta Residua ARCA']  # usa residua per i conteggi
+    else:
+        df_btl = df_btl_storico.copy()
+
+    if df_btl.empty:
+        st.success("✅ Nessuna lavorazione BTL aperta al momento.")
         return
 
     n_lav = df_btl[df_btl['Codice Documento']=='OFR']['Articolo C'].nunique()
@@ -792,6 +809,61 @@ if not df_res.empty:
 
     st.title("Pannello Controllo Safit")
 
+    # ── FILTRI GLOBALI — sopra i tab, propagati su tutti ─────────────────────
+    df_f = df_f.copy()
+    df_f['Famiglia'] = df_f['Articolo D'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
+
+    COLOR_MAP = {'DISPONIBILE':'#4caf50','COPERTO BOM':'#9c27b0','ACQUISTO':'#2196f3',
+                 'PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}
+
+    if 'filtro_stati' not in st.session_state:    st.session_state.filtro_stati    = []
+    if 'filtro_famiglie' not in st.session_state: st.session_state.filtro_famiglie = []
+
+    with st.expander("🔽 Filtri — Stato e Famiglia", expanded=False):
+        df_fam_chart_g  = df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
+        famiglie_disp_g = df_fam_chart_g['Famiglia'].tolist()
+        stati_disp_g    = [s for s in COLOR_MAP if df_f[df_f['ST']==s]['Qta Residua'].sum() > 0]
+
+        col_fs, col_ff, col_reset = st.columns([2, 2, 1])
+        with col_fs:
+            st.markdown("**Filtra per Stato**")
+            for stato in stati_disp_g:
+                attivo = stato in st.session_state.filtro_stati
+                label  = f"✓ {stato}" if attivo else stato
+                if st.button(label, key=f"btn_stato_{stato}", use_container_width=True,
+                             type="primary" if attivo else "secondary"):
+                    if attivo: st.session_state.filtro_stati.remove(stato)
+                    else:      st.session_state.filtro_stati.append(stato)
+                    st.rerun()
+        with col_ff:
+            st.markdown("**Filtra per Famiglia**")
+            for fam in famiglie_disp_g:
+                attivo = fam in st.session_state.filtro_famiglie
+                label_s = fam[:16] + "…" if len(fam) > 16 else fam
+                label   = f"✓ {label_s}" if attivo else label_s
+                if st.button(label, key=f"btn_fam_{fam}", use_container_width=True,
+                             type="primary" if attivo else "secondary"):
+                    if attivo: st.session_state.filtro_famiglie.remove(fam)
+                    else:      st.session_state.filtro_famiglie.append(fam)
+                    st.rerun()
+        with col_reset:
+            st.markdown("&nbsp;", unsafe_allow_html=True)
+            if st.button("🔄 Reset filtri", use_container_width=True, key="btn_reset_globale"):
+                st.session_state.filtro_stati    = []
+                st.session_state.filtro_famiglie = []
+                st.rerun()
+            if st.session_state.filtro_stati:
+                st.info("Stati: " + ", ".join(st.session_state.filtro_stati))
+            if st.session_state.filtro_famiglie:
+                st.info("Famiglie: " + ", ".join(st.session_state.filtro_famiglie))
+
+    # Applica filtri globali — df_view usato da tutti i tab
+    df_view = df_f.copy()
+    if st.session_state.filtro_famiglie:
+        df_view = df_view[df_view['Famiglia'].isin(st.session_state.filtro_famiglie)]
+    if st.session_state.filtro_stati:
+        df_view = df_view[df_view['ST'].isin(st.session_state.filtro_stati)]
+
     tab_det, tab_op, tab_kpi, tab_btl, tab_atp = st.tabs(
         ["🔍 Dettaglio Ordini", "📋 KPI Operativi", "📊 KPI Avanzati", "🏭 Lavorazioni BTL", "🔵 Lavorazioni Atoplast"]
     )
@@ -803,16 +875,8 @@ if not df_res.empty:
     k3.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#9c27b0">BOM (FIGLI)</div><div class="kpi-val">{n_bom_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
     k4.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#f44336">MANCANTI</div><div class="kpi-val">{n_mancanti_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
 
-    df_f = df_f.copy()
-    df_f['Famiglia'] = df_f['Articolo D'].apply(lambda x: " ".join(str(x).split()[:2]).upper())
-
-    COLOR_MAP = {'DISPONIBILE':'#4caf50','COPERTO BOM':'#9c27b0','ACQUISTO':'#2196f3',
-                 'PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}
-
-    if 'filtro_stati' not in st.session_state:    st.session_state.filtro_stati    = []
-    if 'filtro_famiglie' not in st.session_state: st.session_state.filtro_famiglie = []
-
-    df_fam_chart   = df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
+    # Grafici copertura per tab_op (usano df_view già filtrato)
+    df_fam_chart   = df_view.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
     df_stato_chart = (
         pd.DataFrame(
             [{'ST': k, 'Qta Residua': int(round(v))} for k, v in alloc_admin.items()]
@@ -820,71 +884,20 @@ if not df_res.empty:
         .sort_values('Qta Residua', ascending=False)
         .reset_index(drop=True)
     )
-    stati_disponibili = df_stato_chart[df_stato_chart['Qta Residua'] > 0]['ST'].tolist()
-    famiglie_disponibili = df_fam_chart['Famiglia'].tolist()
 
-    st.markdown("""<style>
-    div[data-testid="stButton"] button {
-        border-radius:6px!important;font-size:12px!important;padding:4px 6px!important;
-        width:100%!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;
-    }</style>""", unsafe_allow_html=True)
-
-    col_fs, col_g1, col_g2, col_ff = st.columns([1, 2, 2, 1])
-    with col_fs:
-        st.markdown("**Stato**")
-        st.caption("✓ = attivo")
-        for stato in stati_disponibili:
-            attivo = stato in st.session_state.filtro_stati
-            label  = f"✓ {stato}" if attivo else stato
-            if st.button(label, key=f"btn_stato_{stato}", use_container_width=True,
-                         type="primary" if attivo else "secondary"):
-                if attivo: st.session_state.filtro_stati.remove(stato)
-                else:      st.session_state.filtro_stati.append(stato)
-                st.rerun()
-
+    col_g1, col_g2 = st.columns([2, 2])
     with col_g1:
         st.markdown("##### Stato Copertura")
         fig_stato = px.pie(df_stato_chart, values='Qta Residua', names='ST', color='ST', color_discrete_map=COLOR_MAP)
         fig_stato.update_traces(textinfo='label+percent', hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>')
         fig_stato.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=False, height=320)
         st.plotly_chart(fig_stato, use_container_width=True)
-
     with col_g2:
         st.markdown("##### Top 10 Famiglie")
         fig_fam = px.pie(df_fam_chart, values='Qta Residua', names='Famiglia', hole=0.35)
         fig_fam.update_traces(textinfo='label+percent', hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>', sort=True)
         fig_fam.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=False, height=320)
         st.plotly_chart(fig_fam, use_container_width=True)
-
-    with col_ff:
-        st.markdown("**Famiglia**")
-        st.caption("✓ = attivo")
-        for fam in famiglie_disponibili:
-            attivo = fam in st.session_state.filtro_famiglie
-            label_short = fam[:14] + "…" if len(fam) > 14 else fam
-            label = f"✓ {label_short}" if attivo else label_short
-            if st.button(label, key=f"btn_fam_{fam}", use_container_width=True,
-                         type="primary" if attivo else "secondary"):
-                if attivo: st.session_state.filtro_famiglie.remove(fam)
-                else:      st.session_state.filtro_famiglie.append(fam)
-                st.rerun()
-
-    with st.sidebar:
-        st.markdown("---")
-        if st.button("🔄 Reset tutti i filtri", use_container_width=True, key="btn_reset_grafici"):
-            st.session_state.filtro_stati    = []
-            st.session_state.filtro_famiglie = []
-            st.rerun()
-        if st.session_state.filtro_stati:
-            st.info("🔵 Stati: " + ", ".join(st.session_state.filtro_stati))
-        if st.session_state.filtro_famiglie:
-            st.info("📂 Famiglie: " + ", ".join(st.session_state.filtro_famiglie))
-
-    df_view = df_f.copy()
-    if st.session_state.filtro_famiglie:
-        df_view = df_view[df_view['Famiglia'].isin(st.session_state.filtro_famiglie)]
-    if st.session_state.filtro_stati:
-        df_view = df_view[df_view['ST'].isin(st.session_state.filtro_stati)]
 
     # Download Excel: include TUTTI i campi del dataset filtrato in base
     # alle selezioni attive (famiglie/stati) che l'utente vede a schermo.
