@@ -840,39 +840,38 @@ if not df_res.empty:
     _fam_disp = df_f.groupby('Famiglia')['Qta Residua'].sum().sort_values(ascending=False).head(12).index.tolist()
     _sta_disp = [s for s in COLOR_MAP if df_f[df_f['ST']==s]['Qta Residua'].sum() > 0]
     _cf, _cs, _cr = st.columns([3, 2, 1])
-    # Pulisce i valori in sessione se non validi per il cliente corrente
-    _def_fam = [f for f in st.session_state.filtro_famiglie if f in _fam_disp]
-    _def_sta = [s for s in st.session_state.filtro_stati    if s in _sta_disp]
-    if _def_fam != st.session_state.filtro_famiglie:
-        st.session_state.filtro_famiglie = _def_fam
-    if _def_sta != st.session_state.filtro_stati:
-        st.session_state.filtro_stati = _def_sta
+    # Usa le key dei widget come unica fonte di verità
+    # Inizializza solo se non esistono ancora
+    if 'ms_famiglie' not in st.session_state:
+        st.session_state['ms_famiglie'] = []
+    if 'ms_stati' not in st.session_state:
+        st.session_state['ms_stati'] = []
+
+    # Pulisce valori non validi per il cliente/contesto corrente
+    st.session_state['ms_famiglie'] = [f for f in st.session_state['ms_famiglie'] if f in _fam_disp]
+    st.session_state['ms_stati']    = [s for s in st.session_state['ms_stati']    if s in _sta_disp]
 
     with _cf:
-        _sel_fam = st.multiselect(
-            "📂 Famiglia", _fam_disp, default=_def_fam,
-            placeholder="Tutte le famiglie", key="ms_famiglie", label_visibility="collapsed"
+        st.multiselect(
+            "📂 Famiglia", _fam_disp,
+            placeholder="Tutte le famiglie",
+            key="ms_famiglie", label_visibility="collapsed"
         )
-        if _sel_fam != st.session_state.filtro_famiglie:
-            st.session_state.filtro_famiglie = _sel_fam
-            st.rerun()
     with _cs:
-        _sel_sta = st.multiselect(
-            "🔵 Stato", _sta_disp, default=_def_sta,
-            placeholder="Tutti gli stati", key="ms_stati", label_visibility="collapsed"
+        st.multiselect(
+            "🔵 Stato", _sta_disp,
+            placeholder="Tutti gli stati",
+            key="ms_stati", label_visibility="collapsed"
         )
-        if _sel_sta != st.session_state.filtro_stati:
-            st.session_state.filtro_stati = _sel_sta
-            st.rerun()
     with _cr:
-        if st.button("✖ Reset", use_container_width=True, key="btn_reset_globale"):
-            st.session_state.filtro_famiglie = []
-            st.session_state.filtro_stati    = []
-            # Forza il reset dei widget multiselect cancellando le loro key
-            for k in ['ms_famiglie', 'ms_stati']:
-                if k in st.session_state:
-                    del st.session_state[k]
+        if st.button("🗑️ Azzera filtri", use_container_width=True, key="btn_reset_globale"):
+            st.session_state['ms_famiglie'] = []
+            st.session_state['ms_stati']    = []
             st.rerun()
+
+    # Legge i valori direttamente dalla key del widget — unica fonte di verità
+    st.session_state.filtro_famiglie = st.session_state['ms_famiglie']
+    st.session_state.filtro_stati    = st.session_state['ms_stati']
 
     tab_det, tab_op, tab_kpi, tab_btl, tab_atp = st.tabs(
         ["🔍 Dettaglio Ordini", "📋 KPI Operativi", "📊 KPI Avanzati", "🏭 Lavorazioni BTL", "🔵 Lavorazioni Atoplast"]
