@@ -396,44 +396,152 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo','')) else 'acq-row'
                 st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pz | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
 
-            # ── Istruzioni di lavorazione ──────────────────────────────
-            istr_map = carica_istruzioni_btl()
-            art_up   = str(art).strip().upper()
+            # ── Istruzioni di lavorazione divise per OFR / OFF ────────
+            istr_map  = carica_istruzioni_btl()
+            art_up    = str(art).strip().upper()
             istr_list = istr_map.get(art_up, [])
+
+            def _val(d, key):
+                """Valore pulito o None se vuoto/n.a./no/nan."""
+                v = str(d.get(key, '')).strip()
+                if v.lower() in ['nan', 'none', '', 'n.a.', 'no', '0']:
+                    return None
+                return v
+
+            def _data_str(d):
+                data_i = d.get('Data', None)
+                try:
+                    if pd.isnull(data_i): return 'N/D'
+                    return data_i.strftime('%d/%m/%Y') if hasattr(data_i, 'strftime') else str(data_i)[:10]
+                except Exception:
+                    return 'N/D'
+
+            def _qta(d):
+                try: return int(float(d.get('Quantità', 0)))
+                except: return 0
+
+            def _pz_sc(d):
+                try:
+                    v = d.get('Pz x Scatola', '')
+                    return int(float(v)) if str(v).lower() not in ['nan','none','','0'] else 0
+                except: return 0
+
+            def _score(d):
+                """Punteggio di completezza: quanti campi utili ha questa riga."""
+                campi = ['Piegatura','Tempra','Verniciatura','Tipo Vernice','Scatola','Note']
+                return sum(1 for c in campi if _val(d, c) is not None)
+
+            def deduplica(lista):
+                """
+                Per ogni coppia (Tipo Doc, N. Doc) mantiene solo la riga
+                con il punteggio di completezza più alto.
+                Poi unisce le Note di tutte le righe duplicate se diverse.
+                """
+                from collections import defaultdict
+                gruppi = defaultdict(list)
+                for i in lista:
+                    key = (str(i.get('Tipo Doc','')).strip().upper(),
+                           str(i.get('N. Doc', '')).strip())
+                    gruppi[key].append(i)
+
+                risultati = []
+                for key, rows in gruppi.items():
+                    # Prendi la riga più completa
+                    best = max(rows, key=_score)
+                    # Unisci le note di tutte le righe se diverse
+                    note_set = []
+                    for r in rows:
+                        n = _val(r, 'Note')
+                        if n and n not in note_set:
+                            note_set.append(n)
+                    if note_set:
+                        best = dict(best)
+                        best['Note'] = ' | '.join(note_set)
+                    risultati.append(best)
+                return risultati
+
+            def render_istr_block(istr, bg, border):
+                """Mostra solo i campi con valore utile. Note sempre in evidenza."""
+                tipo_doc  = _val(istr, 'Tipo Doc') or ''
+                n_doc     = _val(istr, 'N. Doc')   or ''
+                piegatura = _val(istr, 'Piegatura')
+                tempra    = _val(istr, 'Tempra')
+                vern      = _val(istr, 'Verniciatura')
+                tipo_vern = _val(istr, 'Tipo Vernice')
+                scatola   = _val(istr, 'Scatola')
+                note      = _val(istr, 'Note')
+                qta_i     = _qta(istr)
+                pz_sc     = _pz_sc(istr)
+
+                # Costruisci i dettagli lavorazione — solo campi presenti
+                dettagli = []
+                if piegatura:
+                    dettagli.append('&#128295; <b>Piegatura:</b> ' + piegatura)
+                if tempra:
+                    dettagli.append('&#128293; <b>Tempra:</b> ' + tempra)
+                if vern:
+                    vern_label = vern + (' (' + tipo_vern + ')' if tipo_vern else '')
+                    dettagli.append('&#127912; <b>Verniciatura:</b> ' + vern_label)
+                if scatola:
+                    sc_label = scatola + (' &mdash; ' + str(pz_sc) + ' pz/sc' if pz_sc > 0 else '')
+                    dettagli.append('&#128230; <b>Imballo:</b> ' + sc_label)
+
+                dettagli_html = ' &nbsp;|&nbsp; '.join(dettagli) if dettagli else '<i>Nessun dettaglio specificato</i>'
+
+                # Note in evidenza — box separato se presenti
+                note_html = ''
+                if note:
+                    note_html = (
+                        '<div style="background:#fff9c4;border-left:3px solid #f9a825;'
+                        'padding:6px 10px;border-radius:4px;margin-top:6px;'
+                        'font-size:12px;color:#3e2723;">'
+                        '&#9888;&#65039; <b>NOTE:</b> ' + note + '</div>'
+                    )
+
+                html = (
+                    '<div style="background:' + bg + ';border-left:5px solid ' + border + ';'
+                    'padding:10px 14px;border-radius:6px;margin:4px 0;font-size:13px;color:#1a1a1a;">'
+                    '<b>' + tipo_doc + ' n.' + str(n_doc) + ' del ' + _data_str(istr) + '</b>'
+                    ' &mdash; Q.t&agrave;: ' + str(qta_i) + ' pz<br>'
+                    '<span style="font-size:12px;">' + dettagli_html + '</span>'
+                    + note_html + '</div>'
+                )
+                st.markdown(html, unsafe_allow_html=True)
+
             if istr_list:
-                st.markdown("**📋 Istruzioni di lavorazione:**")
-                for istr in istr_list:
-                    tipo_doc  = str(istr.get('Tipo Doc', '')).strip()
-                    n_doc     = istr.get('N. Doc', '')
-                    data_i    = istr.get('Data', '')
-                    data_str  = data_i.strftime('%d/%m/%Y') if hasattr(data_i, 'strftime') else str(data_i)[:10]
-                    piegatura = str(istr.get('Piegatura', 'n.a.')).strip()
-                    tempra    = str(istr.get('Tempra',    'n.a.')).strip()
-                    vern      = str(istr.get('Verniciatura', 'n.a.')).strip()
-                    tipo_vern = str(istr.get('Tipo Vernice', '')).strip()
-                    scatola   = str(istr.get('Scatola',   'n.a.')).strip()
-                    pz_sc     = istr.get('Pz x Scatola', '')
-                    note      = str(istr.get('Note', '')).strip()
-                    qta_i     = int(istr.get('Quantità', 0))
+                # Separa e deduplicica per tipo
+                ofr_list = deduplica([i for i in istr_list if str(i.get('Tipo Doc','')).strip().upper() == 'OFR'])
+                off_list = deduplica([i for i in istr_list if str(i.get('Tipo Doc','')).strip().upper() == 'OFF'])
+                altri    = deduplica([i for i in istr_list if str(i.get('Tipo Doc','')).strip().upper() not in ['OFR','OFF']])
 
-                    vern_label = f"{vern}" + (f" ({tipo_vern})" if tipo_vern and tipo_vern not in ['nan','n.a.',''] else "")
-                    pz_label   = f"{int(pz_sc)} pz/scatola" if pz_sc and str(pz_sc) not in ['nan',''] else ""
-                    scatola_label = scatola + (f" — {pz_label}" if pz_label else "")
-
+                if ofr_list:
                     st.markdown(
-                        f'''<div style="background:#f3e5f5;border-left:4px solid #9c27b0;padding:10px 14px;
-                        border-radius:6px;margin:6px 0;font-size:13px;color:#1a1a1a;">
-                        <b>{tipo_doc} n.{n_doc} del {data_str}</b> — Q.tà: {qta_i:,} pz<br>
-                        🔧 <b>Piegatura:</b> {piegatura} &nbsp;|&nbsp;
-                        🔥 <b>Tempra:</b> {tempra} &nbsp;|&nbsp;
-                        🎨 <b>Verniciatura:</b> {vern_label}<br>
-                        📦 <b>Scatola:</b> {scatola_label}
-                        {"<br>📝 <b>Note:</b> " + note if note and note not in ["nan",""] else ""}
-                        </div>'''.replace(",","."),
+                        '<div style="font-weight:700;font-size:13px;margin:10px 0 4px 0;'
+                        'color:#e65100;">&#128295; Lavorazioni c/terzi (OFR)</div>',
                         unsafe_allow_html=True
                     )
+                    for istr in ofr_list:
+                        render_istr_block(istr, bg='#fff8e1', border='#fbc02d')
+
+                if off_list:
+                    st.markdown(
+                        '<div style="font-weight:700;font-size:13px;margin:10px 0 4px 0;'
+                        'color:#1565c0;">&#128666; Ordini di acquisto (OFF)</div>',
+                        unsafe_allow_html=True
+                    )
+                    for istr in off_list:
+                        render_istr_block(istr, bg='#e3f2fd', border='#2196f3')
+
+                if altri:
+                    st.markdown(
+                        '<div style="font-weight:700;font-size:13px;margin:10px 0 4px 0;'
+                        'color:#555;">&#128203; Altri documenti</div>',
+                        unsafe_allow_html=True
+                    )
+                    for istr in altri:
+                        render_istr_block(istr, bg='#f5f5f5', border='#9e9e9e')
             else:
-                st.caption("ℹ️ Nessuna istruzione di lavorazione disponibile per questo articolo.")
+                st.caption("ℹ️ Nessuna istruzione disponibile per questo articolo.")
 
 @st.cache_data(ttl=1800)
 def carica_istruzioni_btl():
