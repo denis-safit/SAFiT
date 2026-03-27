@@ -254,7 +254,7 @@ def kpi_card(col, title, value, sub="", color=""):
 
 # ── Rendering principale ──────────────────────────────────────────────────────
 
-def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_articolo=None):
+def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_articolo=None, filtro_famiglie=None):
     """
     Punto di ingresso. Da chiamare nella vista admin del portale.
     """
@@ -286,6 +286,11 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
             df_oci = df_oci[df_oci['Articolo C'].str.contains(filtro_articolo.upper(), case=False, na=False, regex=False)]
             df_dvf = df_dvf[df_dvf['Articolo C'].str.contains(filtro_articolo.upper(), case=False, na=False, regex=False)]
 
+        # Filtro famiglie dai filtri globali del portale
+        if filtro_famiglie:
+            df_oci = df_oci[df_oci['Famiglia'].isin(filtro_famiglie)]
+            df_dvf = df_dvf[df_dvf['Famiglia'].isin(filtro_famiglie)]
+
         st.caption(
             f"📁 Storico caricato: **{len(df_all):,}** righe totali | "
             f"**{len(df_oci):,}** OCI/OCA | **{len(df_dvf):,}** DVF".replace(",",".")
@@ -314,6 +319,8 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
             st.caption(f"👤 Dati filtrati per cliente: **{filtro_cliente}**")
         if filtro_articolo:
             st.caption(f"🔍 Dati filtrati per articolo: **{filtro_articolo.upper()}**")
+        if filtro_famiglie:
+            st.caption(f"📂 Famiglie attive: **{', '.join(filtro_famiglie)}**")
 
         # Applica filtri temporali
         gg_map = {"Ultimi 90 gg": 90, "Ultimi 6 mesi": 180,

@@ -325,7 +325,7 @@ def carica_btl_da_storico():
         return pd.DataFrame()
 
 
-def render_vista_btl(df_res=None):
+def render_vista_btl(df_res=None, filtro_famiglie=None):
     """Vista BTL — OFR (lavorazioni) + OFF (acquisti). Usa Qta Residua da ARCA per quantità aperte."""
     st.title("🏭 Lavorazioni & Acquisti BTL")
     st.caption(f"Anticipo consegna a Friola: **{ANTICIPO_BTL_GG} giorni** prima della data consegna")
@@ -337,6 +337,11 @@ def render_vista_btl(df_res=None):
 
     # Qta Residua già filtrata in carica_btl_da_storico — nessun join necessario
     df_btl = df_btl_storico.copy()
+
+    # Applica filtro famiglie se attivo
+    if filtro_famiglie:
+        df_btl['_Famiglia'] = df_btl['Articolo D'].apply(lambda x: ' '.join(str(x).split()[:2]).upper())
+        df_btl = df_btl[df_btl['_Famiglia'].isin(filtro_famiglie)]
 
     if df_btl.empty:
         st.success("✅ Nessuna lavorazione BTL aperta al momento.")
@@ -391,7 +396,7 @@ def render_vista_btl(df_res=None):
                 css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo','')) else 'acq-row'
                 st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pz | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
 
-def render_vista_atoplast(df_res):
+def render_vista_atoplast(df_res, filtro_famiglie=None):
     """Vista dedicata ad Atoplast — solo articoli PRODUZIONE con codice PCP*****."""
     st.title("🏭 Lavorazioni Atoplast")
     st.caption(f"Anticipo consegna a Friola: **{ANTICIPO_ATOPLAST_GG} giorni** prima della data cliente")
@@ -400,6 +405,11 @@ def render_vista_atoplast(df_res):
         (df_res['ST'] == 'PRODUZIONE') &
         (df_res['ART_KEY'].str.startswith('PCP', na=False))
     ].copy()
+
+    # Applica filtro famiglie se attivo
+    if filtro_famiglie:
+        df_atp['_Famiglia'] = df_atp['Articolo D'].apply(lambda x: ' '.join(str(x).split()[:2]).upper())
+        df_atp = df_atp[df_atp['_Famiglia'].isin(filtro_famiglie)]
 
     if df_atp.empty:
         st.success("✅ Nessuna lavorazione Atoplast in corso al momento.")
@@ -819,43 +829,27 @@ if not df_res.empty:
     if 'filtro_stati' not in st.session_state:    st.session_state.filtro_stati    = []
     if 'filtro_famiglie' not in st.session_state: st.session_state.filtro_famiglie = []
 
-    with st.expander("🔽 Filtri — Stato e Famiglia", expanded=False):
-        df_fam_chart_g  = df_f.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
-        famiglie_disp_g = df_fam_chart_g['Famiglia'].tolist()
-        stati_disp_g    = [s for s in COLOR_MAP if df_f[df_f['ST']==s]['Qta Residua'].sum() > 0]
-
-        col_fs, col_ff, col_reset = st.columns([2, 2, 1])
-        with col_fs:
-            st.markdown("**Filtra per Stato**")
-            for stato in stati_disp_g:
-                attivo = stato in st.session_state.filtro_stati
-                label  = f"✓ {stato}" if attivo else stato
-                if st.button(label, key=f"btn_stato_{stato}", use_container_width=True,
-                             type="primary" if attivo else "secondary"):
-                    if attivo: st.session_state.filtro_stati.remove(stato)
-                    else:      st.session_state.filtro_stati.append(stato)
-                    st.rerun()
-        with col_ff:
-            st.markdown("**Filtra per Famiglia**")
-            for fam in famiglie_disp_g:
-                attivo = fam in st.session_state.filtro_famiglie
-                label_s = fam[:16] + "…" if len(fam) > 16 else fam
-                label   = f"✓ {label_s}" if attivo else label_s
-                if st.button(label, key=f"btn_fam_{fam}", use_container_width=True,
-                             type="primary" if attivo else "secondary"):
-                    if attivo: st.session_state.filtro_famiglie.remove(fam)
-                    else:      st.session_state.filtro_famiglie.append(fam)
-                    st.rerun()
-        with col_reset:
-            st.markdown("&nbsp;", unsafe_allow_html=True)
-            if st.button("🔄 Reset filtri", use_container_width=True, key="btn_reset_globale"):
-                st.session_state.filtro_stati    = []
-                st.session_state.filtro_famiglie = []
-                st.rerun()
-            if st.session_state.filtro_stati:
-                st.info("Stati: " + ", ".join(st.session_state.filtro_stati))
-            if st.session_state.filtro_famiglie:
-                st.info("Famiglie: " + ", ".join(st.session_state.filtro_famiglie))
+    # ── Filtri compatti su una riga ──────────────────────────────────────────
+    _fam_disp = df_f.groupby('Famiglia')['Qta Residua'].sum().sort_values(ascending=False).head(12).index.tolist()
+    _sta_disp = [s for s in COLOR_MAP if df_f[df_f['ST']==s]['Qta Residua'].sum() > 0]
+    _cf, _cs, _cr = st.columns([3, 2, 1])
+    with _cf:
+        st.session_state.filtro_famiglie = st.multiselect(
+            "📂 Famiglia", _fam_disp,
+            default=st.session_state.filtro_famiglie,
+            placeholder="Tutte le famiglie", key="ms_famiglie", label_visibility="collapsed"
+        )
+    with _cs:
+        st.session_state.filtro_stati = st.multiselect(
+            "🔵 Stato", _sta_disp,
+            default=st.session_state.filtro_stati,
+            placeholder="Tutti gli stati", key="ms_stati", label_visibility="collapsed"
+        )
+    with _cr:
+        if st.button("✖ Reset", use_container_width=True, key="btn_reset_globale"):
+            st.session_state.filtro_famiglie = []
+            st.session_state.filtro_stati    = []
+            st.rerun()
 
     # Applica filtri globali — df_view usato da tutti i tab
     df_view = df_f.copy()
@@ -999,13 +993,18 @@ if not df_res.empty:
     )
 
     with tab_kpi:
-        render_kpi_avanzati(filtro_cliente=sel_cli if sel_cli != "TUTTI" else None, filtro_articolo=search if search else None)
+        render_kpi_avanzati(
+            filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
+            filtro_articolo=search if search else None,
+            filtro_famiglie=st.session_state.filtro_famiglie or None
+        )
 
     with tab_btl:
-        render_vista_btl(df_res)
+        # Passa lista famiglie attive per filtrare gli articoli BTL
+        render_vista_btl(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
 
     with tab_atp:
-        render_vista_atoplast(df_res)
+        render_vista_atoplast(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
 
     with tab_det:
       filtri_attivi = []
