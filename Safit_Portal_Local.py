@@ -710,6 +710,11 @@ if not df_res.empty:
 
         search = st.text_input("🔍 Cerca Articolo:").upper()
 
+    # Ridichiarate fuori dal with sidebar per essere visibili nel resto del codice
+    is_admin    = st.session_state.permesso == "TUTTI"
+    is_btl      = st.session_state.permesso == "BTL"
+    is_atoplast = st.session_state.permesso == "ATOPLAST"
+
     df_f = df_res[df_res['CLI_NAME'] == sel_cli] if sel_cli != "TUTTI" else df_res.copy()
     if search: df_f = df_f[df_f['ART_KEY'].str.contains(search)]
 
