@@ -838,22 +838,23 @@ if not df_res.empty:
     st.session_state.filtro_famiglie = [f for f in st.session_state.filtro_famiglie if f in _fam_disp]
     st.session_state.filtro_stati    = [s for s in st.session_state.filtro_stati    if s in _sta_disp]
 
-    # Reset
+    # Reset — deve avvenire PRIMA del render dei widget
+    _resettato = False
     if st.session_state.get('_do_reset', False):
         st.session_state.filtro_famiglie = []
         st.session_state.filtro_stati    = []
         st.session_state['_do_reset']    = False
+        _resettato = True
 
     _cf, _cs, _cr = st.columns([3, 2, 1])
     with _cf:
-        # Niente default, niente key — leggo il valore restituito direttamente
         _sel_fam = st.multiselect("Famiglia", _fam_disp,
-            default=st.session_state.filtro_famiglie,
+            default=[] if _resettato else st.session_state.filtro_famiglie,
             placeholder="Tutte le famiglie", label_visibility="collapsed")
         st.session_state.filtro_famiglie = _sel_fam
     with _cs:
         _sel_sta = st.multiselect("Stato", _sta_disp,
-            default=st.session_state.filtro_stati,
+            default=[] if _resettato else st.session_state.filtro_stati,
             placeholder="Tutti gli stati", label_visibility="collapsed")
         st.session_state.filtro_stati = _sel_sta
     with _cr:
