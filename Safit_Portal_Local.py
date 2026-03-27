@@ -827,47 +827,28 @@ if not df_res.empty:
                  'PRODUZIONE':'#fbc02d','MANCANTE':'#f44336','DA PIANIFICARE':'#9e9e9e'}
 
     # ── Filtri globali ───────────────────────────────────────────────────────
-    _fam_disp = df_f.groupby('Famiglia')['Qta Residua'].sum().sort_values(ascending=False).head(12).index.tolist()
-    _sta_disp = [s for s in COLOR_MAP if df_f[df_f['ST']==s]['Qta Residua'].sum() > 0]
+    _TUTTI = "— Tutti —"
+    _fam_disp = [_TUTTI] + df_f.groupby('Famiglia')['Qta Residua'].sum().sort_values(ascending=False).head(12).index.tolist()
+    _sta_disp = [_TUTTI] + [s for s in COLOR_MAP if df_f[df_f['ST']==s]['Qta Residua'].sum() > 0]
 
-    # Inizializza
-    if 'filtro_famiglie' not in st.session_state: st.session_state.filtro_famiglie = []
-    if 'filtro_stati'    not in st.session_state: st.session_state.filtro_stati    = []
-
-    # Pulisce valori non più validi (cambio cliente/contesto)
-    st.session_state.filtro_famiglie = [f for f in st.session_state.filtro_famiglie if f in _fam_disp]
-    st.session_state.filtro_stati    = [s for s in st.session_state.filtro_stati    if s in _sta_disp]
-
-    # Reset — deve avvenire PRIMA del render dei widget
-    _resettato = False
-    if st.session_state.get('_do_reset', False):
-        st.session_state.filtro_famiglie = []
-        st.session_state.filtro_stati    = []
-        st.session_state['_do_reset']    = False
-        _resettato = True
-
-    _cf, _cs, _cr = st.columns([3, 2, 1])
+    _cf, _cs = st.columns([3, 2])
     with _cf:
-        _sel_fam = st.multiselect("Famiglia", _fam_disp,
-            default=[] if _resettato else st.session_state.filtro_famiglie,
-            placeholder="Tutte le famiglie", label_visibility="collapsed")
-        st.session_state.filtro_famiglie = _sel_fam
+        _sel_fam = st.selectbox("Famiglia", _fam_disp,
+            index=0, label_visibility="collapsed", key="sb_fam")
     with _cs:
-        _sel_sta = st.multiselect("Stato", _sta_disp,
-            default=[] if _resettato else st.session_state.filtro_stati,
-            placeholder="Tutti gli stati", label_visibility="collapsed")
-        st.session_state.filtro_stati = _sel_sta
-    with _cr:
-        if st.button("🗑️ Azzera filtri", use_container_width=True, key="btn_reset_globale"):
-            st.session_state['_do_reset'] = True
-            st.rerun()
+        _sel_sta = st.selectbox("Stato", _sta_disp,
+            index=0, label_visibility="collapsed", key="sb_sta")
 
-    # Applica filtri
+    # Applica filtri — se "— Tutti —" non filtra
     df_view = df_f.copy()
-    if st.session_state.filtro_famiglie:
-        df_view = df_view[df_view['Famiglia'].isin(st.session_state.filtro_famiglie)]
-    if st.session_state.filtro_stati:
-        df_view = df_view[df_view['ST'].isin(st.session_state.filtro_stati)]
+    if _sel_fam != _TUTTI:
+        df_view = df_view[df_view['Famiglia'] == _sel_fam]
+    if _sel_sta != _TUTTI:
+        df_view = df_view[df_view['ST'] == _sel_sta]
+
+    # Propaga ai tab
+    st.session_state.filtro_famiglie = [] if _sel_fam == _TUTTI else [_sel_fam]
+    st.session_state.filtro_stati    = [] if _sel_sta == _TUTTI else [_sel_sta]
 
     tab_det, tab_op, tab_kpi, tab_btl, tab_atp = st.tabs(
         ["🔍 Dettaglio Ordini", "📋 KPI Operativi", "📊 KPI Avanzati", "🏭 Lavorazioni BTL", "🔵 Lavorazioni Atoplast"]
