@@ -290,8 +290,12 @@ def tbar_html(data_ordine, data_consegna, oggi=None):
 
 @st.cache_data(ttl=1800)
 def carica_btl_da_storico():
-    """Carica OFR + OFF di BTL dal file storico con date."""
-    path = PATH_STORICO_DATE  # file nella stessa cartella del portale
+    """
+    Carica OFR + OFF di BTL dal file storico con date.
+    Usa Qta Residua già presente nel file — esclude righe già evase (Qta Residua = 0).
+    Fallback: se Data Consegna mancante usa Data emissione.
+    """
+    path = PATH_STORICO_DATE
     if not os.path.exists(path):
         return pd.DataFrame()
     try:
@@ -300,16 +304,22 @@ def carica_btl_da_storico():
         df['Codice Documento'] = df['Codice Documento'].ffill()
         df = df[~df['Codice Documento'].astype(str).str.contains('Totale|NaN|nan', na=True)]
         df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str) != '(vuoto)')]
-        df['Data']          = pd.to_datetime(df['Data'],          errors='coerce')
-        df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
-        df['Data Consegna'] = df.groupby('Numero Documento')['Data Consegna'].ffill()
-        df['Qta Doc']       = pd.to_numeric(df['Qta Doc'], errors='coerce').fillna(0)
+        df['Data']         = pd.to_datetime(df['Data'],         errors='coerce')
+        df['Data Consegna']= pd.to_datetime(df['Data Consegna'],errors='coerce')
+        df['Qta Doc']      = pd.to_numeric(df['Qta Doc'],       errors='coerce').fillna(0)
+        df['Qta Residua']  = pd.to_numeric(df.get('Qta Residua', 0), errors='coerce').fillna(0)
+
+        # Fallback: se Data Consegna mancante usa Data emissione
+        df['Data Consegna'] = df['Data Consegna'].fillna(df['Data'])
+
+        # Filtra BTL OFR+OFF con quantità residua ancora aperta
         df_btl = df[
             df['Cliente Fornitore CD'].str.contains('BTL', case=False, na=False) &
             df['Codice Documento'].isin(['OFR', 'OFF']) &
-            (df['Qta Doc'] > 0)
+            (df['Qta Residua'] > 0)
         ].copy()
-        df_btl['Tipo'] = df_btl['Codice Documento'].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
+        df_btl['Tipo']    = df_btl['Codice Documento'].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
+        df_btl['Qta Doc'] = df_btl['Qta Residua']  # usa sempre la quantità residua
         return df_btl
     except Exception as e:
         return pd.DataFrame()
@@ -325,18 +335,8 @@ def render_vista_btl(df_res=None):
         st.info("Nessun ordine BTL trovato. Verifica che il file righe_ordini_storico_con_date.xlsx sia presente.")
         return
 
-    # Usa Qta Residua da df_res (ARCA) dove disponibile, altrimenti Qta Doc dallo storico
-    if df_res is not None and not df_res.empty:
-        # Articoli BTL con quantità residua aperta da ARCA
-        art_btl = set(df_btl_storico['Articolo C'].unique())
-        df_arca_btl = df_res[df_res['ART_KEY'].isin(art_btl)][['ART_KEY','Qta Residua']].groupby('ART_KEY')['Qta Residua'].sum().reset_index()
-        df_arca_btl.columns = ['Articolo C', 'Qta Residua ARCA']
-        df_btl = df_btl_storico.merge(df_arca_btl, on='Articolo C', how='left')
-        # Se Qta Residua ARCA = 0 o NaN → ordine evaso, escludilo
-        df_btl = df_btl[df_btl['Qta Residua ARCA'].fillna(0) > 0].copy()
-        df_btl['Qta Doc'] = df_btl['Qta Residua ARCA']  # usa residua per i conteggi
-    else:
-        df_btl = df_btl_storico.copy()
+    # Qta Residua già filtrata in carica_btl_da_storico — nessun join necessario
+    df_btl = df_btl_storico.copy()
 
     if df_btl.empty:
         st.success("✅ Nessuna lavorazione BTL aperta al momento.")
