@@ -90,9 +90,8 @@ def carica_storico_arca(path=PATH_STORICO):
         # Normalizza date
         df['Data']          = pd.to_datetime(df['Data'],          errors='coerce')
         df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
-
-        # Propaga Data Consegna all'interno dello stesso documento
-        df['Data Consegna'] = df.groupby('Numero Documento')['Data Consegna'].ffill()
+        # NOTA: non propago Data Consegna tra righe — ogni riga deve avere la propria data
+        # Le righe senza Data Consegna vengono escluse dal calcolo puntualità
 
         # Normalizza quantità
         df['Qta Doc'] = pd.to_numeric(df['Qta Doc'], errors='coerce').fillna(0)
@@ -190,12 +189,29 @@ def calcola_scostamento_consegna(df_ordini, df_dvf):
     """
     Scostamento data consegna prevista (OCI) vs data evasione reale (DVF).
     Incrocia su Articolo C + Cliente.
+
+    Regole:
+    - Usa 'Data Consegna' del DVF come data evasione reale (non 'Data' documento)
+    - Esclude righe OCI senza 'Data Consegna' (non confrontabili)
+    - Esclude righe DVF senza 'Data Consegna'
     """
     if df_ordini.empty or df_dvf.empty:
         return pd.DataFrame(), {}
 
-    # Per ogni articolo+cliente: ultima data DVF come proxy "data evasione"
-    df_dvf_grp = df_dvf.groupby(['Articolo C', 'Cliente'])['Data'].max().reset_index()
+    # Escludi OCI senza Data Consegna — non confrontabili
+    df_ordini = df_ordini[df_ordini['Data Consegna'].notna()].copy()
+    if df_ordini.empty:
+        return pd.DataFrame(), {}
+
+    # Per ogni articolo+cliente: usa Data Consegna del DVF (non Data documento)
+    # Escludi DVF senza Data Consegna
+    df_dvf_validi = df_dvf[df_dvf['Data Consegna'].notna()].copy()
+    if df_dvf_validi.empty:
+        return pd.DataFrame(), {}
+
+    df_dvf_grp = df_dvf_validi.groupby(
+        ['Articolo C', 'Cliente']
+    )['Data Consegna'].max().reset_index()
     df_dvf_grp.columns = ['Articolo C', 'Cliente', 'Data_Evasione']
 
     df_join = df_ordini.merge(df_dvf_grp, on=['Articolo C', 'Cliente'], how='inner')
