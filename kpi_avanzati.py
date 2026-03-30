@@ -131,10 +131,14 @@ def carica_dettagli_consegne(path=PATH_CONSEGNE):
         df.columns = [str(c).strip() for c in df.columns]
         # Tieni solo righe con articolo valorizzato (escludi intestazioni DVF)
         df = df[df['Cd_AR'].notna() & (df['Cd_AR'].astype(str).str.strip() != '')].copy()
-        # Escludi fornitori (Cd_CF inizia con F*) — tieni solo clienti (C*)
-        df = df[df['Cd_CF'].astype(str).str.strip().str.upper().str.startswith('C')].copy()
+        # Solo DVF = documenti di trasporto (consegna reale merce)
+        # Escludi FVU (fatture), OCI (ordini), e tutti gli altri
+        df = df[df['Cd_Do'] == 'DVF'].copy()
+        # Solo clienti (Cd_CF inizia con C)
+        df = df[df['Cd_CF'].astype(str).str.strip().str.startswith('C')].copy()
         df['DataDoc']        = pd.to_datetime(df['DataDoc'],        errors='coerce')
         df['DataConsegnaB']  = pd.to_datetime(df['DataConsegnaB'],  errors='coerce')
+        df['dataconsegnaO']  = pd.to_datetime(df['dataconsegnaO'],  errors='coerce')
         df['datadifference'] = pd.to_numeric(df['datadifference'],  errors='coerce')
         df['Qta']            = pd.to_numeric(df['Qta'],             errors='coerce').fillna(0)
         df['QtaEvasa']       = pd.to_numeric(df['QtaEvasa'],        errors='coerce').fillna(0)
@@ -244,21 +248,20 @@ def calcola_scostamento_consegna(df_cons, filtro_cliente=None, filtro_articolo=N
     if cutoff is not None:
         df = df[df['DataDoc'] >= cutoff]
 
-    # Escludi righe senza date valide (entrambe necessarie per il calcolo)
-    df = df[df['DataConsegnaB'].notna() & df['DataDoc'].notna()].copy()
+    # Usa dataconsegnaO = data scadenza originale dell'OCI (più affidabile di DataConsegnaB)
+    # Escludi righe senza entrambe le date
+    df = df[df['dataconsegnaO'].notna() & df['DataDoc'].notna()].copy()
 
     if df.empty:
         return pd.DataFrame(), {}
 
-    # Calcoliamo lo scostamento direttamente dalle date — datadifference ARCA
-    # non è affidabile: viene calcolato su un OCI di riferimento diverso
-    # da quello abbinato al DVF, producendo valori errati.
-    # Convenzione: positivo = ritardo, negativo = anticipo
-    df['Scostamento_gg'] = (df['DataDoc'] - df['DataConsegnaB']).dt.days
-    df['Data Consegna']  = df['DataConsegnaB']
+    # Scostamento = DataDoc (consegna reale) - dataconsegnaO (scadenza OCI originale)
+    # Positivo = ritardo, Negativo = anticipo
+    df['Scostamento_gg'] = (df['DataDoc'] - df['dataconsegnaO']).dt.days
+    df['Data Consegna']  = df['dataconsegnaO']
     df['Data_Evasione']  = df['DataDoc']
 
-    # Escludi anomalie evidenti (ritardo > 365 gg o anticipo > 365 gg)
+    # Escludi anomalie (ritardo > 365 gg = dato spurio)
     df = df[df['Scostamento_gg'].between(-365, 365)].copy()
 
     # Anticipo o puntuale = tutto ≤ 2 gg di ritardo (inclusi anticipi)
