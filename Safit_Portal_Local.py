@@ -461,9 +461,7 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 return risultati
 
             def render_istr_block(istr, bg, border):
-                """Mostra solo i campi con valore utile. Note sempre in evidenza."""
-                tipo_doc  = _val(istr, 'Tipo Doc') or ''
-                n_doc     = _val(istr, 'N. Doc')   or ''
+                """Blocco istruzione pulito — solo campi utili, note in evidenza."""
                 piegatura = _val(istr, 'Piegatura')
                 tempra    = _val(istr, 'Tempra')
                 vern      = _val(istr, 'Verniciatura')
@@ -473,73 +471,68 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 qta_i     = _qta(istr)
                 pz_sc     = _pz_sc(istr)
 
-                # Costruisci i dettagli lavorazione — solo campi presenti
-                dettagli = []
+                # Righe di dettaglio — solo se presenti
+                righe = []
                 if piegatura:
-                    dettagli.append('&#128295; <b>Piegatura:</b> ' + piegatura)
+                    righe.append(
+                        '<span style="display:inline-block;min-width:180px;">'
+                        '&#128295; <b>Piegatura</b></span> ' + piegatura
+                    )
                 if tempra:
-                    dettagli.append('&#128293; <b>Tempra:</b> ' + tempra)
+                    righe.append(
+                        '<span style="display:inline-block;min-width:180px;">'
+                        '&#128293; <b>Tempra</b></span> ' + tempra
+                    )
                 if vern:
-                    vern_label = vern + (' (' + tipo_vern + ')' if tipo_vern else '')
-                    dettagli.append('&#127912; <b>Verniciatura:</b> ' + vern_label)
+                    vl = vern + (' &mdash; ' + tipo_vern if tipo_vern else '')
+                    righe.append(
+                        '<span style="display:inline-block;min-width:180px;">'
+                        '&#127912; <b>Verniciatura</b></span> ' + vl
+                    )
                 if scatola:
-                    sc_label = scatola + (' &mdash; ' + str(pz_sc) + ' pz/sc' if pz_sc > 0 else '')
-                    dettagli.append('&#128230; <b>Imballo:</b> ' + sc_label)
+                    sl = scatola + (' &mdash; ' + str(pz_sc) + ' pz/sc' if pz_sc > 0 else '')
+                    righe.append(
+                        '<span style="display:inline-block;min-width:180px;">'
+                        '&#128230; <b>Imballo</b></span> ' + sl
+                    )
 
-                dettagli_html = ' &nbsp;|&nbsp; '.join(dettagli) if dettagli else '<i>Nessun dettaglio specificato</i>'
+                corpo = '<br>'.join(righe) if righe else '<i style="color:#888;">Nessun dettaglio specificato</i>'
 
-                # Note in evidenza — box separato se presenti
                 note_html = ''
                 if note:
                     note_html = (
-                        '<div style="background:#fff9c4;border-left:3px solid #f9a825;'
-                        'padding:6px 10px;border-radius:4px;margin-top:6px;'
-                        'font-size:12px;color:#3e2723;">'
-                        '&#9888;&#65039; <b>NOTE:</b> ' + note + '</div>'
+                        '<div style="background:#fff9c4;border-left:4px solid #f9a825;'
+                        'padding:8px 12px;border-radius:5px;margin-top:8px;'
+                        'font-size:14px;font-weight:700;color:#3e2723;">'
+                        '&#9888; NOTE: ' + note + '</div>'
                     )
 
+                qta_str = str(qta_i) + ' pz' if qta_i > 0 else ''
                 html = (
                     '<div style="background:' + bg + ';border-left:5px solid ' + border + ';'
-                    'padding:10px 14px;border-radius:6px;margin:4px 0;font-size:13px;color:#1a1a1a;">'
-                    '<b>' + tipo_doc + ' n.' + str(n_doc) + ' del ' + _data_str(istr) + '</b>'
-                    ' &mdash; Q.t&agrave;: ' + str(qta_i) + ' pz<br>'
-                    '<span style="font-size:12px;">' + dettagli_html + '</span>'
-                    + note_html + '</div>'
+                    'padding:12px 16px;border-radius:7px;margin:6px 0;'
+                    'font-size:14px;color:#1a1a1a;">'
+                    + ('<div style="font-size:12px;color:#78909c;margin-bottom:6px;">'
+                       'Q.t&agrave;: ' + qta_str + ' &mdash; ' + _data_str(istr) + '</div>'
+                       if qta_str else '')
+                    + corpo
+                    + note_html
+                    + '</div>'
                 )
                 st.markdown(html, unsafe_allow_html=True)
 
             if istr_list:
-                # Separa e deduplicica per tipo
-                ofr_list = deduplica([i for i in istr_list if str(i.get('Tipo Doc','')).strip().upper() == 'OFR'])
-                off_list = deduplica([i for i in istr_list if str(i.get('Tipo Doc','')).strip().upper() == 'OFF'])
-                altri    = deduplica([i for i in istr_list if str(i.get('Tipo Doc','')).strip().upper() not in ['OFR','OFF']])
+                # Deduplicazione: un blocco per documento, riga più completa
+                tutti = deduplica(istr_list)
 
-                if ofr_list:
-                    st.markdown(
-                        '<div style="font-weight:700;font-size:13px;margin:10px 0 4px 0;'
-                        'color:#e65100;">&#128295; Lavorazioni c/terzi (OFR)</div>',
-                        unsafe_allow_html=True
-                    )
-                    for istr in ofr_list:
-                        render_istr_block(istr, bg='#fff8e1', border='#fbc02d')
-
-                if off_list:
-                    st.markdown(
-                        '<div style="font-weight:700;font-size:13px;margin:10px 0 4px 0;'
-                        'color:#1565c0;">&#128666; Ordini di acquisto (OFF)</div>',
-                        unsafe_allow_html=True
-                    )
-                    for istr in off_list:
-                        render_istr_block(istr, bg='#e3f2fd', border='#2196f3')
-
-                if altri:
-                    st.markdown(
-                        '<div style="font-weight:700;font-size:13px;margin:10px 0 4px 0;'
-                        'color:#555;">&#128203; Altri documenti</div>',
-                        unsafe_allow_html=True
-                    )
-                    for istr in altri:
-                        render_istr_block(istr, bg='#f5f5f5', border='#9e9e9e')
+                st.markdown(
+                    '<div style="font-weight:700;font-size:14px;margin:10px 0 6px 0;'
+                    'color:#37474f;border-bottom:2px solid #90a4ae;padding-bottom:4px;">'
+                    '&#128203; Istruzioni di lavorazione</div>',
+                    unsafe_allow_html=True
+                )
+                for istr in tutti:
+                    render_istr_block(istr, bg='#f8f9fa', border='#546e7a')
             else:
                 st.caption("ℹ️ Nessuna istruzione disponibile per questo articolo.")
 
