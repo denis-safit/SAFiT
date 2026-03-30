@@ -252,19 +252,19 @@ def calcola_scostamento_consegna(df_cons, filtro_cliente=None, filtro_articolo=N
     df['Data Consegna']  = df['DataConsegnaB']
     df['Data_Evasione']  = df['DataDoc']
 
+    # Anticipo/Puntuale = tutto ciò che non è in ritardo
+    # Escludi scostamenti anomali (< -180 gg = dato spurio, data OCI non affidabile)
+    df = df[df['Scostamento_gg'] >= -180].copy()
     df['Stato_Consegna'] = df['Scostamento_gg'].apply(
-        lambda x: '✅ Puntuale'  if -2 <= x <= 2
-        else ('⚡ Anticipato'    if x < -2
-        else  '⚠️ In ritardo')
+        lambda x: '⚠️ In ritardo' if x > 2 else '✅ Puntuale'
     )
 
     summary = {
-        'n_evasi':        len(df),
-        'media_scost':    round(df['Scostamento_gg'].mean(), 1),
-        'mediana_scost':  round(df['Scostamento_gg'].median(), 1),
-        'pct_puntuali':   round((df['Scostamento_gg'].between(-2, 2)).mean() * 100, 1),
-        'pct_ritardo':    round((df['Scostamento_gg'] > 2).mean() * 100, 1),
-        'pct_anticipati': round((df['Scostamento_gg'] < -2).mean() * 100, 1),
+        'n_evasi':      len(df),
+        'media_scost':  round(df[df['Scostamento_gg'] > 0]['Scostamento_gg'].mean(), 1) if (df['Scostamento_gg'] > 0).any() else 0.0,
+        'mediana_scost':round(df['Scostamento_gg'].median(), 1),
+        'pct_puntuali': round((df['Scostamento_gg'] <= 2).mean() * 100, 1),
+        'pct_ritardo':  round((df['Scostamento_gg'] > 2).mean() * 100, 1),
     }
     return df, summary
 
@@ -694,9 +694,9 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                      f"{summary['pct_ritardo']}% in ritardo", col_p)
             col_m = "g" if summary['media_scost'] <= 2 else \
                     "o" if summary['media_scost'] <= 7 else "r"
-            kpi_card(p3, "Scostamento medio",
+            kpi_card(p3, "Ritardo medio (solo ritardi)",
                      f"{summary['media_scost']} gg",
-                     "positivo = ritardo, negativo = anticipo", col_m)
+                     "calcolato solo sulle consegne in ritardo", col_m)
             kpi_card(p4, "Mediana scostamento",
                      f"{summary['mediana_scost']} gg",
                      "valore centrale", "p")
@@ -707,7 +707,6 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                 color='Stato_Consegna', nbins=40,
                 color_discrete_map={
                     '✅ Puntuale':    '#4caf50',
-                    '⚡ Anticipato': '#2196f3',
                     '⚠️ In ritardo': '#f44336',
                 },
                 labels={'Scostamento_gg': 'Scostamento (gg)', 'count': 'N° confronti'},
@@ -722,8 +721,8 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
             # Trend mensile puntualità
             df_cons['Mese'] = df_cons['DataDoc'].dt.to_period('M').astype(str)
             df_tm = df_cons.groupby('Mese').agg(
-                Pct_Puntuali=('Stato_Consegna',
-                              lambda x: round((x == '✅ Puntuale').mean()*100, 1)),
+                Pct_Puntuali=('Scostamento_gg',
+                              lambda x: round((x <= 2).mean()*100, 1)),
                 N_Evasi=('Scostamento_gg', 'count'),
                 Scost_Medio=('Scostamento_gg', 'mean'),
             ).reset_index().sort_values('Mese')
