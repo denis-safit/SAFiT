@@ -198,24 +198,42 @@ def calcola_scostamento_consegna(df_ordini, df_dvf):
     if df_ordini.empty or df_dvf.empty:
         return pd.DataFrame(), {}
 
-    # Escludi OCI senza Data Consegna — non confrontabili
+    # Escludi righe senza Data Consegna — non confrontabili
     df_ordini = df_ordini[df_ordini['Data Consegna'].notna()].copy()
-    if df_ordini.empty:
+    df_dvf    = df_dvf[df_dvf['Data Consegna'].notna()].copy()
+    if df_ordini.empty or df_dvf.empty:
         return pd.DataFrame(), {}
 
-    # Per ogni articolo+cliente: usa Data Consegna del DVF (non Data documento)
-    # Escludi DVF senza Data Consegna
-    df_dvf_validi = df_dvf[df_dvf['Data Consegna'].notna()].copy()
-    if df_dvf_validi.empty:
-        return pd.DataFrame(), {}
+    df_join = pd.DataFrame()
 
-    df_dvf_grp = df_dvf_validi.groupby(
-        ['Articolo C', 'Cliente']
-    )['Data Consegna'].max().reset_index()
-    df_dvf_grp.columns = ['Articolo C', 'Cliente', 'Data_Evasione']
+    # ── Tentativo 1: join preciso su Numero Documento ──────────────────────────
+    # Il DVF in ARCA contiene il numero dell'OCI che evade in 'Numero Documento'
+    # o in 'Numero Doc Rif.' — proviamo entrambi
+    if 'Numero Documento' in df_ordini.columns and 'Numero Documento' in df_dvf.columns:
+        col_rif = 'Numero Doc Rif.' if 'Numero Doc Rif.' in df_dvf.columns else 'Numero Documento'
+        df_dvf_j = df_dvf[['Articolo C', 'Cliente', col_rif, 'Data Consegna']].copy()
+        df_dvf_j = df_dvf_j.rename(columns={col_rif: '_num', 'Data Consegna': 'Data_Evasione'})
+        df_oci_j = df_ordini[['Articolo C', 'Cliente', 'Numero Documento', 'Data Consegna']].copy()
+        df_oci_j = df_oci_j.rename(columns={'Numero Documento': '_num'})
+        df_join  = df_oci_j.merge(df_dvf_j, on=['Articolo C', 'Cliente', '_num'], how='inner')
+        df_join  = df_join.dropna(subset=['Data Consegna', 'Data_Evasione'])
 
-    df_join = df_ordini.merge(df_dvf_grp, on=['Articolo C', 'Cliente'], how='inner')
-    df_join = df_join.dropna(subset=['Data Consegna', 'Data_Evasione'])
+    # ── Fallback: join per Articolo+Cliente con finestra temporale ±60 gg ───────
+    # Evita di incrociare OCI di mesi diversi con lo stesso DVF
+    if df_join.empty:
+        df_oci_b = df_ordini[['Articolo C', 'Cliente', 'Data Consegna']].copy()
+        df_dvf_b = df_dvf[['Articolo C', 'Cliente', 'Data Consegna']].copy()
+        df_dvf_b = df_dvf_b.rename(columns={'Data Consegna': 'Data_Evasione'})
+        df_cross = df_oci_b.merge(df_dvf_b, on=['Articolo C', 'Cliente'], how='inner')
+        df_cross = df_cross.dropna(subset=['Data Consegna', 'Data_Evasione'])
+        # Finestra: DVF entro ±60 gg dalla Data Consegna OCI
+        df_cross['_delta'] = (df_cross['Data_Evasione'] - df_cross['Data Consegna']).dt.days.abs()
+        df_cross = df_cross[df_cross['_delta'] <= 60]
+        if not df_cross.empty:
+            # Per ogni OCI prendi il DVF più vicino
+            df_join = (df_cross.sort_values('_delta')
+                               .drop_duplicates(subset=['Articolo C', 'Cliente', 'Data Consegna'])
+                               .drop(columns=['_delta']))
 
     if df_join.empty:
         return pd.DataFrame(), {}
@@ -225,18 +243,18 @@ def calcola_scostamento_consegna(df_ordini, df_dvf):
     ).dt.days
 
     df_join['Stato_Consegna'] = df_join['Scostamento_gg'].apply(
-        lambda x: '✅ Puntuale'   if -2 <= x <= 2
-        else ('⚡ Anticipato'     if x < -2
+        lambda x: '✅ Puntuale'  if -2 <= x <= 2
+        else ('⚡ Anticipato'    if x < -2
         else  '⚠️ In ritardo')
     )
 
     summary = {
-        'n_evasi':           len(df_join),
-        'media_scost':       round(df_join['Scostamento_gg'].mean(), 1),
-        'mediana_scost':     round(df_join['Scostamento_gg'].median(), 1),
-        'pct_puntuali':      round((df_join['Scostamento_gg'].between(-2, 2)).mean() * 100, 1),
-        'pct_ritardo':       round((df_join['Scostamento_gg'] > 2).mean() * 100, 1),
-        'pct_anticipati':    round((df_join['Scostamento_gg'] < -2).mean() * 100, 1),
+        'n_evasi':        len(df_join),
+        'media_scost':    round(df_join['Scostamento_gg'].mean(), 1),
+        'mediana_scost':  round(df_join['Scostamento_gg'].median(), 1),
+        'pct_puntuali':   round((df_join['Scostamento_gg'].between(-2, 2)).mean() * 100, 1),
+        'pct_ritardo':    round((df_join['Scostamento_gg'] > 2).mean() * 100, 1),
+        'pct_anticipati': round((df_join['Scostamento_gg'] < -2).mean() * 100, 1),
     }
     return df_join, summary
 
