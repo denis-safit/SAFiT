@@ -131,6 +131,8 @@ def carica_dettagli_consegne(path=PATH_CONSEGNE):
         df.columns = [str(c).strip() for c in df.columns]
         # Tieni solo righe con articolo valorizzato (escludi intestazioni DVF)
         df = df[df['Cd_AR'].notna() & (df['Cd_AR'].astype(str).str.strip() != '')].copy()
+        # Escludi fornitori (Cd_CF inizia con F*) — tieni solo clienti (C*)
+        df = df[df['Cd_CF'].astype(str).str.strip().str.upper().str.startswith('C')].copy()
         df['DataDoc']        = pd.to_datetime(df['DataDoc'],        errors='coerce')
         df['DataConsegnaB']  = pd.to_datetime(df['DataConsegnaB'],  errors='coerce')
         df['datadifference'] = pd.to_numeric(df['datadifference'],  errors='coerce')
