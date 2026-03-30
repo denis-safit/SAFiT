@@ -244,26 +244,32 @@ def calcola_scostamento_consegna(df_cons, filtro_cliente=None, filtro_articolo=N
     if cutoff is not None:
         df = df[df['DataDoc'] >= cutoff]
 
-    # Escludi righe senza scostamento calcolato o senza data prevista
-    df = df[df['datadifference'].notna() & df['DataConsegnaB'].notna()].copy()
+    # Escludi righe senza date valide (entrambe necessarie per il calcolo)
+    df = df[df['DataConsegnaB'].notna() & df['DataDoc'].notna()].copy()
 
     if df.empty:
         return pd.DataFrame(), {}
 
-    df['Scostamento_gg'] = df['datadifference']
+    # Calcoliamo lo scostamento direttamente dalle date — datadifference ARCA
+    # non è affidabile: viene calcolato su un OCI di riferimento diverso
+    # da quello abbinato al DVF, producendo valori errati.
+    # Convenzione: positivo = ritardo, negativo = anticipo
+    df['Scostamento_gg'] = (df['DataDoc'] - df['DataConsegnaB']).dt.days
     df['Data Consegna']  = df['DataConsegnaB']
     df['Data_Evasione']  = df['DataDoc']
 
-    # Anticipo/Puntuale = tutto ciò che non è in ritardo
-    # Escludi scostamenti anomali (< -180 gg = dato spurio, data OCI non affidabile)
-    df = df[df['Scostamento_gg'] >= -180].copy()
+    # Escludi anomalie evidenti (ritardo > 365 gg o anticipo > 365 gg)
+    df = df[df['Scostamento_gg'].between(-365, 365)].copy()
+
+    # Anticipo o puntuale = tutto ≤ 2 gg di ritardo (inclusi anticipi)
     df['Stato_Consegna'] = df['Scostamento_gg'].apply(
         lambda x: '⚠️ In ritardo' if x > 2 else '✅ Puntuale'
     )
 
+    ritardi = df[df['Scostamento_gg'] > 2]['Scostamento_gg']
     summary = {
         'n_evasi':      len(df),
-        'media_scost':  round(df[df['Scostamento_gg'] > 0]['Scostamento_gg'].mean(), 1) if (df['Scostamento_gg'] > 0).any() else 0.0,
+        'media_scost':  round(ritardi.mean(), 1) if not ritardi.empty else 0.0,
         'mediana_scost':round(df['Scostamento_gg'].median(), 1),
         'pct_puntuali': round((df['Scostamento_gg'] <= 2).mean() * 100, 1),
         'pct_ritardo':  round((df['Scostamento_gg'] > 2).mean() * 100, 1),
