@@ -431,24 +431,29 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 campi = ['Piegatura','Tempra','Verniciatura','Tipo Vernice','Scatola','Note']
                 return sum(1 for c in campi if _val(d, c) is not None)
 
+            def firma_contenuto(istr):
+                """Firma dei campi lavorazione — usata per rilevare duplicati di contenuto."""
+                campi = ['Piegatura', 'Tempra', 'Verniciatura', 'Tipo Vernice', 'Scatola']
+                return tuple(_val(istr, c) or '' for c in campi)
+
             def deduplica(lista):
                 """
-                Per ogni coppia (Tipo Doc, N. Doc) mantiene solo la riga
-                con il punteggio di completezza più alto.
-                Poi unisce le Note di tutte le righe duplicate se diverse.
+                1. Raggruppa per (Tipo Doc, N. Doc) → tieni riga più completa, unisci note.
+                2. Dopo, rimuovi blocchi con contenuto identico (stessa firma lavorazione
+                   e stessa nota) indipendentemente da OFR/OFF — evita duplicati visivi.
                 """
                 from collections import defaultdict
+
+                # Passo 1: deduplicazione per documento
                 gruppi = defaultdict(list)
                 for i in lista:
                     key = (str(i.get('Tipo Doc','')).strip().upper(),
                            str(i.get('N. Doc', '')).strip())
                     gruppi[key].append(i)
 
-                risultati = []
+                per_doc = []
                 for key, rows in gruppi.items():
-                    # Prendi la riga più completa
                     best = max(rows, key=_score)
-                    # Unisci le note di tutte le righe se diverse
                     note_set = []
                     for r in rows:
                         n = _val(r, 'Note')
@@ -457,7 +462,25 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                     if note_set:
                         best = dict(best)
                         best['Note'] = ' | '.join(note_set)
-                    risultati.append(best)
+                    per_doc.append(best)
+
+                # Passo 2: rimuovi duplicati di contenuto tra OFR e OFF
+                # Se due righe hanno stessa firma lavorazione + stessa nota → tieni solo la più completa
+                visti = {}
+                risultati = []
+                for istr in per_doc:
+                    firma = firma_contenuto(istr)
+                    nota  = _val(istr, 'Note') or ''
+                    key   = (firma, nota)
+                    if key not in visti:
+                        visti[key] = istr
+                        risultati.append(istr)
+                    else:
+                        # Sostituisci se questa è più completa
+                        if _score(istr) > _score(visti[key]):
+                            idx = risultati.index(visti[key])
+                            risultati[idx] = istr
+                            visti[key] = istr
                 return risultati
 
             def render_istr_block(istr, bg, border):
