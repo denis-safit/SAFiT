@@ -23,10 +23,11 @@ from datetime import datetime, timedelta
 from io import BytesIO
 import os
 
-# ── Percorso file storico ARCA ────────────────────────────────────────────────
+# ── Percorsi file ─────────────────────────────────────────────────────────────
 import os as _os
 _DIR = _os.path.dirname(_os.path.abspath(__file__))
-PATH_STORICO = _os.path.join(_DIR, "righe_ordini_storico_con_date.xlsx")
+PATH_STORICO   = _os.path.join(_DIR, "righe_ordini_storico_con_date.xlsx")
+PATH_CONSEGNE  = _os.path.join(_DIR, "dettagli_consegne.xlsx")
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 KPI_CSS = """
@@ -112,6 +113,40 @@ def carica_storico_arca(path=PATH_STORICO):
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def carica_dettagli_consegne(path=PATH_CONSEGNE):
+    """
+    Carica il file dettagli_consegne.xlsx esportato da ARCA.
+    Contiene già lo scostamento calcolato (datadifference) per ogni riga DVF.
+    Colonne chiave:
+      Cd_CF, CF_Descrizione, Cd_AR, DORig_Descrizione,
+      DataDoc (data reale consegna), DataConsegnaB (data prevista OCI),
+      datadifference (gg scostamento: positivo=ritardo, negativo=anticipo),
+      Qta, QtaEvasa
+    """
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        df = pd.read_excel(path)
+        df.columns = [str(c).strip() for c in df.columns]
+        # Tieni solo righe con articolo valorizzato (escludi intestazioni DVF)
+        df = df[df['Cd_AR'].notna() & (df['Cd_AR'].astype(str).str.strip() != '')].copy()
+        df['DataDoc']        = pd.to_datetime(df['DataDoc'],        errors='coerce')
+        df['DataConsegnaB']  = pd.to_datetime(df['DataConsegnaB'],  errors='coerce')
+        df['datadifference'] = pd.to_numeric(df['datadifference'],  errors='coerce')
+        df['Qta']            = pd.to_numeric(df['Qta'],             errors='coerce').fillna(0)
+        df['QtaEvasa']       = pd.to_numeric(df['QtaEvasa'],        errors='coerce').fillna(0)
+        # Estrai nome cliente pulito
+        df['Cliente'] = df['CF_Descrizione'].astype(str).str.strip()
+        df['Articolo C'] = df['Cd_AR'].astype(str).str.strip().str.upper()
+        df['Famiglia'] = df['DORig_Descrizione'].apply(
+            lambda x: ' '.join(str(x).split()[:2]).upper()
+        )
+        return df
+    except Exception as e:
+        return pd.DataFrame()
+
+
 def get_oci_oca(df):
     """Filtra solo OCI e OCA con quantità > 0."""
     return df[
@@ -185,78 +220,53 @@ def calcola_frequenza_riordino(df_ordini):
     return pd.DataFrame(risultati).sort_values('N_Ordini', ascending=False)
 
 
-def calcola_scostamento_consegna(df_ordini, df_dvf):
+def calcola_scostamento_consegna(df_cons, filtro_cliente=None, filtro_articolo=None, filtro_famiglie=None, cutoff=None):
     """
-    Scostamento data consegna prevista (OCI) vs data evasione reale (DVF).
-    Incrocia su Articolo C + Cliente.
-
-    Regole:
-    - Usa 'Data Consegna' del DVF come data evasione reale (non 'Data' documento)
-    - Esclude righe OCI senza 'Data Consegna' (non confrontabili)
-    - Esclude righe DVF senza 'Data Consegna'
+    Calcola puntualità consegne dal file dettagli_consegne.xlsx.
+    Usa datadifference già calcolato da ARCA — nessun join complicato.
+    Positivo = ritardo, Negativo = anticipo, 0 = puntuale.
     """
-    if df_ordini.empty or df_dvf.empty:
+    if df_cons.empty:
         return pd.DataFrame(), {}
 
-    # Escludi righe senza Data Consegna — non confrontabili
-    df_ordini = df_ordini[df_ordini['Data Consegna'].notna()].copy()
-    df_dvf    = df_dvf[df_dvf['Data Consegna'].notna()].copy()
-    if df_ordini.empty or df_dvf.empty:
+    df = df_cons.copy()
+
+    # Applica filtri
+    if filtro_cliente:
+        nome = filtro_cliente.split(' - ', 1)[-1].strip() if ' - ' in filtro_cliente else filtro_cliente.strip()
+        df = df[df['Cliente'].str.contains(nome, case=False, na=False, regex=False)]
+    if filtro_articolo:
+        df = df[df['Articolo C'].str.contains(filtro_articolo.upper(), case=False, na=False)]
+    if filtro_famiglie:
+        df = df[df['Famiglia'].isin(filtro_famiglie)]
+    if cutoff is not None:
+        df = df[df['DataDoc'] >= cutoff]
+
+    # Escludi righe senza scostamento calcolato o senza data prevista
+    df = df[df['datadifference'].notna() & df['DataConsegnaB'].notna()].copy()
+
+    if df.empty:
         return pd.DataFrame(), {}
 
-    df_join = pd.DataFrame()
+    df['Scostamento_gg'] = df['datadifference']
+    df['Data Consegna']  = df['DataConsegnaB']
+    df['Data_Evasione']  = df['DataDoc']
 
-    # ── Tentativo 1: join preciso su Numero Documento ──────────────────────────
-    # Il DVF in ARCA contiene il numero dell'OCI che evade in 'Numero Documento'
-    # o in 'Numero Doc Rif.' — proviamo entrambi
-    if 'Numero Documento' in df_ordini.columns and 'Numero Documento' in df_dvf.columns:
-        col_rif = 'Numero Doc Rif.' if 'Numero Doc Rif.' in df_dvf.columns else 'Numero Documento'
-        df_dvf_j = df_dvf[['Articolo C', 'Cliente', col_rif, 'Data Consegna']].copy()
-        df_dvf_j = df_dvf_j.rename(columns={col_rif: '_num', 'Data Consegna': 'Data_Evasione'})
-        df_oci_j = df_ordini[['Articolo C', 'Cliente', 'Numero Documento', 'Data Consegna']].copy()
-        df_oci_j = df_oci_j.rename(columns={'Numero Documento': '_num'})
-        df_join  = df_oci_j.merge(df_dvf_j, on=['Articolo C', 'Cliente', '_num'], how='inner')
-        df_join  = df_join.dropna(subset=['Data Consegna', 'Data_Evasione'])
-
-    # ── Fallback: join per Articolo+Cliente con finestra temporale ±60 gg ───────
-    # Evita di incrociare OCI di mesi diversi con lo stesso DVF
-    if df_join.empty:
-        df_oci_b = df_ordini[['Articolo C', 'Cliente', 'Data Consegna']].copy()
-        df_dvf_b = df_dvf[['Articolo C', 'Cliente', 'Data Consegna']].copy()
-        df_dvf_b = df_dvf_b.rename(columns={'Data Consegna': 'Data_Evasione'})
-        df_cross = df_oci_b.merge(df_dvf_b, on=['Articolo C', 'Cliente'], how='inner')
-        df_cross = df_cross.dropna(subset=['Data Consegna', 'Data_Evasione'])
-        # Finestra: DVF entro ±60 gg dalla Data Consegna OCI
-        df_cross['_delta'] = (df_cross['Data_Evasione'] - df_cross['Data Consegna']).dt.days.abs()
-        df_cross = df_cross[df_cross['_delta'] <= 60]
-        if not df_cross.empty:
-            # Per ogni OCI prendi il DVF più vicino
-            df_join = (df_cross.sort_values('_delta')
-                               .drop_duplicates(subset=['Articolo C', 'Cliente', 'Data Consegna'])
-                               .drop(columns=['_delta']))
-
-    if df_join.empty:
-        return pd.DataFrame(), {}
-
-    df_join['Scostamento_gg'] = (
-        df_join['Data_Evasione'] - df_join['Data Consegna']
-    ).dt.days
-
-    df_join['Stato_Consegna'] = df_join['Scostamento_gg'].apply(
+    df['Stato_Consegna'] = df['Scostamento_gg'].apply(
         lambda x: '✅ Puntuale'  if -2 <= x <= 2
         else ('⚡ Anticipato'    if x < -2
         else  '⚠️ In ritardo')
     )
 
     summary = {
-        'n_evasi':        len(df_join),
-        'media_scost':    round(df_join['Scostamento_gg'].mean(), 1),
-        'mediana_scost':  round(df_join['Scostamento_gg'].median(), 1),
-        'pct_puntuali':   round((df_join['Scostamento_gg'].between(-2, 2)).mean() * 100, 1),
-        'pct_ritardo':    round((df_join['Scostamento_gg'] > 2).mean() * 100, 1),
-        'pct_anticipati': round((df_join['Scostamento_gg'] < -2).mean() * 100, 1),
+        'n_evasi':        len(df),
+        'media_scost':    round(df['Scostamento_gg'].mean(), 1),
+        'mediana_scost':  round(df['Scostamento_gg'].median(), 1),
+        'pct_puntuali':   round((df['Scostamento_gg'].between(-2, 2)).mean() * 100, 1),
+        'pct_ritardo':    round((df['Scostamento_gg'] > 2).mean() * 100, 1),
+        'pct_anticipati': round((df['Scostamento_gg'] < -2).mean() * 100, 1),
     }
-    return df_join, summary
+    return df, summary
 
 
 def calcola_trend_mensile(df_ordini):
@@ -650,13 +660,28 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         st.markdown('<div class="sec-h">📦 Puntualità Consegne (OCI vs DVF)</div>',
                     unsafe_allow_html=True)
 
-        df_cons, summary = calcola_scostamento_consegna(df_f, df_dvf_f)
+        # Carica dettagli consegne dal file dedicato
+        df_det_cons = carica_dettagli_consegne()
+        if df_det_cons.empty:
+            st.info(
+                "File `dettagli_consegne.xlsx` non trovato. "
+                "Esporta il report da ARCA e caricalo su GitHub."
+            )
+            df_cons, summary = pd.DataFrame(), {}
+        else:
+            df_cons, summary = calcola_scostamento_consegna(
+                df_det_cons,
+                filtro_cliente=filtro_cliente,
+                filtro_articolo=filtro_articolo,
+                filtro_famiglie=filtro_famiglie if filtro_famiglie else None,
+                cutoff=cutoff if gg < 9999 else None,
+            )
 
         if df_cons.empty:
             st.info(
-                "Nessun incrocio OCI↔DVF trovato nel periodo selezionato. "
-                "Allarga il periodo o verifica che il file contenga sia OCI che DVF "
-                "per gli stessi articoli e clienti."
+                "Nessuna riga trovata nel file consegne per i filtri selezionati. "
+                "Verifica che il file `dettagli_consegne.xlsx` contenga dati "
+                "per il cliente/periodo selezionato."
             )
         else:
             p1, p2, p3, p4 = st.columns(4)
@@ -695,7 +720,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
             st.plotly_chart(fig_hist, use_container_width=True)
 
             # Trend mensile puntualità
-            df_cons['Mese'] = df_cons['Data'].dt.to_period('M').astype(str)
+            df_cons['Mese'] = df_cons['DataDoc'].dt.to_period('M').astype(str)
             df_tm = df_cons.groupby('Mese').agg(
                 Pct_Puntuali=('Stato_Consegna',
                               lambda x: round((x == '✅ Puntuale').mean()*100, 1)),
