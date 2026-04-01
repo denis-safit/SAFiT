@@ -431,29 +431,24 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 campi = ['Piegatura','Tempra','Verniciatura','Tipo Vernice','Scatola','Note']
                 return sum(1 for c in campi if _val(d, c) is not None)
 
-            def firma_contenuto(istr):
-                """Firma dei campi lavorazione — usata per rilevare duplicati di contenuto."""
-                campi = ['Piegatura', 'Tempra', 'Verniciatura', 'Tipo Vernice', 'Scatola']
-                return tuple(_val(istr, c) or '' for c in campi)
-
             def deduplica(lista):
                 """
-                1. Raggruppa per (Tipo Doc, N. Doc) → tieni riga più completa, unisci note.
-                2. Dopo, rimuovi blocchi con contenuto identico (stessa firma lavorazione
-                   e stessa nota) indipendentemente da OFR/OFF — evita duplicati visivi.
+                Per ogni coppia (Tipo Doc, N. Doc) mantiene solo la riga
+                con il punteggio di completezza più alto.
+                Poi unisce le Note di tutte le righe duplicate se diverse.
                 """
                 from collections import defaultdict
-
-                # Passo 1: deduplicazione per documento
                 gruppi = defaultdict(list)
                 for i in lista:
                     key = (str(i.get('Tipo Doc','')).strip().upper(),
                            str(i.get('N. Doc', '')).strip())
                     gruppi[key].append(i)
 
-                per_doc = []
+                risultati = []
                 for key, rows in gruppi.items():
+                    # Prendi la riga più completa
                     best = max(rows, key=_score)
+                    # Unisci le note di tutte le righe se diverse
                     note_set = []
                     for r in rows:
                         n = _val(r, 'Note')
@@ -462,25 +457,7 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                     if note_set:
                         best = dict(best)
                         best['Note'] = ' | '.join(note_set)
-                    per_doc.append(best)
-
-                # Passo 2: rimuovi duplicati di contenuto tra OFR e OFF
-                # Se due righe hanno stessa firma lavorazione + stessa nota → tieni solo la più completa
-                visti = {}
-                risultati = []
-                for istr in per_doc:
-                    firma = firma_contenuto(istr)
-                    nota  = _val(istr, 'Note') or ''
-                    key   = (firma, nota)
-                    if key not in visti:
-                        visti[key] = istr
-                        risultati.append(istr)
-                    else:
-                        # Sostituisci se questa è più completa
-                        if _score(istr) > _score(visti[key]):
-                            idx = risultati.index(visti[key])
-                            risultati[idx] = istr
-                            visti[key] = istr
+                    risultati.append(best)
                 return risultati
 
             def render_istr_block(istr, bg, border):
@@ -1139,7 +1116,11 @@ if not df_res.empty:
     df_export = df_view.copy()
 
     # Pre-crea colonne per evitare KeyError su DataFrame
-    for col in ['FIGLIO', 'GIA', 'ACQ', 'PROD', 'DISP_BOM_GIA']:
+    if 'FIGLIO' not in df_export.columns:
+        df_export['FIGLIO'] = 'NAN'
+    else:
+        df_export['FIGLIO'] = df_export['FIGLIO'].astype(str)
+    for col in ['GIA', 'ACQ', 'PROD', 'DISP_BOM_GIA']:
         if col not in df_export.columns:
             df_export[col] = 0.0
     for f in prod_cols_export:
@@ -1236,40 +1217,3 @@ if not df_res.empty:
             filtro_articolo=search if search else None,
             filtro_famiglie=st.session_state.filtro_famiglie or None
         )
-
-    with tab_btl:
-        # Passa lista famiglie attive per filtrare gli articoli BTL
-        render_vista_btl(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
-
-    with tab_atp:
-        render_vista_atoplast(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
-
-    with tab_det:
-      filtri_attivi = []
-      if st.session_state.filtro_famiglie: filtri_attivi.append(f"Famiglie: **{', '.join(st.session_state.filtro_famiglie)}**")
-      if st.session_state.filtro_stati:    filtri_attivi.append(f"Stati: **{', '.join(st.session_state.filtro_stati)}**")
-      if filtri_attivi:
-          st.info("🔍 Filtri attivi — " + " | ".join(filtri_attivi) + f" — {len(df_view)} ordini trovati")
-      else:
-          st.caption(f"Tutti gli ordini: {len(df_view)}")
-
-      st.markdown("---")
-      for art, g in df_view.groupby('ART_KEY'):
-        with st.expander(f"📦 {art} - {g['Articolo D'].iloc[0]} ({len(g)} ordini)"):
-            s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
-            st.markdown(f'<div class="debug-box"><span>📦 GIA: {int(s_i["GIA"])}</span><span>🚚 ACQ: {int(s_i["ACQ"])}</span><span>⚙️ PROD: {int(s_i["PROD"])}</span></div>', unsafe_allow_html=True)
-            # Barra temporale per l'articolo (usa prima riga con date valide)
-            g_date = g.sort_values('DT_EXP')
-            for _, r_t in g_date.iterrows():
-                d_ord_admin  = r_t.get('DATA_ORD', None)
-                d_cons_admin = r_t.get('DT_EXP', None)
-                if not pd.notnull(d_ord_admin):
-                    # Fallback: stima data ordine come 30gg prima della consegna
-                    d_ord_admin = pd.Timestamp(d_cons_admin) - pd.Timedelta(days=30) if pd.notnull(d_cons_admin) else None
-                if d_ord_admin is not None and pd.notnull(d_cons_admin):
-                    st.markdown(tbar_html(d_ord_admin, d_cons_admin), unsafe_allow_html=True)
-                    break
-
-            for _, r in g.iterrows():
-                tag = "📋 [PREV]" if r['Codice Documento'] == "OCA" else "🛒 [ORD]"
-                st.markdown(f'<div class="status-row {r["CS"]}"><span>{tag} 📅 {r["DT_EXP"].strftime("%d/%m/%Y")} | Q: {int(r["Qta Residua"])} | {r["CLI_NAME"]}</span><span><b>{r["ST"]}</b></span></div>', unsafe_allow_html=True)
