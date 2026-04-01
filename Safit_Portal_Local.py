@@ -1217,3 +1217,38 @@ if not df_res.empty:
             filtro_articolo=search if search else None,
             filtro_famiglie=st.session_state.filtro_famiglie or None
         )
+
+    with tab_btl:
+        render_vista_btl(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
+
+    with tab_atp:
+        render_vista_atoplast(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
+
+    with tab_det:
+        if df_view.empty:
+            st.info("Nessun ordine trovato con i filtri attivi.")
+        else:
+            for art, g in df_view.groupby('ART_KEY'):
+                desc    = g['Articolo D'].iloc[0] if 'Articolo D' in g.columns else ''
+                qta_tot = int(g['Qta Residua'].sum())
+                s_i     = stock_raw.get(art, {'GIA': 0, 'ACQ': 0, 'PROD': 0, 'FIGLIO': 'NAN'})
+                with st.expander(f"📦 {art} — {desc} | Residuo: {qta_tot:,} pz".replace(",",".")):
+                    st.markdown(
+                        f'<div class="debug-box">'
+                        f'<span>📦 GIA: {int(s_i["GIA"])}</span>'
+                        f'<span>🚚 ACQ: {int(s_i["ACQ"])}</span>'
+                        f'<span>⚙️ PROD: {int(s_i["PROD"])}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+                    for _, r in g.sort_values('DT_EXP').iterrows():
+                        tag = "📋 [OCA]" if r.get('Codice Documento') == "OCA" else "🛒 [OCI]"
+                        cli = str(r.get('CLI_NAME', '')).split(' - ')[-1].strip()
+                        dt  = r['DT_EXP'].strftime("%d/%m/%Y") if pd.notnull(r.get('DT_EXP')) else "N.D."
+                        st.markdown(
+                            f'<div class="status-row {r["CS"]}">'
+                            f'<span>{tag} 📅 {dt} | Q: {int(r["Qta Residua"])} | {cli}</span>'
+                            f'<span><b>{r["ST"]}</b></span>'
+                            f'</div>',
+                            unsafe_allow_html=True
+                        )
