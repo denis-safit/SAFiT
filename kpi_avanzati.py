@@ -587,81 +587,6 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                     ).dt.strftime('%d/%m/%Y')
                 st.dataframe(show_r, use_container_width=True, hide_index=True)
 
-            # ── Sezione alert riordino — IN FONDO, dopo il dettaglio ────────
-            if not df_prossimi.empty:
-                st.markdown('<div class="sec-h">🔔 Articoli con riordino atteso entro 14 giorni</div>',
-                            unsafe_allow_html=True)
-
-                # ── Prepara dati export ──────────────────────────────────────
-                df_sol = df_prossimi.copy()
-                df_sol['Ultimo_Ordine_fmt'] = pd.to_datetime(
-                    df_sol['Ultimo_Ordine'], errors='coerce'
-                ).dt.strftime('%d/%m/%Y')
-                df_sol['Riordino_Atteso'] = df_sol.apply(
-                    lambda r: f"tra {int(r['Giorni_Al_Riordino'])} gg"
-                    if r['Giorni_Al_Riordino'] >= 0
-                    else f"in ritardo di {abs(int(r['Giorni_Al_Riordino']))} gg",
-                    axis=1
-                )
-                df_export_sol = df_sol[[
-                    'Cliente', 'Famiglia', 'Articolo C', 'Articolo D',
-                    'N_Ordini', 'Qta_Totale', 'Qta_Media_Ordine', 'Intervallo_Medio_gg',
-                    'Ultimo_Ordine_fmt', 'Giorni_Da_Ultimo', 'Giorni_Al_Riordino', 'Riordino_Atteso'
-                ]].sort_values(['Cliente', 'Giorni_Al_Riordino']).rename(columns={
-                    'Articolo C':           'Codice Articolo',
-                    'Articolo D':           'Descrizione',
-                    'N_Ordini':             'N° Ordini Storici',
-                    'Qta_Totale':           'Qta Totale Storica',
-                    'Qta_Media_Ordine':     'Qta Stimata Prossimo Ordine',
-                    'Intervallo_Medio_gg':  'Intervallo Medio (gg)',
-                    'Ultimo_Ordine_fmt':    'Ultimo Ordine',
-                    'Giorni_Da_Ultimo':     'Giorni Da Ultimo Ordine',
-                    'Giorni_Al_Riordino':   'Giorni Al Riordino',
-                    'Riordino_Atteso':      'Riordino Atteso',
-                })
-
-                buf_sol = BytesIO()
-                with pd.ExcelWriter(buf_sol, engine='xlsxwriter') as w:
-                    df_export_sol.to_excel(w, sheet_name='Solleciti_Riordino', index=False)
-                    wb = w.book
-                    ws = w.sheets['Solleciti_Riordino']
-                    ws.set_column(0, 11, 24)
-                    fmt_h = wb.add_format({'bold': True, 'bg_color': '#1F4E79',
-                                           'font_color': 'white', 'border': 1})
-                    for col_num, col_name in enumerate(df_export_sol.columns):
-                        ws.write(0, col_num, col_name, fmt_h)
-                    fmt_red = wb.add_format({'bg_color': '#FFCCCC'})
-                    for row_num in range(1, len(df_export_sol) + 1):
-                        gg_val = df_export_sol.iloc[row_num-1].get('Giorni Al Riordino', 0)
-                        if pd.notnull(gg_val) and float(gg_val) < 0:
-                            ws.set_row(row_num, None, fmt_red)
-
-                # ── PULSANTE DOWNLOAD IN TESTA alla sezione ─────────────────
-                st.download_button(
-                    label=f"📥 Esporta Solleciti ({len(df_export_sol)} articoli) — raggruppati per Cliente/Famiglia",
-                    data=buf_sol.getvalue(),
-                    file_name=f"Solleciti_Riordino_{datetime.now().strftime('%d%m%Y')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    key=f"btn_solleciti_{_key_suffix}"
-                )
-
-                # ── Elenco righe alert (SOTTO il pulsante) ──────────────────
-                st.markdown(f"**{len(df_prossimi)} articoli con riordino atteso entro 14 giorni:**")
-                for _, r in df_prossimi.iterrows():
-                    gg_r = int(r['Giorni_Al_Riordino'])
-                    ico  = "🟢" if gg_r > 0 else "🔴"
-                    txt  = f"tra **{gg_r} gg**" if gg_r >= 0 else f"**in ritardo di {abs(gg_r)} gg**"
-                    ult  = r['Ultimo_Ordine'].strftime('%d/%m/%Y') if pd.notnull(r['Ultimo_Ordine']) else 'N/D'
-                    qta_att = int(r['Qta_Media_Ordine']) if 'Qta_Media_Ordine' in r else 0
-                    st.markdown(
-                        f'<div class="alert-box">{ico} <b>{r["Articolo C"]}</b> — '
-                        f'{r["Cliente"]} | Atteso {txt} | '
-                        f'Qta stimata: <b>~{qta_att:,} pa.</b> | '.replace(",",".")
-                        + f'Ultimo ordine: {ult} | Intervallo medio: {r["Intervallo_Medio_gg"]} gg'
-                        f'</div>',
-                        unsafe_allow_html=True
-                    )
 
         # ════════════════════════════════════════════════════════════════════
         # SEZIONE 4 — SCOSTAMENTO DATE CONSEGNA
@@ -789,3 +714,81 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
             file_name=f"KPI_Safit_{datetime.now().strftime('%d%m%Y')}.xlsx",
             use_container_width=True,
         )
+
+        # ════════════════════════════════════════════════════════════════════
+        # SEZIONE FINALE — RIORDINO ATTESO (ultima in assoluto)
+        # ════════════════════════════════════════════════════════════════════
+        if not df_prossimi.empty:
+            st.markdown('<div class="sec-h">🔔 Articoli con riordino atteso entro 14 giorni</div>',
+                        unsafe_allow_html=True)
+
+            # Prepara dati export
+            df_sol = df_prossimi.copy()
+            df_sol['Ultimo_Ordine_fmt'] = pd.to_datetime(
+                df_sol['Ultimo_Ordine'], errors='coerce'
+            ).dt.strftime('%d/%m/%Y')
+            df_sol['Riordino_Atteso'] = df_sol.apply(
+                lambda r: f"tra {int(r['Giorni_Al_Riordino'])} gg"
+                if r['Giorni_Al_Riordino'] >= 0
+                else f"in ritardo di {abs(int(r['Giorni_Al_Riordino']))} gg",
+                axis=1
+            )
+            df_export_sol = df_sol[[
+                'Cliente', 'Famiglia', 'Articolo C', 'Articolo D',
+                'N_Ordini', 'Qta_Totale', 'Qta_Media_Ordine', 'Intervallo_Medio_gg',
+                'Ultimo_Ordine_fmt', 'Giorni_Da_Ultimo', 'Giorni_Al_Riordino', 'Riordino_Atteso'
+            ]].sort_values(['Cliente', 'Giorni_Al_Riordino']).rename(columns={
+                'Articolo C':           'Codice Articolo',
+                'Articolo D':           'Descrizione',
+                'N_Ordini':             'N° Ordini Storici',
+                'Qta_Totale':           'Qta Totale Storica',
+                'Qta_Media_Ordine':     'Qta Stimata Prossimo Ordine',
+                'Intervallo_Medio_gg':  'Intervallo Medio (gg)',
+                'Ultimo_Ordine_fmt':    'Ultimo Ordine',
+                'Giorni_Da_Ultimo':     'Giorni Da Ultimo Ordine',
+                'Giorni_Al_Riordino':   'Giorni Al Riordino',
+                'Riordino_Atteso':      'Riordino Atteso',
+            })
+
+            buf_sol = BytesIO()
+            with pd.ExcelWriter(buf_sol, engine='xlsxwriter') as w:
+                df_export_sol.to_excel(w, sheet_name='Solleciti_Riordino', index=False)
+                wb = w.book
+                ws = w.sheets['Solleciti_Riordino']
+                ws.set_column(0, 11, 24)
+                fmt_h = wb.add_format({'bold': True, 'bg_color': '#1F4E79',
+                                       'font_color': 'white', 'border': 1})
+                for col_num, col_name in enumerate(df_export_sol.columns):
+                    ws.write(0, col_num, col_name, fmt_h)
+                fmt_red = wb.add_format({'bg_color': '#FFCCCC'})
+                for row_num in range(1, len(df_export_sol) + 1):
+                    gg_val = df_export_sol.iloc[row_num-1].get('Giorni Al Riordino', 0)
+                    if pd.notnull(gg_val) and float(gg_val) < 0:
+                        ws.set_row(row_num, None, fmt_red)
+
+            # Pulsante download IN TESTA
+            st.download_button(
+                label=f"📥 Esporta Solleciti ({len(df_export_sol)} articoli) — raggruppati per Cliente/Famiglia",
+                data=buf_sol.getvalue(),
+                file_name=f"Solleciti_Riordino_{datetime.now().strftime('%d%m%Y')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key=f"btn_solleciti_{_key_suffix}"
+            )
+
+            # Elenco righe alert
+            st.markdown(f"**{len(df_prossimi)} articoli con riordino atteso entro 14 giorni:**")
+            for _, r in df_prossimi.iterrows():
+                gg_r = int(r['Giorni_Al_Riordino'])
+                ico  = "🟢" if gg_r > 0 else "🔴"
+                txt  = f"tra **{gg_r} gg**" if gg_r >= 0 else f"**in ritardo di {abs(gg_r)} gg**"
+                ult  = r['Ultimo_Ordine'].strftime('%d/%m/%Y') if pd.notnull(r['Ultimo_Ordine']) else 'N/D'
+                qta_att = int(r['Qta_Media_Ordine']) if 'Qta_Media_Ordine' in r else 0
+                st.markdown(
+                    f'<div class="alert-box">{ico} <b>{r["Articolo C"]}</b> — '
+                    f'{r["Cliente"]} | Atteso {txt} | '
+                    f'Qta stimata: <b>~{qta_att:,} pa.</b> | '.replace(",",".")
+                    + f'Ultimo ordine: {ult} | Intervallo medio: {r["Intervallo_Medio_gg"]} gg'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
