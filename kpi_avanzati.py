@@ -417,7 +417,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                      "ordini elaborati")
             kpi_card(t2, "Quantità totale",
                      f"{int(df_f['Qta Doc'].sum()):,}".replace(",","."),
-                     "pezzi ordinati", "g")
+                     "paia ordinate", "g")
             kpi_card(t3, "Articoli distinti",
                      str(df_f['Articolo C'].nunique()),
                      "codici unici", "p")
@@ -544,7 +544,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                 qta_m = int(art_top['Qta_Media_Ordine']) if 'Qta_Media_Ordine' in art_top else 0
                 kpi_card(r3, "Articolo più riordinato",
                          art_top['Articolo C'],
-                         f"{int(art_top['N_Ordini'])} ordini | ~{qta_m:,} pz/ordine — {art_top['Cliente'][:20]}".replace(",","."), "p")
+                         f"{int(art_top['N_Ordini'])} ordini | ~{qta_m:,} pa./ordine — {art_top['Cliente'][:20]}".replace(",","."), "p")
 
             # Heatmap clienti × famiglie
             pivot = df_riord.pivot_table(
@@ -568,7 +568,8 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                 fig_heat.update_xaxes(tickangle=-35)
                 st.plotly_chart(fig_heat, use_container_width=True)
 
-            # Alert: articoli vicini al prossimo riordino atteso (±14 gg)
+            # ── Calcola df_prossimi (usato sia per alert che per export) ──
+            df_prossimi = pd.DataFrame()
             if not df_con_int.empty:
                 df_alert = df_con_int.copy()
                 df_alert['Giorni_Al_Riordino'] = (
@@ -578,28 +579,21 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                     df_alert['Giorni_Al_Riordino'].between(-7, 14)
                 ].sort_values('Giorni_Al_Riordino')
 
-                if not df_prossimi.empty:
-                    st.markdown(f"**🔔 {len(df_prossimi)} articoli con riordino atteso entro 14 giorni:**")
-                    for _, r in df_prossimi.iterrows():
-                        gg_r = int(r['Giorni_Al_Riordino'])
-                        ico  = "🟢" if gg_r > 0 else "🔴"
-                        txt  = f"tra **{gg_r} gg**" if gg_r >= 0 else f"**in ritardo di {abs(gg_r)} gg**"
-                        ult  = r['Ultimo_Ordine'].strftime('%d/%m/%Y') if pd.notnull(r['Ultimo_Ordine']) else 'N/D'
-                        qta_att = int(r['Qta_Media_Ordine']) if 'Qta_Media_Ordine' in r else 0
-                        st.markdown(
-                            f'<div class="alert-box">{ico} <b>{r["Articolo C"]}</b> — '
-                            f'{r["Cliente"]} | Atteso {txt} | '
-                            f'Qta stimata: <b>~{qta_att:,} pz</b> | '.replace(",",".")
-                            + f'Ultimo ordine: {ult} | Intervallo medio: {r["Intervallo_Medio_gg"]} gg'
-                            f'</div>',
-                            unsafe_allow_html=True
-                        )
+            with st.expander("📋 Dettaglio frequenza riordino"):
+                show_r = df_riord.copy()
+                if 'Ultimo_Ordine' in show_r.columns:
+                    show_r['Ultimo_Ordine'] = pd.to_datetime(
+                        show_r['Ultimo_Ordine'], errors='coerce'
+                    ).dt.strftime('%d/%m/%Y')
+                st.dataframe(show_r, use_container_width=True, hide_index=True)
 
-            # ── Export solleciti raggruppati per cliente / famiglia ─────────
+            # ── Sezione alert riordino — IN FONDO, dopo il dettaglio ────────
             if not df_prossimi.empty:
-                df_sol = df_prossimi.copy()
+                st.markdown('<div class="sec-h">🔔 Articoli con riordino atteso entro 14 giorni</div>',
+                            unsafe_allow_html=True)
 
-                # Formattazione date leggibili
+                # ── Prepara dati export ──────────────────────────────────────
+                df_sol = df_prossimi.copy()
                 df_sol['Ultimo_Ordine_fmt'] = pd.to_datetime(
                     df_sol['Ultimo_Ordine'], errors='coerce'
                 ).dt.strftime('%d/%m/%Y')
@@ -609,15 +603,11 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                     else f"in ritardo di {abs(int(r['Giorni_Al_Riordino']))} gg",
                     axis=1
                 )
-
-                # Colonne pulite per export — ordina per cliente, famiglia, giorni (numerico)
                 df_export_sol = df_sol[[
                     'Cliente', 'Famiglia', 'Articolo C', 'Articolo D',
                     'N_Ordini', 'Qta_Totale', 'Qta_Media_Ordine', 'Intervallo_Medio_gg',
                     'Ultimo_Ordine_fmt', 'Giorni_Da_Ultimo', 'Giorni_Al_Riordino', 'Riordino_Atteso'
-                ]].sort_values(
-                    ['Cliente', 'Giorni_Al_Riordino']   # ordinato per cliente poi urgenza
-                ).rename(columns={
+                ]].sort_values(['Cliente', 'Giorni_Al_Riordino']).rename(columns={
                     'Articolo C':           'Codice Articolo',
                     'Articolo D':           'Descrizione',
                     'N_Ordini':             'N° Ordini Storici',
@@ -636,18 +626,17 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                     wb = w.book
                     ws = w.sheets['Solleciti_Riordino']
                     ws.set_column(0, 11, 24)
-                    # Header blu
                     fmt_h = wb.add_format({'bold': True, 'bg_color': '#1F4E79',
                                            'font_color': 'white', 'border': 1})
                     for col_num, col_name in enumerate(df_export_sol.columns):
                         ws.write(0, col_num, col_name, fmt_h)
-                    # Righe in ritardo in rosso chiaro
                     fmt_red = wb.add_format({'bg_color': '#FFCCCC'})
                     for row_num in range(1, len(df_export_sol) + 1):
                         gg_val = df_export_sol.iloc[row_num-1].get('Giorni Al Riordino', 0)
                         if pd.notnull(gg_val) and float(gg_val) < 0:
                             ws.set_row(row_num, None, fmt_red)
 
+                # ── PULSANTE DOWNLOAD IN TESTA alla sezione ─────────────────
                 st.download_button(
                     label=f"📥 Esporta Solleciti ({len(df_export_sol)} articoli) — raggruppati per Cliente/Famiglia",
                     data=buf_sol.getvalue(),
@@ -657,13 +646,22 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                     key=f"btn_solleciti_{_key_suffix}"
                 )
 
-            with st.expander("📋 Dettaglio frequenza riordino"):
-                show_r = df_riord.copy()
-                if 'Ultimo_Ordine' in show_r.columns:
-                    show_r['Ultimo_Ordine'] = pd.to_datetime(
-                        show_r['Ultimo_Ordine'], errors='coerce'
-                    ).dt.strftime('%d/%m/%Y')
-                st.dataframe(show_r, use_container_width=True, hide_index=True)
+                # ── Elenco righe alert (SOTTO il pulsante) ──────────────────
+                st.markdown(f"**{len(df_prossimi)} articoli con riordino atteso entro 14 giorni:**")
+                for _, r in df_prossimi.iterrows():
+                    gg_r = int(r['Giorni_Al_Riordino'])
+                    ico  = "🟢" if gg_r > 0 else "🔴"
+                    txt  = f"tra **{gg_r} gg**" if gg_r >= 0 else f"**in ritardo di {abs(gg_r)} gg**"
+                    ult  = r['Ultimo_Ordine'].strftime('%d/%m/%Y') if pd.notnull(r['Ultimo_Ordine']) else 'N/D'
+                    qta_att = int(r['Qta_Media_Ordine']) if 'Qta_Media_Ordine' in r else 0
+                    st.markdown(
+                        f'<div class="alert-box">{ico} <b>{r["Articolo C"]}</b> — '
+                        f'{r["Cliente"]} | Atteso {txt} | '
+                        f'Qta stimata: <b>~{qta_att:,} pa.</b> | '.replace(",",".")
+                        + f'Ultimo ordine: {ult} | Intervallo medio: {r["Intervallo_Medio_gg"]} gg'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
 
         # ════════════════════════════════════════════════════════════════════
         # SEZIONE 4 — SCOSTAMENTO DATE CONSEGNA
