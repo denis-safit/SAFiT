@@ -301,25 +301,55 @@ def carica_btl_da_storico():
     try:
         df = pd.read_excel(path, skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
-        df['Codice Documento'] = df['Codice Documento'].ffill()
-        df = df[~df['Codice Documento'].astype(str).str.contains('Totale|NaN|nan', na=True)]
-        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str) != '(vuoto)')]
-        df['Data']         = pd.to_datetime(df['Data'],         errors='coerce')
-        df['Data Consegna']= pd.to_datetime(df['Data Consegna'],errors='coerce')
-        df['Qta Doc']      = pd.to_numeric(df['Qta Doc'],       errors='coerce').fillna(0)
-        df['Qta Residua']  = pd.to_numeric(df.get('Qta Residua', 0), errors='coerce').fillna(0)
+
+        # ffill solo sulla colonna Codice Documento per gestire struttura pivot ARCA
+        # MA: azzera il fill quando incontra righe di subtotale (evita contaminazione
+        # tra gruppi — le righe dopo un "Totale" non devono ereditare il codice precedente)
+        cod_col = 'Codice Documento'
+        filled = []
+        last_cod = None
+        for val in df[cod_col]:
+            s = str(val).strip()
+            if s in ('nan', 'None', ''):
+                filled.append(last_cod)          # propaga l'ultimo valido
+            elif 'otale' in s or 'Totale' in s:
+                filled.append(s)                 # mantieni "Totale" per poterlo filtrare
+                last_cod = None                  # RESET: il gruppo è finito
+            else:
+                last_cod = s
+                filled.append(s)
+        df[cod_col] = filled
+
+        # Rimuovi righe di subtotale e righe senza articolo
+        df = df[~df[cod_col].astype(str).str.contains('Totale|otale', na=False)]
+        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str).str.strip() != '(vuoto)')]
+        df = df[df[cod_col].notna()]
+
+        df['Data']          = pd.to_datetime(df['Data'],          errors='coerce')
+        df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
+        df['Qta Doc']       = pd.to_numeric(df['Qta Doc'],        errors='coerce').fillna(0)
+
+        # Qta Residua: se presente e non tutta zero usala, altrimenti fallback su Qta Doc
+        if 'Qta Residua' in df.columns:
+            df['Qta Residua'] = pd.to_numeric(df['Qta Residua'], errors='coerce').fillna(0)
+            usa_residua = df['Qta Residua'].sum() > 0
+        else:
+            df['Qta Residua'] = df['Qta Doc']
+            usa_residua = False
 
         # Fallback: se Data Consegna mancante usa Data emissione
         df['Data Consegna'] = df['Data Consegna'].fillna(df['Data'])
 
-        # Filtra BTL OFR+OFF con quantità residua ancora aperta
+        # Filtra BTL: solo OFR/OFF con quantità ancora aperta
+        col_qta = 'Qta Residua' if usa_residua else 'Qta Doc'
         df_btl = df[
             df['Cliente Fornitore CD'].str.contains('BTL', case=False, na=False) &
-            df['Codice Documento'].isin(['OFR', 'OFF']) &
-            (df['Qta Residua'] > 0)
+            df[cod_col].isin(['OFR', 'OFF']) &
+            (df[col_qta] > 0)
         ].copy()
-        df_btl['Tipo']    = df_btl['Codice Documento'].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
-        df_btl['Qta Doc'] = df_btl['Qta Residua']  # usa sempre la quantità residua
+        df_btl['Tipo']         = df_btl[cod_col].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
+        df_btl['Qta Doc']      = df_btl[col_qta]   # sempre la quantità residua corretta
+        df_btl['_usa_residua'] = usa_residua
         return df_btl
     except Exception as e:
         return pd.DataFrame()
@@ -337,6 +367,15 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
 
     # Qta Residua già filtrata in carica_btl_da_storico — nessun join necessario
     df_btl = df_btl_storico.copy()
+
+    # Warning se il file storico non ha Qta Residua aggiornata
+    usa_residua = bool(df_btl['_usa_residua'].iloc[0]) if '_usa_residua' in df_btl.columns and len(df_btl) > 0 else False
+    if not usa_residua:
+        st.warning(
+            "⚠️ Il file `righe_ordini_storico_con_date.xlsx` non contiene la colonna "
+            "`Qta Residua` aggiornata — le quantità mostrate sono quelle totali dell'ordine "
+            "(non la residua). Aggiorna l'export da ARCA includendo `Qta Residua`."
+        )
 
     # Applica filtro famiglie se attivo
     if filtro_famiglie:
@@ -379,9 +418,9 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
         else:
             badge, urgenza, col_u, d_friola, data_label = "⚪", "Data N/D", "#9e9e9e", None, "📦 Data N/D"
 
-        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa. | {tipi} | {data_label}".replace(",",".")):
+        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pz | {tipi} | {data_label}".replace(",",".")):
             c1, c2, c3 = st.columns(3)
-            c1.metric("Quantità", f"{qta_tot:,} pa.".replace(",","."))
+            c1.metric("Quantità", f"{qta_tot:,} pz".replace(",","."))
             c2.metric("A Friola entro", d_friola.strftime("%d/%m/%Y") if d_friola else "N/D")
             c3.metric("Data consegna", d_cons.strftime("%d/%m/%Y") if d_cons else "N/D")
             if d_friola:
@@ -394,38 +433,84 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 d_fs = (d_c - pd.Timedelta(days=ANTICIPO_BTL_GG)).strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
                 d_cs = d_c.strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
                 css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo','')) else 'acq-row'
-                st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pa. | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
+                st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pz | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
 
-            # ── Istruzioni di lavorazione ──────────────────────────────
-            # Schema nuovo btl_istruzioni.xlsx:
-            # Piegatura | Tempra | Verniciatura | finitura | Scatola | Pz x Scatola | Note
+            # ── Istruzioni di lavorazione divise per OFR / OFF ────────
             istr_map  = carica_istruzioni_btl()
             art_up    = str(art).strip().upper()
             istr_list = istr_map.get(art_up, [])
 
             def _val(d, key):
+                """Valore pulito o None se vuoto/n.a./no/nan."""
                 v = str(d.get(key, '')).strip()
                 if v.lower() in ['nan', 'none', '', 'n.a.', 'no', '0']:
                     return None
                 return v
 
+            def _data_str(d):
+                data_i = d.get('Data', None)
+                try:
+                    if pd.isnull(data_i): return 'N/D'
+                    return data_i.strftime('%d/%m/%Y') if hasattr(data_i, 'strftime') else str(data_i)[:10]
+                except Exception:
+                    return 'N/D'
+
+            def _qta(d):
+                try: return int(float(d.get('Quantità', 0)))
+                except: return 0
+
             def _pz_sc(d):
                 try:
                     v = d.get('Pz x Scatola', '')
-                    f = float(v)
-                    return int(f) if f > 0 else 0
+                    return int(float(v)) if str(v).lower() not in ['nan','none','','0'] else 0
                 except: return 0
 
-            def render_istr_block(istr):
-                """Mostra istruzione con i campi del nuovo schema."""
+            def _score(d):
+                """Punteggio di completezza: quanti campi utili ha questa riga."""
+                campi = ['Piegatura','Tempra','Verniciatura','Tipo Vernice','Scatola','Note']
+                return sum(1 for c in campi if _val(d, c) is not None)
+
+            def deduplica(lista):
+                """
+                Per ogni coppia (Tipo Doc, N. Doc) mantiene solo la riga
+                con il punteggio di completezza più alto.
+                Poi unisce le Note di tutte le righe duplicate se diverse.
+                """
+                from collections import defaultdict
+                gruppi = defaultdict(list)
+                for i in lista:
+                    key = (str(i.get('Tipo Doc','')).strip().upper(),
+                           str(i.get('N. Doc', '')).strip())
+                    gruppi[key].append(i)
+
+                risultati = []
+                for key, rows in gruppi.items():
+                    # Prendi la riga più completa
+                    best = max(rows, key=_score)
+                    # Unisci le note di tutte le righe se diverse
+                    note_set = []
+                    for r in rows:
+                        n = _val(r, 'Note')
+                        if n and n not in note_set:
+                            note_set.append(n)
+                    if note_set:
+                        best = dict(best)
+                        best['Note'] = ' | '.join(note_set)
+                    risultati.append(best)
+                return risultati
+
+            def render_istr_block(istr, bg, border):
+                """Blocco istruzione pulito — solo campi utili, note in evidenza."""
                 piegatura = _val(istr, 'Piegatura')
                 tempra    = _val(istr, 'Tempra')
                 vern      = _val(istr, 'Verniciatura')
-                finitura  = _val(istr, 'finitura')
+                tipo_vern = _val(istr, 'Tipo Vernice')
                 scatola   = _val(istr, 'Scatola')
-                pz_sc     = _pz_sc(istr)
                 note      = _val(istr, 'Note')
+                qta_i     = _qta(istr)
+                pz_sc     = _pz_sc(istr)
 
+                # Righe di dettaglio — solo se presenti
                 righe = []
                 if piegatura:
                     righe.append(
@@ -438,18 +523,16 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                         '&#128293; <b>Tempra</b></span> ' + tempra
                     )
                 if vern:
-                    vl = vern + (' &mdash; finitura: ' + finitura if finitura else '')
+                    vl = vern + (' &mdash; ' + tipo_vern if tipo_vern else '')
                     righe.append(
                         '<span style="display:inline-block;min-width:180px;">'
                         '&#127912; <b>Verniciatura</b></span> ' + vl
                     )
                 if scatola:
-                    sl = scatola
-                    if pz_sc > 0:
-                        sl += ' &mdash; ' + str(pz_sc) + ' pa./sc'
+                    sl = scatola + (' &mdash; ' + str(pz_sc) + ' pz/sc' if pz_sc > 0 else '')
                     righe.append(
                         '<span style="display:inline-block;min-width:180px;">'
-                        '&#128230; <b>Scatola</b></span> ' + sl
+                        '&#128230; <b>Imballo</b></span> ' + sl
                     )
 
                 corpo = '<br>'.join(righe) if righe else '<i style="color:#888;">Nessun dettaglio specificato</i>'
@@ -463,25 +546,32 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                         '&#9888; NOTE: ' + note + '</div>'
                     )
 
+                qta_str = str(qta_i) + ' pz' if qta_i > 0 else ''
                 html = (
-                    '<div style="background:#f8f9fa;border-left:5px solid #546e7a;'
+                    '<div style="background:' + bg + ';border-left:5px solid ' + border + ';'
                     'padding:12px 16px;border-radius:7px;margin:6px 0;'
                     'font-size:14px;color:#1a1a1a;">'
-                    + corpo + note_html + '</div>'
+                    + ('<div style="font-size:12px;color:#78909c;margin-bottom:6px;">'
+                       'Q.t&agrave;: ' + qta_str + ' &mdash; ' + _data_str(istr) + '</div>'
+                       if qta_str else '')
+                    + corpo
+                    + note_html
+                    + '</div>'
                 )
                 st.markdown(html, unsafe_allow_html=True)
 
             if istr_list:
-                # Il nuovo file ha una riga per articolo — nessuna deduplicazione necessaria
-                # Mostra direttamente la prima riga (la più completa per articolo)
-                istr = istr_list[0]
+                # Deduplicazione: un blocco per documento, riga più completa
+                tutti = deduplica(istr_list)
+
                 st.markdown(
                     '<div style="font-weight:700;font-size:14px;margin:10px 0 6px 0;'
                     'color:#37474f;border-bottom:2px solid #90a4ae;padding-bottom:4px;">'
                     '&#128203; Istruzioni di lavorazione</div>',
                     unsafe_allow_html=True
                 )
-                render_istr_block(istr)
+                for istr in tutti:
+                    render_istr_block(istr, bg='#f8f9fa', border='#546e7a')
             else:
                 st.caption("ℹ️ Nessuna istruzione disponibile per questo articolo.")
 
@@ -520,22 +610,42 @@ def carica_atoplast_da_storico():
     try:
         df = pd.read_excel(path, skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
-        df['Codice Documento'] = df['Codice Documento'].ffill()
-        df = df[~df['Codice Documento'].astype(str).str.contains('Totale|NaN|nan', na=True)]
-        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str) != '(vuoto)')]
+
+        # ffill con reset sui subtotali (evita contaminazione tra gruppi pivot ARCA)
+        cod_col = 'Codice Documento'
+        filled, last_cod = [], None
+        for val in df[cod_col]:
+            s = str(val).strip()
+            if s in ('nan', 'None', ''):
+                filled.append(last_cod)
+            elif 'otale' in s:
+                filled.append(s); last_cod = None
+            else:
+                last_cod = s; filled.append(s)
+        df[cod_col] = filled
+
+        df = df[~df[cod_col].astype(str).str.contains('Totale|otale', na=False)]
+        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str).str.strip() != '(vuoto)')]
+        df = df[df[cod_col].notna()]
         df['Data']          = pd.to_datetime(df['Data'],          errors='coerce')
         df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
         df['Qta Doc']       = pd.to_numeric(df['Qta Doc'],        errors='coerce').fillna(0)
-        df['Qta Residua']   = pd.to_numeric(df.get('Qta Residua', 0), errors='coerce').fillna(0)
+
+        if 'Qta Residua' in df.columns:
+            df['Qta Residua'] = pd.to_numeric(df['Qta Residua'], errors='coerce').fillna(0)
+            col_qta = 'Qta Residua' if df['Qta Residua'].sum() > 0 else 'Qta Doc'
+        else:
+            df['Qta Residua'] = df['Qta Doc']; col_qta = 'Qta Doc'
+
         df['Data Consegna'] = df['Data Consegna'].fillna(df['Data'])
 
         df_atp = df[
             df['Cliente Fornitore CD'].str.contains('ATOPLAST', case=False, na=False) &
-            df['Codice Documento'].isin(['OFR', 'OFF']) &
-            (df['Qta Residua'] > 0)
+            df[cod_col].isin(['OFR', 'OFF']) &
+            (df[col_qta] > 0)
         ].copy()
-        df_atp['Tipo']    = df_atp['Codice Documento'].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
-        df_atp['Qta Doc'] = df_atp['Qta Residua']
+        df_atp['Tipo']    = df_atp[cod_col].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
+        df_atp['Qta Doc'] = df_atp[col_qta]
         return df_atp
     except Exception as e:
         return pd.DataFrame()
@@ -593,9 +703,9 @@ def render_vista_atoplast(df_res=None, filtro_famiglie=None):
         else:
             badge, urgenza, col_u, d_friola, data_label = "⚪", "Data N/D", "#9e9e9e", None, "📦 Data N/D"
 
-        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa. | {tipi} | {data_label}".replace(",",".")):
+        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pz | {tipi} | {data_label}".replace(",",".")):
             c1, c2, c3 = st.columns(3)
-            c1.metric("Quantità", f"{qta_tot:,} pa.".replace(",","."))
+            c1.metric("Quantità", f"{qta_tot:,} pz".replace(",","."))
             c2.metric("A Friola entro", d_friola.strftime("%d/%m/%Y") if d_friola else "N/D")
             c3.metric("Data consegna", d_cons.strftime("%d/%m/%Y") if d_cons else "N/D")
             if d_friola:
@@ -608,7 +718,7 @@ def render_vista_atoplast(df_res=None, filtro_famiglie=None):
                 d_fs = (d_c - pd.Timedelta(days=ANTICIPO_ATOPLAST_GG)).strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
                 d_cs = d_c.strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
                 css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo', '')) else 'acq-row'
-                st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pa. | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
+                st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pz | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
 
 def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
     """Vista pulita per il cliente — nessun dato interno visibile."""
@@ -666,7 +776,7 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
     pct_pronto = round(n_pronti / tot_qta * 100) if tot_qta > 0 else 0
 
     k1, k2, k3, k4 = st.columns(4)
-    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">TOTALE PAIA</div><div class="kpi-val">{tot_qta:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
+    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">TOTALE PEZZI</div><div class="kpi-val">{tot_qta:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
     k2.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#4caf50">PRONTI</div><div class="kpi-val">{n_pronti:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
     k3.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#2196f3">IN LAVORAZIONE</div><div class="kpi-val">{n_lavoro:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
     k4.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#f44336">DA PIANIFICARE</div><div class="kpi-val">{n_mancanti:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
@@ -783,7 +893,7 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
         else:
             badge = "🟢"
 
-        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa.".replace(",",".")):
+        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pz".replace(",",".")):
             # Barra avanzamento articolo
             # "Disponibile" per il cliente deve riflettere quanta parte della richiesta
             # può essere coperta dalla sola GIACENZA (GIA), anche se la riga è classificata
@@ -803,7 +913,7 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
             pct_art    = round(qta_pronta / qta_tot * 100) if qta_tot > 0 else 0
             bar_col    = '#4caf50' if pct_art >= 100 else ('#fbc02d' if pct_art > 0 else '#f44336')
             st.markdown(
-                f"**Disponibile: {qta_pronta:,} / {qta_tot:,} pa.**".replace(",","."),
+                f"**Disponibile: {qta_pronta:,} / {qta_tot:,} pz**".replace(",","."),
             )
             st.markdown(pbar_html(pct_art, bar_col), unsafe_allow_html=True)
 
@@ -1196,7 +1306,7 @@ if not df_res.empty:
                         dt  = r['DT_EXP'].strftime("%d/%m/%Y") if pd.notnull(r.get('DT_EXP')) else "N.D."
                         st.markdown(
                             f'<div class="status-row {r["CS"]}">'
-                            f'<span>{tag} 📅 {dt} | Q: {int(r["Qta Residua"])} | {cli}</span>'
+                            f'<span>{tag} 📅 {dt} | Q: {int(r["Qta Residua"])} pa. | {cli}</span>'
                             f'<span><b>{r["ST"]}</b></span>'
                             f'</div>',
                             unsafe_allow_html=True
