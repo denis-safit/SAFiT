@@ -327,29 +327,31 @@ def carica_btl_da_storico():
 
         df['Data']          = pd.to_datetime(df['Data'],          errors='coerce')
         df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
-        df['Qta Doc']       = pd.to_numeric(df['Qta Doc'],        errors='coerce').fillna(0)
+        df['Qta Doc'] = pd.to_numeric(df['Qta Doc'], errors='coerce').fillna(0)
 
-        # Qta Residua: se presente e non tutta zero usala, altrimenti fallback su Qta Doc
-        if 'Qta Residua' in df.columns:
+        # Determina quale colonna quantità usare:
+        # - Se Qta Residua esiste ed è significativa → usala (Qta Residua=0 = evaso, escluso)
+        # - Se Qta Residua NON esiste → usa Qta Doc (filtro su Qta Doc > 0)
+        ha_residua = 'Qta Residua' in df.columns
+        if ha_residua:
             df['Qta Residua'] = pd.to_numeric(df['Qta Residua'], errors='coerce').fillna(0)
-            usa_residua = df['Qta Residua'].sum() > 0
-        else:
-            df['Qta Residua'] = df['Qta Doc']
-            usa_residua = False
 
-        # Fallback: se Data Consegna mancante usa Data emissione
         df['Data Consegna'] = df['Data Consegna'].fillna(df['Data'])
 
-        # Filtra BTL: solo OFR/OFF con quantità ancora aperta
-        col_qta = 'Qta Residua' if usa_residua else 'Qta Doc'
-        df_btl = df[
+        df_of = df[
             df['Cliente Fornitore CD'].str.contains('BTL', case=False, na=False) &
-            df[cod_col].isin(['OFR', 'OFF']) &
-            (df[col_qta] > 0)
+            df[cod_col].isin(['OFR', 'OFF'])
         ].copy()
-        df_btl['Tipo']         = df_btl[cod_col].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
-        df_btl['Qta Doc']      = df_btl[col_qta]   # sempre la quantità residua corretta
-        df_btl['_usa_residua'] = usa_residua
+
+        if ha_residua:
+            # Qta Residua=0 → evaso → escluso
+            df_btl = df_of[df_of['Qta Residua'] > 0].copy()
+            df_btl['Qta Doc'] = df_btl['Qta Residua']
+        else:
+            # File senza Qta Residua → usa Qta Doc
+            df_btl = df_of[df_of['Qta Doc'] > 0].copy()
+
+        df_btl['Tipo'] = df_btl[cod_col].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
         return df_btl
     except Exception as e:
         return pd.DataFrame()
@@ -368,14 +370,7 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
     # Qta Residua già filtrata in carica_btl_da_storico — nessun join necessario
     df_btl = df_btl_storico.copy()
 
-    # Warning se il file storico non ha Qta Residua aggiornata
-    usa_residua = bool(df_btl['_usa_residua'].iloc[0]) if '_usa_residua' in df_btl.columns and len(df_btl) > 0 else False
-    if not usa_residua:
-        st.warning(
-            "⚠️ Il file `righe_ordini_storico_con_date.xlsx` non contiene la colonna "
-            "`Qta Residua` aggiornata — le quantità mostrate sono quelle totali dell'ordine "
-            "(non la residua). Aggiorna l'export da ARCA includendo `Qta Residua`."
-        )
+
 
     # Applica filtro famiglie se attivo
     if filtro_famiglie:
@@ -629,23 +624,26 @@ def carica_atoplast_da_storico():
         df = df[df[cod_col].notna()]
         df['Data']          = pd.to_datetime(df['Data'],          errors='coerce')
         df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
-        df['Qta Doc']       = pd.to_numeric(df['Qta Doc'],        errors='coerce').fillna(0)
+        df['Qta Doc'] = pd.to_numeric(df['Qta Doc'], errors='coerce').fillna(0)
 
-        if 'Qta Residua' in df.columns:
+        ha_residua = 'Qta Residua' in df.columns
+        if ha_residua:
             df['Qta Residua'] = pd.to_numeric(df['Qta Residua'], errors='coerce').fillna(0)
-            col_qta = 'Qta Residua' if df['Qta Residua'].sum() > 0 else 'Qta Doc'
-        else:
-            df['Qta Residua'] = df['Qta Doc']; col_qta = 'Qta Doc'
 
         df['Data Consegna'] = df['Data Consegna'].fillna(df['Data'])
 
-        df_atp = df[
+        df_of = df[
             df['Cliente Fornitore CD'].str.contains('ATOPLAST', case=False, na=False) &
-            df[cod_col].isin(['OFR', 'OFF']) &
-            (df[col_qta] > 0)
+            df[cod_col].isin(['OFR', 'OFF'])
         ].copy()
-        df_atp['Tipo']    = df_atp[cod_col].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
-        df_atp['Qta Doc'] = df_atp[col_qta]
+
+        if ha_residua:
+            df_atp = df_of[df_of['Qta Residua'] > 0].copy()
+            df_atp['Qta Doc'] = df_atp['Qta Residua']
+        else:
+            df_atp = df_of[df_of['Qta Doc'] > 0].copy()
+
+        df_atp['Tipo'] = df_atp[cod_col].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
         return df_atp
     except Exception as e:
         return pd.DataFrame()
