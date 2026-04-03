@@ -301,57 +301,25 @@ def carica_btl_da_storico():
     try:
         df = pd.read_excel(path, skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
+        df['Codice Documento'] = df['Codice Documento'].ffill()
+        df = df[~df['Codice Documento'].astype(str).str.contains('Totale|NaN|nan', na=True)]
+        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str) != '(vuoto)')]
+        df['Data']         = pd.to_datetime(df['Data'],         errors='coerce')
+        df['Data Consegna']= pd.to_datetime(df['Data Consegna'],errors='coerce')
+        df['Qta Doc']      = pd.to_numeric(df['Qta Doc'],       errors='coerce').fillna(0)
+        df['Qta Residua']  = pd.to_numeric(df.get('Qta Residua', 0), errors='coerce').fillna(0)
 
-        # ffill solo sulla colonna Codice Documento per gestire struttura pivot ARCA
-        # MA: azzera il fill quando incontra righe di subtotale (evita contaminazione
-        # tra gruppi — le righe dopo un "Totale" non devono ereditare il codice precedente)
-        cod_col = 'Codice Documento'
-        filled = []
-        last_cod = None
-        for val in df[cod_col]:
-            s = str(val).strip()
-            if s in ('nan', 'None', ''):
-                filled.append(last_cod)          # propaga l'ultimo valido
-            elif 'otale' in s or 'Totale' in s:
-                filled.append(s)                 # mantieni "Totale" per poterlo filtrare
-                last_cod = None                  # RESET: il gruppo è finito
-            else:
-                last_cod = s
-                filled.append(s)
-        df[cod_col] = filled
-
-        # Rimuovi righe di subtotale e righe senza articolo
-        df = df[~df[cod_col].astype(str).str.contains('Totale|otale', na=False)]
-        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str).str.strip() != '(vuoto)')]
-        df = df[df[cod_col].notna()]
-
-        df['Data']          = pd.to_datetime(df['Data'],          errors='coerce')
-        df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
-        df['Qta Doc'] = pd.to_numeric(df['Qta Doc'], errors='coerce').fillna(0)
-
-        # Determina quale colonna quantità usare:
-        # - Se Qta Residua esiste ed è significativa → usala (Qta Residua=0 = evaso, escluso)
-        # - Se Qta Residua NON esiste → usa Qta Doc (filtro su Qta Doc > 0)
-        ha_residua = 'Qta Residua' in df.columns
-        if ha_residua:
-            df['Qta Residua'] = pd.to_numeric(df['Qta Residua'], errors='coerce').fillna(0)
-
+        # Fallback: se Data Consegna mancante usa Data emissione
         df['Data Consegna'] = df['Data Consegna'].fillna(df['Data'])
 
-        df_of = df[
+        # Filtra BTL OFR+OFF con quantità residua ancora aperta
+        df_btl = df[
             df['Cliente Fornitore CD'].str.contains('BTL', case=False, na=False) &
-            df[cod_col].isin(['OFR', 'OFF'])
+            df['Codice Documento'].isin(['OFR', 'OFF']) &
+            (df['Qta Residua'] > 0)
         ].copy()
-
-        if ha_residua:
-            # Qta Residua=0 → evaso → escluso
-            df_btl = df_of[df_of['Qta Residua'] > 0].copy()
-            df_btl['Qta Doc'] = df_btl['Qta Residua']
-        else:
-            # File senza Qta Residua → usa Qta Doc
-            df_btl = df_of[df_of['Qta Doc'] > 0].copy()
-
-        df_btl['Tipo'] = df_btl[cod_col].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
+        df_btl['Tipo']    = df_btl['Codice Documento'].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
+        df_btl['Qta Doc'] = df_btl['Qta Residua']  # usa sempre la quantità residua
         return df_btl
     except Exception as e:
         return pd.DataFrame()
@@ -369,8 +337,6 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
 
     # Qta Residua già filtrata in carica_btl_da_storico — nessun join necessario
     df_btl = df_btl_storico.copy()
-
-
 
     # Applica filtro famiglie se attivo
     if filtro_famiglie:
@@ -605,45 +571,22 @@ def carica_atoplast_da_storico():
     try:
         df = pd.read_excel(path, skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
-
-        # ffill con reset sui subtotali (evita contaminazione tra gruppi pivot ARCA)
-        cod_col = 'Codice Documento'
-        filled, last_cod = [], None
-        for val in df[cod_col]:
-            s = str(val).strip()
-            if s in ('nan', 'None', ''):
-                filled.append(last_cod)
-            elif 'otale' in s:
-                filled.append(s); last_cod = None
-            else:
-                last_cod = s; filled.append(s)
-        df[cod_col] = filled
-
-        df = df[~df[cod_col].astype(str).str.contains('Totale|otale', na=False)]
-        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str).str.strip() != '(vuoto)')]
-        df = df[df[cod_col].notna()]
+        df['Codice Documento'] = df['Codice Documento'].ffill()
+        df = df[~df['Codice Documento'].astype(str).str.contains('Totale|NaN|nan', na=True)]
+        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str) != '(vuoto)')]
         df['Data']          = pd.to_datetime(df['Data'],          errors='coerce')
         df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
-        df['Qta Doc'] = pd.to_numeric(df['Qta Doc'], errors='coerce').fillna(0)
-
-        ha_residua = 'Qta Residua' in df.columns
-        if ha_residua:
-            df['Qta Residua'] = pd.to_numeric(df['Qta Residua'], errors='coerce').fillna(0)
-
+        df['Qta Doc']       = pd.to_numeric(df['Qta Doc'],        errors='coerce').fillna(0)
+        df['Qta Residua']   = pd.to_numeric(df.get('Qta Residua', 0), errors='coerce').fillna(0)
         df['Data Consegna'] = df['Data Consegna'].fillna(df['Data'])
 
-        df_of = df[
+        df_atp = df[
             df['Cliente Fornitore CD'].str.contains('ATOPLAST', case=False, na=False) &
-            df[cod_col].isin(['OFR', 'OFF'])
+            df['Codice Documento'].isin(['OFR', 'OFF']) &
+            (df['Qta Residua'] > 0)
         ].copy()
-
-        if ha_residua:
-            df_atp = df_of[df_of['Qta Residua'] > 0].copy()
-            df_atp['Qta Doc'] = df_atp['Qta Residua']
-        else:
-            df_atp = df_of[df_of['Qta Doc'] > 0].copy()
-
-        df_atp['Tipo'] = df_atp[cod_col].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
+        df_atp['Tipo']    = df_atp['Codice Documento'].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
+        df_atp['Qta Doc'] = df_atp['Qta Residua']
         return df_atp
     except Exception as e:
         return pd.DataFrame()
@@ -1173,11 +1116,7 @@ if not df_res.empty:
     df_export = df_view.copy()
 
     # Pre-crea colonne per evitare KeyError su DataFrame
-    if 'FIGLIO' not in df_export.columns:
-        df_export['FIGLIO'] = 'NAN'
-    else:
-        df_export['FIGLIO'] = df_export['FIGLIO'].astype(str)
-    for col in ['GIA', 'ACQ', 'PROD', 'DISP_BOM_GIA']:
+    for col in ['FIGLIO', 'GIA', 'ACQ', 'PROD', 'DISP_BOM_GIA']:
         if col not in df_export.columns:
             df_export[col] = 0.0
     for f in prod_cols_export:
@@ -1273,39 +1212,3 @@ if not df_res.empty:
             filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
             filtro_articolo=search if search else None,
             filtro_famiglie=st.session_state.filtro_famiglie or None
-        )
-
-    with tab_btl:
-        render_vista_btl(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
-
-    with tab_atp:
-        render_vista_atoplast(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
-
-    with tab_det:
-        if df_view.empty:
-            st.info("Nessun ordine trovato con i filtri attivi.")
-        else:
-            for art, g in df_view.groupby('ART_KEY'):
-                desc    = g['Articolo D'].iloc[0] if 'Articolo D' in g.columns else ''
-                qta_tot = int(g['Qta Residua'].sum())
-                s_i     = stock_raw.get(art, {'GIA': 0, 'ACQ': 0, 'PROD': 0, 'FIGLIO': 'NAN'})
-                with st.expander(f"📦 {art} — {desc} | Residuo: {qta_tot:,} pa.".replace(",",".")):
-                    st.markdown(
-                        f'<div class="debug-box">'
-                        f'<span>📦 GIA: {int(s_i["GIA"])}</span>'
-                        f'<span>🚚 ACQ: {int(s_i["ACQ"])}</span>'
-                        f'<span>⚙️ PROD: {int(s_i["PROD"])}</span>'
-                        f'</div>',
-                        unsafe_allow_html=True
-                    )
-                    for _, r in g.sort_values('DT_EXP').iterrows():
-                        tag = "📋 [OCA]" if r.get('Codice Documento') == "OCA" else "🛒 [OCI]"
-                        cli = str(r.get('CLI_NAME', '')).split(' - ')[-1].strip()
-                        dt  = r['DT_EXP'].strftime("%d/%m/%Y") if pd.notnull(r.get('DT_EXP')) else "N.D."
-                        st.markdown(
-                            f'<div class="status-row {r["CS"]}">'
-                            f'<span>{tag} 📅 {dt} | Q: {int(r["Qta Residua"])} pa. | {cli}</span>'
-                            f'<span><b>{r["ST"]}</b></span>'
-                            f'</div>',
-                            unsafe_allow_html=True
-                        )
