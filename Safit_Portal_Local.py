@@ -31,8 +31,53 @@ st.markdown("""
 ANTICIPO_BTL_GG      = 3   # giorni anticipo BTL (Barletta → Friola)
 ANTICIPO_ATOPLAST_GG = 3   # giorni anticipo Atoplast → Friola
 PATH_STORICO_DATE    = "righe_ordini_storico_con_date.xlsx"
+PATH_AVANZAMENTO    = "Avanzamento_access.xlsx"
 
 # --- 2. FUNZIONI TECNICHE ---
+
+@st.cache_data(ttl=1800)
+def carica_giacenze():
+    """Carica GIA per articolo da Avanzamento_access.xlsx."""
+    if not os.path.exists(PATH_AVANZAMENTO):
+        return {}
+    try:
+        df = pd.read_excel(PATH_AVANZAMENTO)
+        df.columns = [str(c).strip() for c in df.columns]
+        df['CODICE'] = df['CODICE'].astype(str).str.strip().str.upper()
+        df['GIA']    = pd.to_numeric(df['GIA'], errors='coerce').fillna(0)
+        return dict(zip(df['CODICE'], df['GIA']))
+    except Exception:
+        return {}
+
+
+def calcola_prima_necessita(articolo, gia, df_storico_full):
+    """
+    Scala la giacenza GIA sugli OCI/OCA aperti in ordine di Data Consegna.
+    Restituisce:
+      - data del primo OCI che esaurisce la giacenza (= urgenza reale)
+      - se GIA copre tutti gli OCI: prima data OCI come riferimento informativo
+      - se nessun OCI: None
+    """
+    cod_col = 'Codice Documento'
+    mask = (
+        (df_storico_full['Articolo C'].astype(str).str.upper() == articolo.upper()) &
+        (df_storico_full[cod_col].isin(['OCI', 'OCA'])) &
+        (df_storico_full['Qta Residua'] > 0) &
+        df_storico_full['Data Consegna'].notna()
+    )
+    df_oci = df_storico_full[mask].sort_values('Data Consegna')
+    if df_oci.empty:
+        return None, False
+
+    scorta = max(gia, 0)
+    for _, r in df_oci.iterrows():
+        scorta -= r['Qta Residua']
+        if scorta < 0:
+            return r['Data Consegna'], True   # urgenza reale: scorta esaurita
+    # Giacenza copre tutto: data primo OCI come riferimento
+    return df_oci.iloc[0]['Data Consegna'], False
+
+
 @st.cache_data
 def get_user_db():
     if os.path.exists('utenti.xlsx'):
@@ -289,21 +334,17 @@ def tbar_html(data_ordine, data_consegna, oggi=None):
 """
 
 @st.cache_data(ttl=1800)
-def carica_btl_da_storico():
-    """
-    Carica OFR + OFF di BTL dal file storico con date.
-    Usa Qta Residua già presente nel file — esclude righe già evase (Qta Residua = 0).
-    Fallback: se Data Consegna mancante usa Data emissione.
-    """
+def _carica_storico_base():
+    """Carica e normalizza il file storico — usato da BTL, Atoplast e calcolo necessità."""
     path = PATH_STORICO_DATE
     if not os.path.exists(path):
         return pd.DataFrame()
     try:
         df = pd.read_excel(path, skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
-
-        # ffill con reset sui subtotali — evita che articoli dopo un "Totale"
-        # ereditino il Codice Documento del gruppo precedente
+        # ffill Data Consegna: nella pivot ARCA appare solo sulla prima riga del gruppo
+        df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce').ffill()
+        # ffill Codice Documento con reset sui subtotali
         cod_col = 'Codice Documento'
         filled, last_cod = [], None
         for val in df[cod_col]:
@@ -315,27 +356,35 @@ def carica_btl_da_storico():
             else:
                 last_cod = s; filled.append(s)
         df[cod_col] = filled
-
         df = df[~df[cod_col].astype(str).str.contains('Totale|otale', na=False)]
         df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str).str.strip() != '(vuoto)')]
         df = df[df[cod_col].notna()]
-        df['Data']          = pd.to_datetime(df['Data'],          errors='coerce')
-        df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
-        df['Qta Doc']       = pd.to_numeric(df['Qta Doc'],        errors='coerce').fillna(0)
-        df['Qta Residua']   = pd.to_numeric(df['Qta Residua'],    errors='coerce').fillna(0)                               if 'Qta Residua' in df.columns else pd.Series(0, index=df.index)
-        df['Data Consegna'] = df['Data Consegna'].fillna(df['Data'])
-
-        # Filtra BTL: solo OFR/OFF con Qta Residua > 0 (=0 significa evaso)
-        df_btl = df[
-            df['Cliente Fornitore CD'].str.contains('BTL', case=False, na=False) &
-            df[cod_col].isin(['OFR', 'OFF']) &
-            (df['Qta Residua'] > 0)
-        ].copy()
-        df_btl['Tipo']    = df_btl[cod_col].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
-        df_btl['Qta Doc'] = df_btl['Qta Residua']
-        return df_btl
-    except Exception as e:
+        df['Data']        = pd.to_datetime(df['Data'], errors='coerce')
+        df['Qta Doc']     = pd.to_numeric(df['Qta Doc'],     errors='coerce').fillna(0)
+        df['Qta Residua'] = pd.to_numeric(df['Qta Residua'], errors='coerce').fillna(0)                             if 'Qta Residua' in df.columns else pd.Series(0, index=df.index)
+        return df
+    except Exception:
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=1800)
+def carica_btl_da_storico():
+    """Carica OFR + OFF di BTL aperti (Qta Residua > 0). Data Consegna solo se presente in ARCA."""
+    df = _carica_storico_base()
+    if df.empty:
+        return pd.DataFrame()
+    cod_col = 'Codice Documento'
+    mask_btl = df['Cliente Fornitore CD'].str.contains('BTL', case=False, na=False)
+    df_btl = df[
+        mask_btl &
+        df[cod_col].isin(['OFR', 'OFF']) &
+        (df['Qta Residua'] > 0)
+    ].copy()
+    # Data Consegna: mantieni solo quella reale da ARCA — NaN = BTL non ha ancora confermato
+    # (NON fare fillna con Data ordine: sarebbe fuorviante)
+    df_btl['Tipo']    = df_btl[cod_col].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
+    df_btl['Qta Doc'] = df_btl['Qta Residua']
+    return df_btl
 
 
 def render_vista_btl(df_res=None, filtro_famiglie=None):
@@ -348,7 +397,10 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
         st.info("Nessun ordine BTL trovato. Verifica che il file righe_ordini_storico_con_date.xlsx sia presente.")
         return
 
-    # Qta Residua già filtrata in carica_btl_da_storico — nessun join necessario
+    # Carica storico completo (per calcolo prima necessità) e giacenze
+    df_storico_full = _carica_storico_base()
+    gia_map         = carica_giacenze()
+
     df_btl = df_btl_storico.copy()
 
     # Applica filtro famiglie se attivo
@@ -377,8 +429,19 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
         d_cons  = g['Data Consegna'].dropna().min() if g['Data Consegna'].notna().any() else None
         d_ord   = g['Data'].dropna().min()           if g['Data'].notna().any()          else None
 
-        if d_cons is not None:
-            d_friola      = d_cons - pd.Timedelta(days=ANTICIPO_BTL_GG)
+        # Se BTL non ha ancora confermato la data, calcola la prima necessità dagli OCI
+        data_confermata = d_cons is not None
+        data_necessita  = None
+        necessita_urgente = False
+        if not data_confermata and not df_storico_full.empty:
+            gia = gia_map.get(str(art).strip().upper(), 0)
+            data_necessita, necessita_urgente = calcola_prima_necessita(art, gia, df_storico_full)
+
+        # Data di riferimento per calcoli: confermata BTL > necessità OCI > None
+        d_rif = d_cons if data_confermata else data_necessita
+
+        if d_rif is not None:
+            d_friola      = d_rif - pd.Timedelta(days=ANTICIPO_BTL_GG)
             giorni_friola = (d_friola - pd.Timestamp(datetime.now())).days
             if giorni_friola < 0:
                 badge, urgenza, col_u = "🔴", f"IN RITARDO di {abs(giorni_friola)} gg", "#f44336"
@@ -388,16 +451,34 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 badge, urgenza, col_u = "🟡", f"A BREVE — {giorni_friola} gg", "#fbc02d"
             else:
                 badge, urgenza, col_u = "🟢", f"Mancano {giorni_friola} gg", "#4caf50"
-            data_label = f"📦 Friola: {d_friola.strftime('%d/%m/%Y')}"
+            if data_confermata:
+                data_label = f"📦 Friola: {d_friola.strftime('%d/%m/%Y')}"
+            elif necessita_urgente:
+                data_label = f"⚠️ Necessità: {d_rif.strftime('%d/%m/%Y')}"
+            else:
+                data_label = f"📋 Primo OCI: {d_rif.strftime('%d/%m/%Y')}"
         else:
             badge, urgenza, col_u, d_friola, data_label = "⚪", "Data N/D", "#9e9e9e", None, "📦 Data N/D"
 
         with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa. | {tipi} | {data_label}".replace(",",".")):
             c1, c2, c3 = st.columns(3)
             c1.metric("Quantità", f"{qta_tot:,} pa.".replace(",","."))
-            c2.metric("A Friola entro", d_friola.strftime("%d/%m/%Y") if d_friola else "N/D")
-            c3.metric("Data consegna", d_cons.strftime("%d/%m/%Y") if d_cons else "N/D")
-            if d_friola:
+            if data_confermata:
+                c2.metric("A Friola entro", d_friola.strftime("%d/%m/%Y") if d_friola else "N/D")
+                c3.metric("Data consegna BTL", d_cons.strftime("%d/%m/%Y"))
+            elif data_necessita:
+                gia_val = int(gia_map.get(str(art).strip().upper(), 0))
+                c2.metric("Prima necessità (OCI)", d_necessita_str := d_rif.strftime("%d/%m/%Y"),
+                          help="Data primo ordine cliente non coperto dalla giacenza attuale")
+                c3.metric("Giacenza attuale", f"{gia_val:,} pa.".replace(",","."),
+                          delta="⚠️ Scorta esaurita" if necessita_urgente else "✅ Coperto da giacenza")
+                st.info(f"📅 BTL non ha ancora confermato la data di consegna. "
+                        f"Prima necessità calcolata dagli ordini clienti: **{d_necessita_str}**")
+            else:
+                c2.metric("A Friola entro", "N/D")
+                c3.metric("Data consegna BTL", "Non confermata")
+                st.info("📅 BTL non ha ancora confermato la data. Nessun ordine cliente aperto trovato.")
+            if d_friola and data_confermata:
                 st.markdown(f'<div style="background:#fff8e1;border-left:4px solid {col_u};padding:8px 14px;border-radius:6px;margin:6px 0;color:#1a1a1a!important;font-weight:600;">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
                 d_start = d_ord if d_ord is not None else d_friola - pd.Timedelta(days=30)
                 st.markdown(tbar_html(d_start, d_friola), unsafe_allow_html=True)
@@ -574,48 +655,20 @@ def carica_istruzioni_btl():
 
 @st.cache_data(ttl=1800)
 def carica_atoplast_da_storico():
-    """
-    Carica OFR + OFF di Atoplast dal file storico con date.
-    Stesso approccio di BTL — legge Qta Residua, esclude righe evase.
-    """
-    path = PATH_STORICO_DATE
-    if not os.path.exists(path):
+    """Carica OFR + OFF di Atoplast aperti (Qta Residua > 0). Data Consegna solo se presente in ARCA."""
+    df = _carica_storico_base()
+    if df.empty:
         return pd.DataFrame()
-    try:
-        df = pd.read_excel(path, skiprows=2)
-        df.columns = [str(c).strip() for c in df.columns]
-
-        cod_col = 'Codice Documento'
-        filled, last_cod = [], None
-        for val in df[cod_col]:
-            s = str(val).strip()
-            if s in ('nan', 'None', ''):
-                filled.append(last_cod)
-            elif 'otale' in s or 'Totale' in s:
-                filled.append(s); last_cod = None
-            else:
-                last_cod = s; filled.append(s)
-        df[cod_col] = filled
-
-        df = df[~df[cod_col].astype(str).str.contains('Totale|otale', na=False)]
-        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str).str.strip() != '(vuoto)')]
-        df = df[df[cod_col].notna()]
-        df['Data']          = pd.to_datetime(df['Data'],          errors='coerce')
-        df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
-        df['Qta Doc']       = pd.to_numeric(df['Qta Doc'],        errors='coerce').fillna(0)
-        df['Qta Residua']   = pd.to_numeric(df['Qta Residua'],    errors='coerce').fillna(0)                               if 'Qta Residua' in df.columns else pd.Series(0, index=df.index)
-        df['Data Consegna'] = df['Data Consegna'].fillna(df['Data'])
-
-        df_atp = df[
-            df['Cliente Fornitore CD'].str.contains('ATOPLAST', case=False, na=False) &
-            df[cod_col].isin(['OFR', 'OFF']) &
-            (df['Qta Residua'] > 0)
-        ].copy()
-        df_atp['Tipo']    = df_atp[cod_col].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
-        df_atp['Qta Doc'] = df_atp['Qta Residua']
-        return df_atp
-    except Exception as e:
-        return pd.DataFrame()
+    cod_col  = 'Codice Documento'
+    mask_atp = df['Cliente Fornitore CD'].str.contains('ATOPLAST', case=False, na=False)
+    df_atp   = df[
+        mask_atp &
+        df[cod_col].isin(['OFR', 'OFF']) &
+        (df['Qta Residua'] > 0)
+    ].copy()
+    df_atp['Tipo']    = df_atp[cod_col].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
+    df_atp['Qta Doc'] = df_atp['Qta Residua']
+    return df_atp
 
 
 def render_vista_atoplast(df_res=None, filtro_famiglie=None):
