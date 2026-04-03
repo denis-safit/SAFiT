@@ -479,7 +479,7 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 c3.metric("Data consegna BTL", "Non confermata")
                 st.info("📅 BTL non ha ancora confermato la data. Nessun ordine cliente aperto trovato.")
             if d_friola and data_confermata:
-                st.markdown(f'<div style="background:#fff8e1;border-left:4px solid {col_u};padding:8px 14px;border-radius:6px;margin:6px 0;color:#1a1a1a!important;font-weight:600;">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="background:{col_u};border-left:6px solid rgba(0,0,0,0.25);padding:8px 14px;border-radius:6px;margin:6px 0;color:#fff!important;font-weight:700;text-shadow:0 1px 2px rgba(0,0,0,0.4);">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
                 d_start = d_ord if d_ord is not None else d_friola - pd.Timedelta(days=30)
                 st.markdown(tbar_html(d_start, d_friola), unsafe_allow_html=True)
             st.markdown("**Dettaglio righe:**")
@@ -729,7 +729,7 @@ def render_vista_atoplast(df_res=None, filtro_famiglie=None):
             c2.metric("A Friola entro", d_friola.strftime("%d/%m/%Y") if d_friola else "N/D")
             c3.metric("Data consegna", d_cons.strftime("%d/%m/%Y") if d_cons else "N/D")
             if d_friola:
-                st.markdown(f'<div style="background:#f3e5f5;border-left:4px solid {col_u};padding:8px 14px;border-radius:6px;margin:6px 0;color:#1a1a1a!important;font-weight:600;">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="background:{col_u};border-left:6px solid rgba(0,0,0,0.25);padding:8px 14px;border-radius:6px;margin:6px 0;color:#fff!important;font-weight:700;text-shadow:0 1px 2px rgba(0,0,0,0.4);">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
                 d_start = d_ord if d_ord is not None else d_friola - pd.Timedelta(days=30)
                 st.markdown(tbar_html(d_start, d_friola), unsafe_allow_html=True)
             st.markdown("**Dettaglio righe:**")
