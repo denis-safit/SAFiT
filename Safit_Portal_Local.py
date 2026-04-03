@@ -301,25 +301,38 @@ def carica_btl_da_storico():
     try:
         df = pd.read_excel(path, skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
-        df['Codice Documento'] = df['Codice Documento'].ffill()
-        df = df[~df['Codice Documento'].astype(str).str.contains('Totale|NaN|nan', na=True)]
-        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str) != '(vuoto)')]
-        df['Data']         = pd.to_datetime(df['Data'],         errors='coerce')
-        df['Data Consegna']= pd.to_datetime(df['Data Consegna'],errors='coerce')
-        df['Qta Doc']      = pd.to_numeric(df['Qta Doc'],       errors='coerce').fillna(0)
-        df['Qta Residua']  = pd.to_numeric(df.get('Qta Residua', 0), errors='coerce').fillna(0)
 
-        # Fallback: se Data Consegna mancante usa Data emissione
+        # ffill con reset sui subtotali — evita che articoli dopo un "Totale"
+        # ereditino il Codice Documento del gruppo precedente
+        cod_col = 'Codice Documento'
+        filled, last_cod = [], None
+        for val in df[cod_col]:
+            s = str(val).strip()
+            if s in ('nan', 'None', ''):
+                filled.append(last_cod)
+            elif 'otale' in s or 'Totale' in s:
+                filled.append(s); last_cod = None
+            else:
+                last_cod = s; filled.append(s)
+        df[cod_col] = filled
+
+        df = df[~df[cod_col].astype(str).str.contains('Totale|otale', na=False)]
+        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str).str.strip() != '(vuoto)')]
+        df = df[df[cod_col].notna()]
+        df['Data']          = pd.to_datetime(df['Data'],          errors='coerce')
+        df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
+        df['Qta Doc']       = pd.to_numeric(df['Qta Doc'],        errors='coerce').fillna(0)
+        df['Qta Residua']   = pd.to_numeric(df['Qta Residua'],    errors='coerce').fillna(0)                               if 'Qta Residua' in df.columns else pd.Series(0, index=df.index)
         df['Data Consegna'] = df['Data Consegna'].fillna(df['Data'])
 
-        # Filtra BTL OFR+OFF con quantità residua ancora aperta
+        # Filtra BTL: solo OFR/OFF con Qta Residua > 0 (=0 significa evaso)
         df_btl = df[
             df['Cliente Fornitore CD'].str.contains('BTL', case=False, na=False) &
-            df['Codice Documento'].isin(['OFR', 'OFF']) &
+            df[cod_col].isin(['OFR', 'OFF']) &
             (df['Qta Residua'] > 0)
         ].copy()
-        df_btl['Tipo']    = df_btl['Codice Documento'].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
-        df_btl['Qta Doc'] = df_btl['Qta Residua']  # usa sempre la quantità residua
+        df_btl['Tipo']    = df_btl[cod_col].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
+        df_btl['Qta Doc'] = df_btl['Qta Residua']
         return df_btl
     except Exception as e:
         return pd.DataFrame()
@@ -379,9 +392,9 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
         else:
             badge, urgenza, col_u, d_friola, data_label = "⚪", "Data N/D", "#9e9e9e", None, "📦 Data N/D"
 
-        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pz | {tipi} | {data_label}".replace(",",".")):
+        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa. | {tipi} | {data_label}".replace(",",".")):
             c1, c2, c3 = st.columns(3)
-            c1.metric("Quantità", f"{qta_tot:,} pz".replace(",","."))
+            c1.metric("Quantità", f"{qta_tot:,} pa.".replace(",","."))
             c2.metric("A Friola entro", d_friola.strftime("%d/%m/%Y") if d_friola else "N/D")
             c3.metric("Data consegna", d_cons.strftime("%d/%m/%Y") if d_cons else "N/D")
             if d_friola:
@@ -394,7 +407,7 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 d_fs = (d_c - pd.Timedelta(days=ANTICIPO_BTL_GG)).strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
                 d_cs = d_c.strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
                 css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo','')) else 'acq-row'
-                st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pz | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
+                st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pa. | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
 
             # ── Istruzioni di lavorazione divise per OFR / OFF ────────
             istr_map  = carica_istruzioni_btl()
@@ -465,7 +478,7 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 piegatura = _val(istr, 'Piegatura')
                 tempra    = _val(istr, 'Tempra')
                 vern      = _val(istr, 'Verniciatura')
-                tipo_vern = _val(istr, 'Tipo Vernice')
+                finitura  = _val(istr, 'finitura')
                 scatola   = _val(istr, 'Scatola')
                 note      = _val(istr, 'Note')
                 qta_i     = _qta(istr)
@@ -484,16 +497,16 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                         '&#128293; <b>Tempra</b></span> ' + tempra
                     )
                 if vern:
-                    vl = vern + (' &mdash; ' + tipo_vern if tipo_vern else '')
+                    vl = vern + (' &mdash; finitura: ' + finitura if finitura else '')
                     righe.append(
                         '<span style="display:inline-block;min-width:180px;">'
                         '&#127912; <b>Verniciatura</b></span> ' + vl
                     )
                 if scatola:
-                    sl = scatola + (' &mdash; ' + str(pz_sc) + ' pz/sc' if pz_sc > 0 else '')
+                    sl = scatola + (' &mdash; ' + str(pz_sc) + ' pa./sc' if pz_sc > 0 else '')
                     righe.append(
                         '<span style="display:inline-block;min-width:180px;">'
-                        '&#128230; <b>Imballo</b></span> ' + sl
+                        '&#128230; <b>Scatola</b></span> ' + sl
                     )
 
                 corpo = '<br>'.join(righe) if righe else '<i style="color:#888;">Nessun dettaglio specificato</i>'
@@ -571,21 +584,34 @@ def carica_atoplast_da_storico():
     try:
         df = pd.read_excel(path, skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
-        df['Codice Documento'] = df['Codice Documento'].ffill()
-        df = df[~df['Codice Documento'].astype(str).str.contains('Totale|NaN|nan', na=True)]
-        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str) != '(vuoto)')]
+
+        cod_col = 'Codice Documento'
+        filled, last_cod = [], None
+        for val in df[cod_col]:
+            s = str(val).strip()
+            if s in ('nan', 'None', ''):
+                filled.append(last_cod)
+            elif 'otale' in s or 'Totale' in s:
+                filled.append(s); last_cod = None
+            else:
+                last_cod = s; filled.append(s)
+        df[cod_col] = filled
+
+        df = df[~df[cod_col].astype(str).str.contains('Totale|otale', na=False)]
+        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str).str.strip() != '(vuoto)')]
+        df = df[df[cod_col].notna()]
         df['Data']          = pd.to_datetime(df['Data'],          errors='coerce')
         df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
         df['Qta Doc']       = pd.to_numeric(df['Qta Doc'],        errors='coerce').fillna(0)
-        df['Qta Residua']   = pd.to_numeric(df.get('Qta Residua', 0), errors='coerce').fillna(0)
+        df['Qta Residua']   = pd.to_numeric(df['Qta Residua'],    errors='coerce').fillna(0)                               if 'Qta Residua' in df.columns else pd.Series(0, index=df.index)
         df['Data Consegna'] = df['Data Consegna'].fillna(df['Data'])
 
         df_atp = df[
             df['Cliente Fornitore CD'].str.contains('ATOPLAST', case=False, na=False) &
-            df['Codice Documento'].isin(['OFR', 'OFF']) &
+            df[cod_col].isin(['OFR', 'OFF']) &
             (df['Qta Residua'] > 0)
         ].copy()
-        df_atp['Tipo']    = df_atp['Codice Documento'].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
+        df_atp['Tipo']    = df_atp[cod_col].map({'OFR': '🔧 Lavorazione', 'OFF': '🛒 Acquisto'})
         df_atp['Qta Doc'] = df_atp['Qta Residua']
         return df_atp
     except Exception as e:
@@ -644,9 +670,9 @@ def render_vista_atoplast(df_res=None, filtro_famiglie=None):
         else:
             badge, urgenza, col_u, d_friola, data_label = "⚪", "Data N/D", "#9e9e9e", None, "📦 Data N/D"
 
-        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pz | {tipi} | {data_label}".replace(",",".")):
+        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa. | {tipi} | {data_label}".replace(",",".")):
             c1, c2, c3 = st.columns(3)
-            c1.metric("Quantità", f"{qta_tot:,} pz".replace(",","."))
+            c1.metric("Quantità", f"{qta_tot:,} pa.".replace(",","."))
             c2.metric("A Friola entro", d_friola.strftime("%d/%m/%Y") if d_friola else "N/D")
             c3.metric("Data consegna", d_cons.strftime("%d/%m/%Y") if d_cons else "N/D")
             if d_friola:
@@ -659,7 +685,7 @@ def render_vista_atoplast(df_res=None, filtro_famiglie=None):
                 d_fs = (d_c - pd.Timedelta(days=ANTICIPO_ATOPLAST_GG)).strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
                 d_cs = d_c.strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
                 css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo', '')) else 'acq-row'
-                st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pz | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
+                st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pa. | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
 
 def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
     """Vista pulita per il cliente — nessun dato interno visibile."""
@@ -717,7 +743,7 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
     pct_pronto = round(n_pronti / tot_qta * 100) if tot_qta > 0 else 0
 
     k1, k2, k3, k4 = st.columns(4)
-    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">TOTALE PEZZI</div><div class="kpi-val">{tot_qta:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
+    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">TOTALE PAIA</div><div class="kpi-val">{tot_qta:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
     k2.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#4caf50">PRONTI</div><div class="kpi-val">{n_pronti:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
     k3.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#2196f3">IN LAVORAZIONE</div><div class="kpi-val">{n_lavoro:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
     k4.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#f44336">DA PIANIFICARE</div><div class="kpi-val">{n_mancanti:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
@@ -834,7 +860,7 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
         else:
             badge = "🟢"
 
-        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pz".replace(",",".")):
+        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa.".replace(",",".")):
             # Barra avanzamento articolo
             # "Disponibile" per il cliente deve riflettere quanta parte della richiesta
             # può essere coperta dalla sola GIACENZA (GIA), anche se la riga è classificata
@@ -854,7 +880,7 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
             pct_art    = round(qta_pronta / qta_tot * 100) if qta_tot > 0 else 0
             bar_col    = '#4caf50' if pct_art >= 100 else ('#fbc02d' if pct_art > 0 else '#f44336')
             st.markdown(
-                f"**Disponibile: {qta_pronta:,} / {qta_tot:,} pz**".replace(",","."),
+                f"**Disponibile: {qta_pronta:,} / {qta_tot:,} pa.**".replace(",","."),
             )
             st.markdown(pbar_html(pct_art, bar_col), unsafe_allow_html=True)
 
@@ -1116,7 +1142,11 @@ if not df_res.empty:
     df_export = df_view.copy()
 
     # Pre-crea colonne per evitare KeyError su DataFrame
-    for col in ['FIGLIO', 'GIA', 'ACQ', 'PROD', 'DISP_BOM_GIA']:
+    if 'FIGLIO' not in df_export.columns:
+        df_export['FIGLIO'] = 'NAN'
+    else:
+        df_export['FIGLIO'] = df_export['FIGLIO'].astype(str)
+    for col in ['GIA', 'ACQ', 'PROD', 'DISP_BOM_GIA']:
         if col not in df_export.columns:
             df_export[col] = 0.0
     for f in prod_cols_export:
@@ -1212,3 +1242,39 @@ if not df_res.empty:
             filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
             filtro_articolo=search if search else None,
             filtro_famiglie=st.session_state.filtro_famiglie or None
+        )
+
+    with tab_btl:
+        render_vista_btl(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
+
+    with tab_atp:
+        render_vista_atoplast(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
+
+    with tab_det:
+        if df_view.empty:
+            st.info("Nessun ordine trovato con i filtri attivi.")
+        else:
+            for art, g in df_view.groupby('ART_KEY'):
+                desc    = g['Articolo D'].iloc[0] if 'Articolo D' in g.columns else ''
+                qta_tot = int(g['Qta Residua'].sum())
+                s_i     = stock_raw.get(art, {'GIA': 0, 'ACQ': 0, 'PROD': 0, 'FIGLIO': 'NAN'})
+                with st.expander(f"📦 {art} — {desc} | Residuo: {qta_tot:,} pa.".replace(",",".")):
+                    st.markdown(
+                        f'<div class="debug-box">'
+                        f'<span>📦 GIA: {int(s_i["GIA"])}</span>'
+                        f'<span>🚚 ACQ: {int(s_i["ACQ"])}</span>'
+                        f'<span>⚙️ PROD: {int(s_i["PROD"])}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+                    for _, r in g.sort_values('DT_EXP').iterrows():
+                        tag = "📋 [OCA]" if r.get('Codice Documento') == "OCA" else "🛒 [OCI]"
+                        cli = str(r.get('CLI_NAME', '')).split(' - ')[-1].strip()
+                        dt  = r['DT_EXP'].strftime("%d/%m/%Y") if pd.notnull(r.get('DT_EXP')) else "N.D."
+                        st.markdown(
+                            f'<div class="status-row {r["CS"]}">'
+                            f'<span>{tag} 📅 {dt} | Q: {int(r["Qta Residua"])} pa. | {cli}</span>'
+                            f'<span><b>{r["ST"]}</b></span>'
+                            f'</div>',
+                            unsafe_allow_html=True
+                        )
