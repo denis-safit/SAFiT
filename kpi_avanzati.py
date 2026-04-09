@@ -19,7 +19,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from io import BytesIO
 import os
 
@@ -352,16 +352,14 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         )
 
         # ── Filtri ────────────────────────────────────────────────────────────
-        # Il filtro cliente viene dalla sidebar del portale (filtro_cliente).
-        # Qui gestiamo solo periodo e famiglia.
-        # Key univoca per evitare conflitti quando si cambia cliente dalla sidebar
         _key_suffix = str(filtro_cliente or "tutti").lower().replace(" ", "_")[:20]
 
         c1, c2 = st.columns([1, 2])
         with c1:
             periodo = st.selectbox(
-                "Periodo", ["Ultimi 90 gg", "Ultimi 6 mesi",
-                            "Ultimo anno", "Tutto lo storico"],
+                "Periodo",
+                ["Ultimi 90 gg", "Ultimi 6 mesi", "Ultimo anno",
+                 "Tutto lo storico", "Intervallo personalizzato"],
                 index=2, key=f"kpi_periodo_{_key_suffix}"
             )
         with c2:
@@ -369,6 +367,24 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
             sel_fam  = st.multiselect("Famiglia", famiglie,
                                        key=f"kpi_fam_{_key_suffix}",
                                        placeholder="Tutte le famiglie")
+
+        # Se intervallo personalizzato: mostra i due date_input
+        if periodo == "Intervallo personalizzato":
+            data_min_d = df_oci["Data"].min().date() if not df_oci.empty else date(2024, 1, 1)
+            data_max_d = df_oci["Data"].max().date() if not df_oci.empty else datetime.now().date()
+            dc1, dc2 = st.columns(2)
+            with dc1:
+                data_da = st.date_input(
+                    "📅 Dal", value=data_min_d,
+                    min_value=data_min_d, max_value=data_max_d,
+                    key=f"kpi_da_{_key_suffix}", format="DD/MM/YYYY"
+                )
+            with dc2:
+                data_a = st.date_input(
+                    "📅 Al", value=data_max_d,
+                    min_value=data_min_d, max_value=data_max_d,
+                    key=f"kpi_a_{_key_suffix}", format="DD/MM/YYYY"
+                )
 
         if filtro_cliente:
             st.caption(f"👤 Dati filtrati per cliente: **{filtro_cliente}**")
@@ -380,18 +396,26 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         # Applica filtri temporali
         gg_map = {"Ultimi 90 gg": 90, "Ultimi 6 mesi": 180,
                   "Ultimo anno": 365, "Tutto lo storico": 9999}
-        gg = gg_map[periodo]
-        cutoff = datetime.now() - timedelta(days=gg)
-
-        df_f = df_oci.copy()
-        if gg < 9999:
-            df_f = df_f[df_f['Data'] >= cutoff]
-        if sel_fam:
-            df_f = df_f[df_f['Famiglia'].isin(sel_fam)]
-
+        df_f     = df_oci.copy()
         df_dvf_f = df_dvf.copy()
-        if gg < 9999:
-            df_dvf_f = df_dvf_f[df_dvf_f['Data'] >= cutoff]
+        cutoff   = None
+        gg       = 9999
+
+        if periodo == "Intervallo personalizzato":
+            cutoff_da = pd.Timestamp(data_da)
+            cutoff_a  = pd.Timestamp(data_a)
+            df_f      = df_f[(df_f["Data"] >= cutoff_da) & (df_f["Data"] <= cutoff_a)]
+            df_dvf_f  = df_dvf_f[(df_dvf_f["Data"] >= cutoff_da) & (df_dvf_f["Data"] <= cutoff_a)]
+            cutoff    = cutoff_da
+        else:
+            gg = gg_map[periodo]
+            if gg < 9999:
+                cutoff   = pd.Timestamp(datetime.now() - timedelta(days=gg))
+                df_f     = df_f[df_f["Data"] >= cutoff]
+                df_dvf_f = df_dvf_f[df_dvf_f["Data"] >= cutoff]
+
+        if sel_fam:
+            df_f = df_f[df_f["Famiglia"].isin(sel_fam)]
 
         if df_f.empty:
             st.warning("Nessun dato per i filtri selezionati.")
