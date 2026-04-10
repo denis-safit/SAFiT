@@ -93,7 +93,13 @@ def carica_dataset_unificato() -> pd.DataFrame:
     df_safit['Articolo_C_IB'] = df_safit['Articolo C'].astype(str).map(trans)
 
     # --- Corrente SAFITIB ---
-    df_ib = _normalizza(pd.read_excel(PATH_CORRENTE_IB))
+    # Il file generato da ARCA puo' avere 2 righe di intestazione extra
+    _raw_ib = pd.read_excel(PATH_CORRENTE_IB)
+    _raw_ib.columns = [str(c).strip() for c in _raw_ib.columns]
+    if 'Data' not in _raw_ib.columns:
+        _raw_ib = pd.read_excel(PATH_CORRENTE_IB, skiprows=2)
+        _raw_ib.columns = [str(c).strip() for c in _raw_ib.columns]
+    df_ib = _normalizza(_raw_ib)
     df_ib['_sorgente']    = 'SAFITIB'
     df_ib['Articolo_C_IB'] = df_ib['Articolo C'].astype(str)
 
