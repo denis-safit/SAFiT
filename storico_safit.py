@@ -279,11 +279,11 @@ def render_kpi_storici(filtro_cliente=None, filtro_articolo=None, filtro_famigli
             st.warning("Dataset vuoto.")
             return
 
-        df_oci = df_all[df_all['Codice Documento'].isin(['OCI', 'OCA']) & (df_all['Qta Doc'] > 0)].copy()
+        df_oci = df_all[df_all['Codice Documento'].isin(['OCI']) & (df_all['Qta Doc'] > 0)].copy()
 
         st.caption(
             f"Dataset unificato: **{len(df_all):,}** righe totali | "
-            f"**{len(df_oci):,}** OCI/OCA | "
+            f"**{len(df_oci):,}** OCI | "
             "🔵 SAFIT (pre 3/9/2025) + 🟠 SafitIB (post 3/9/2025)".replace(",", ".")
         )
 

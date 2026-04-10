@@ -154,9 +154,9 @@ def carica_dettagli_consegne(path=PATH_CONSEGNE):
 
 
 def get_oci_oca(df):
-    """Filtra solo OCI e OCA con quantità > 0."""
+    """Filtra solo OCI con quantità > 0."""
     return df[
-        df['Codice Documento'].isin(['OCI', 'OCA']) &
+        df['Codice Documento'].isin(['OCI']) &
         (df['Qta Doc'] > 0)
     ].copy()
 
@@ -348,7 +348,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
 
         st.caption(
             f"📁 Storico caricato: **{len(df_all):,}** righe totali | "
-            f"**{len(df_oci):,}** OCI/OCA | **{len(df_dvf):,}** DVF".replace(",",".")
+            f"**{len(df_oci):,}** OCI | **{len(df_dvf):,}** DVF".replace(",",".")
         )
 
         # ── Filtri ────────────────────────────────────────────────────────────
