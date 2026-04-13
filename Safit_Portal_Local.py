@@ -932,13 +932,26 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
         desc     = g['Articolo D'].iloc[0]
         qta_tot  = int(g['Qta Residua'].sum())
         stati_g  = g['ST'].tolist()
-        # Colore expander = stato peggiore
-        if 'MANCANTE' in stati_g or 'DA PIANIFICARE' in stati_g:
-            badge = "🔴"
-        elif 'PRODUZIONE' in stati_g or 'ACQUISTO' in stati_g:
-            badge = "🟡"
+        # Colore expander = urgenza temporale (data consegna più vicina)
+        d_min = g['DT_EXP'].dropna().min() if g['DT_EXP'].notna().any() else None
+        if d_min is not None:
+            _gg = (pd.Timestamp(d_min) - pd.Timestamp(datetime.now())).days
+            if _gg < 0:
+                badge = "🔴"
+            elif _gg <= 3:
+                badge = "🟠"
+            elif _gg <= 7:
+                badge = "🟡"
+            else:
+                badge = "🟢"
         else:
-            badge = "🟢"
+            # Nessuna data: fallback su stato ARCA
+            if 'MANCANTE' in stati_g or 'DA PIANIFICARE' in stati_g:
+                badge = "🔴"
+            elif 'PRODUZIONE' in stati_g or 'ACQUISTO' in stati_g:
+                badge = "🟡"
+            else:
+                badge = "🟢"
 
         with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa.".replace(",",".")):
             # Barra avanzamento articolo
