@@ -473,48 +473,51 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
         else:
             badge, urgenza, col_u, d_friola, data_label = "⚪", "Data N/D", "#9e9e9e", None, "📦 Data N/D"
 
-        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa. | {tipi} | {data_label}".replace(",",".")):
-            # ── Riga compatta: tutti i dati chiave su una sola linea ──────────
+        # ── Titolo expander: badge urgenza testuale + codice + desc + qtà ──
+        _badge_txt = f"[{urgenza.upper()}]" if d_rif is not None else "[DATA N/D]"
+        _exp_title = f"{_badge_txt}  {art} — {desc}  |  {qta_tot:,} pa.".replace(",",".")
+        with st.expander(_exp_title):
+            # ── Riga info compatta ────────────────────────────────────────────
             if data_confermata:
-                _qta_str    = f"<b>{qta_tot:,} pa.</b>".replace(",",".")
                 _friola_str = d_friola.strftime('%d/%m/%Y') if d_friola else "N/D"
                 _cons_str   = d_cons.strftime('%d/%m/%Y')
                 _info_html  = (
-                    f'<span style="margin-right:18px;">📦 Qtà: {_qta_str}</span>'
-                    f'<span style="margin-right:18px;">🏭 A Friola: <b>{_friola_str}</b></span>'
-                    f'<span style="margin-right:18px;">📅 Consegna BTL: <b>{_cons_str}</b></span>'
-                    f'<span style="background:{col_u};color:#fff;padding:2px 10px;border-radius:4px;font-weight:700;">⏱️ {urgenza}</span>'
+                    f'<span style="margin-right:16px;">🏭 A Friola: <b>{_friola_str}</b></span>'
+                    f'<span style="margin-right:16px;">📅 Consegna BTL: <b>{_cons_str}</b></span>'
+                    f'<span style="background:{col_u};color:#fff;padding:2px 9px;border-radius:4px;font-weight:700;font-size:0.85rem;">⏱️ {urgenza}</span>'
                 )
-                st.markdown(f'<div style="padding:6px 2px 4px 2px;font-size:0.92rem;">{_info_html}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="padding:4px 2px 2px 2px;font-size:0.9rem;">{_info_html}</div>', unsafe_allow_html=True)
                 d_start = d_ord if d_ord is not None else d_friola - pd.Timedelta(days=30)
                 st.markdown(tbar_html(d_start, d_friola), unsafe_allow_html=True)
             elif data_necessita:
-                gia_val       = int(gia_map.get(str(art).strip().upper(), 0))
+                gia_val         = int(gia_map.get(str(art).strip().upper(), 0))
                 d_necessita_str = d_rif.strftime("%d/%m/%Y")
-                _delta_lbl    = "⚠️ Scorta esaurita" if necessita_urgente else "✅ Coperto da giacenza"
-                _info_html    = (
-                    f'<span style="margin-right:18px;">📦 Qtà: <b>{qta_tot:,} pa.</b></span>'.replace(",",".")
-                    + f'<span style="margin-right:18px;">📋 Prima necessità (OCI): <b>{d_necessita_str}</b></span>'
-                    + f'<span style="margin-right:18px;">🗄️ Giacenza: <b>{gia_val:,} pa.</b></span>'.replace(",",".")
-                    + f'<span style="background:{col_u};color:#fff;padding:2px 10px;border-radius:4px;font-weight:700;">⏱️ {urgenza}</span>'
-                    + f'&nbsp;&nbsp;<span style="color:#888;font-size:0.85rem;">{_delta_lbl} — BTL non ha confermato la data</span>'
+                _delta_lbl      = "⚠️ Scorta esaurita" if necessita_urgente else "✅ Coperto da giacenza"
+                _info_html      = (
+                    f'<span style="margin-right:16px;">📋 Prima necessità (OCI): <b>{d_necessita_str}</b></span>'
+                    + f'<span style="margin-right:16px;">🗄️ Giacenza: <b>{gia_val:,} pa.</b></span>'.replace(",",".")
+                    + f'<span style="background:{col_u};color:#fff;padding:2px 9px;border-radius:4px;font-weight:700;font-size:0.85rem;">⏱️ {urgenza}</span>'
+                    + f'&nbsp;&nbsp;<span style="color:#888;font-size:0.83rem;">{_delta_lbl}</span>'
                 )
-                st.markdown(f'<div style="padding:6px 2px 4px 2px;font-size:0.92rem;">{_info_html}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="padding:4px 2px 2px 2px;font-size:0.9rem;">{_info_html}</div>', unsafe_allow_html=True)
             else:
-                _info_html = (
-                    f'<span style="margin-right:18px;">📦 Qtà: <b>{qta_tot:,} pa.</b></span>'.replace(",",".")
-                    + f'<span style="color:#888;">📅 BTL non ha ancora confermato la data. Nessun ordine cliente aperto trovato.</span>'
-                )
-                st.markdown(f'<div style="padding:6px 2px 4px 2px;font-size:0.92rem;">{_info_html}</div>', unsafe_allow_html=True)
-            st.markdown("**Dettaglio righe:**")
-            for _, r in g.sort_values('Data Consegna', na_position='last').iterrows():
-                d_c  = r['Data Consegna']
-                d_fs = (d_c - pd.Timedelta(days=ANTICIPO_BTL_GG)).strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
-                d_cs = d_c.strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
-                css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo','')) else 'acq-row'
-                st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pa. | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
+                st.caption("📅 BTL non ha ancora confermato la data. Nessun ordine cliente aperto trovato.")
 
-            # ── Istruzioni di lavorazione divise per OFR / OFF ────────
+            st.markdown("<hr style='margin:6px 0;border:none;border-top:1px solid #e0e0e0;'>", unsafe_allow_html=True)
+
+            # ── Due colonne: righe ordine | istruzioni BTL ───────────────────
+            col_righe, col_istr = st.columns(2)
+
+            with col_righe:
+                st.markdown('<div style="font-weight:700;font-size:13px;color:#37474f;margin-bottom:4px;">📋 Righe ordine</div>', unsafe_allow_html=True)
+                for _, r in g.sort_values('Data Consegna', na_position='last').iterrows():
+                    d_c  = r['Data Consegna']
+                    d_fs = (d_c - pd.Timedelta(days=ANTICIPO_BTL_GG)).strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
+                    d_cs = d_c.strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
+                    css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo','')) else 'acq-row'
+                    st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pa. | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
+
+            # ── Istruzioni di lavorazione ─────────────────────────────────────
             istr_map  = carica_istruzioni_btl()
             art_up    = str(art).strip().upper()
             istr_list = istr_map.get(art_up, [])
@@ -639,20 +642,14 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 )
                 st.markdown(html, unsafe_allow_html=True)
 
-            if istr_list:
-                # Deduplicazione: un blocco per documento, riga più completa
-                tutti = deduplica(istr_list)
-
-                st.markdown(
-                    '<div style="font-weight:700;font-size:14px;margin:10px 0 6px 0;'
-                    'color:#37474f;border-bottom:2px solid #90a4ae;padding-bottom:4px;">'
-                    '&#128203; Istruzioni di lavorazione</div>',
-                    unsafe_allow_html=True
-                )
-                for istr in tutti:
-                    render_istr_block(istr, bg='#f8f9fa', border='#546e7a')
-            else:
-                st.caption("ℹ️ Nessuna istruzione disponibile per questo articolo.")
+            with col_istr:
+                st.markdown('<div style="font-weight:700;font-size:13px;color:#37474f;margin-bottom:4px;">📐 Istruzioni di lavorazione</div>', unsafe_allow_html=True)
+                if istr_list:
+                    tutti = deduplica(istr_list)
+                    for istr in tutti:
+                        render_istr_block(istr, bg='#f8f9fa', border='#546e7a')
+                else:
+                    st.caption("ℹ️ Nessuna istruzione disponibile.")
 
 @st.cache_data(ttl=1800)
 def carica_istruzioni_btl():
