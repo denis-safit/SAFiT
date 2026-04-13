@@ -473,20 +473,16 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
         else:
             badge, urgenza, col_u, d_friola, data_label = "⚪", "Data N/D", "#9e9e9e", None, "📦 Data N/D"
 
-        # ── Titolo expander: badge urgenza testuale + codice + desc + qtà ──
-        _badge_txt = f"[{urgenza.upper()}]" if d_rif is not None else "[DATA N/D]"
-        _exp_title = f"{_badge_txt}  {art} — {desc}  |  {qta_tot:,} pa.".replace(",",".")
+        # ── Titolo expander: emoji colore + badge urgenza + codice + desc + qtà ──
+        if d_rif is not None:
+            _pfx = "🔴" if giorni_friola < 0 else ("🟠" if giorni_friola <= 3 else ("🟡" if giorni_friola <= 7 else "🟢"))
+            _badge_txt = f"[{urgenza.upper()}]"
+        else:
+            _pfx, _badge_txt = "⚪", "[DATA N/D]"
+        _exp_title = f"{_pfx} {_badge_txt}  {art} — {desc}  |  {qta_tot:,} pa.".replace(",",".")
         with st.expander(_exp_title):
-            # ── Riga info compatta ────────────────────────────────────────────
+            # ── Barra temporale (solo se data confermata) ─────────────────
             if data_confermata:
-                _friola_str = d_friola.strftime('%d/%m/%Y') if d_friola else "N/D"
-                _cons_str   = d_cons.strftime('%d/%m/%Y')
-                _info_html  = (
-                    f'<span style="margin-right:16px;">🏭 A Friola: <b>{_friola_str}</b></span>'
-                    f'<span style="margin-right:16px;">📅 Consegna BTL: <b>{_cons_str}</b></span>'
-                    f'<span style="background:{col_u};color:#fff;padding:2px 9px;border-radius:4px;font-weight:700;font-size:0.85rem;">⏱️ {urgenza}</span>'
-                )
-                st.markdown(f'<div style="padding:4px 2px 2px 2px;font-size:0.9rem;">{_info_html}</div>', unsafe_allow_html=True)
                 d_start = d_ord if d_ord is not None else d_friola - pd.Timedelta(days=30)
                 st.markdown(tbar_html(d_start, d_friola), unsafe_allow_html=True)
             elif data_necessita:
