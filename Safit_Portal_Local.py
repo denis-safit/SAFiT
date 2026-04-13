@@ -928,7 +928,7 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
 
     with tab_ord_cli:
       # Dettaglio ordini per articolo
-      for art, g in df_cli.groupby('ART_KEY'):
+      for art, g in df_cli.sort_values('DT_EXP', na_position='last').groupby('ART_KEY', sort=False):
         desc     = g['Articolo D'].iloc[0]
         qta_tot  = int(g['Qta Residua'].sum())
         stati_g  = g['ST'].tolist()
@@ -1092,7 +1092,7 @@ if not df_res.empty:
             'DA PIANIFICARE': 0.0,
         }
 
-        for art, g in df_in.groupby('ART_KEY'):
+        for art, g in df_in.sort_values('DT_EXP', na_position='last').groupby('ART_KEY', sort=False):
             s_i = stock_raw_in.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0, 'FIGLIO': 'NAN'})
             gia_left = float(s_i.get('GIA', 0))
             acq_left = float(s_i.get('ACQ', 0))
@@ -1358,7 +1358,7 @@ if not df_res.empty:
         if df_view.empty:
             st.info("Nessun ordine trovato con i filtri attivi.")
         else:
-            for art, g in df_view.groupby('ART_KEY'):
+            for art, g in df_view.sort_values('DT_EXP', na_position='last').groupby('ART_KEY', sort=False):
                 desc    = g['Articolo D'].iloc[0] if 'Articolo D' in g.columns else ''
                 qta_tot = int(g['Qta Residua'].sum())
                 s_i     = stock_raw.get(art, {'GIA': 0, 'ACQ': 0, 'PROD': 0, 'FIGLIO': 'NAN'})
