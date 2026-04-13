@@ -474,27 +474,38 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
             badge, urgenza, col_u, d_friola, data_label = "⚪", "Data N/D", "#9e9e9e", None, "📦 Data N/D"
 
         with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa. | {tipi} | {data_label}".replace(",",".")):
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Quantità", f"{qta_tot:,} pa.".replace(",","."))
+            # ── Riga compatta: tutti i dati chiave su una sola linea ──────────
             if data_confermata:
-                c2.metric("A Friola entro", d_friola.strftime("%d/%m/%Y") if d_friola else "N/D")
-                c3.metric("Data consegna BTL", d_cons.strftime("%d/%m/%Y"))
-            elif data_necessita:
-                gia_val = int(gia_map.get(str(art).strip().upper(), 0))
-                c2.metric("Prima necessità (OCI)", d_necessita_str := d_rif.strftime("%d/%m/%Y"),
-                          help="Data primo ordine cliente non coperto dalla giacenza attuale")
-                c3.metric("Giacenza attuale", f"{gia_val:,} pa.".replace(",","."),
-                          delta="⚠️ Scorta esaurita" if necessita_urgente else "✅ Coperto da giacenza")
-                st.info(f"📅 BTL non ha ancora confermato la data di consegna. "
-                        f"Prima necessità calcolata dagli ordini clienti: **{d_necessita_str}**")
-            else:
-                c2.metric("A Friola entro", "N/D")
-                c3.metric("Data consegna BTL", "Non confermata")
-                st.info("📅 BTL non ha ancora confermato la data. Nessun ordine cliente aperto trovato.")
-            if d_friola and data_confermata:
-                st.markdown(f'<div style="background:{col_u};border-left:6px solid rgba(0,0,0,0.25);padding:8px 14px;border-radius:6px;margin:6px 0;color:#fff!important;font-weight:700;text-shadow:0 1px 2px rgba(0,0,0,0.4);">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
+                _qta_str    = f"<b>{qta_tot:,} pa.</b>".replace(",",".")
+                _friola_str = d_friola.strftime('%d/%m/%Y') if d_friola else "N/D"
+                _cons_str   = d_cons.strftime('%d/%m/%Y')
+                _info_html  = (
+                    f'<span style="margin-right:18px;">📦 Qtà: {_qta_str}</span>'
+                    f'<span style="margin-right:18px;">🏭 A Friola: <b>{_friola_str}</b></span>'
+                    f'<span style="margin-right:18px;">📅 Consegna BTL: <b>{_cons_str}</b></span>'
+                    f'<span style="background:{col_u};color:#fff;padding:2px 10px;border-radius:4px;font-weight:700;">⏱️ {urgenza}</span>'
+                )
+                st.markdown(f'<div style="padding:6px 2px 4px 2px;font-size:0.92rem;">{_info_html}</div>', unsafe_allow_html=True)
                 d_start = d_ord if d_ord is not None else d_friola - pd.Timedelta(days=30)
                 st.markdown(tbar_html(d_start, d_friola), unsafe_allow_html=True)
+            elif data_necessita:
+                gia_val       = int(gia_map.get(str(art).strip().upper(), 0))
+                d_necessita_str = d_rif.strftime("%d/%m/%Y")
+                _delta_lbl    = "⚠️ Scorta esaurita" if necessita_urgente else "✅ Coperto da giacenza"
+                _info_html    = (
+                    f'<span style="margin-right:18px;">📦 Qtà: <b>{qta_tot:,} pa.</b></span>'.replace(",",".")
+                    + f'<span style="margin-right:18px;">📋 Prima necessità (OCI): <b>{d_necessita_str}</b></span>'
+                    + f'<span style="margin-right:18px;">🗄️ Giacenza: <b>{gia_val:,} pa.</b></span>'.replace(",",".")
+                    + f'<span style="background:{col_u};color:#fff;padding:2px 10px;border-radius:4px;font-weight:700;">⏱️ {urgenza}</span>'
+                    + f'&nbsp;&nbsp;<span style="color:#888;font-size:0.85rem;">{_delta_lbl} — BTL non ha confermato la data</span>'
+                )
+                st.markdown(f'<div style="padding:6px 2px 4px 2px;font-size:0.92rem;">{_info_html}</div>', unsafe_allow_html=True)
+            else:
+                _info_html = (
+                    f'<span style="margin-right:18px;">📦 Qtà: <b>{qta_tot:,} pa.</b></span>'.replace(",",".")
+                    + f'<span style="color:#888;">📅 BTL non ha ancora confermato la data. Nessun ordine cliente aperto trovato.</span>'
+                )
+                st.markdown(f'<div style="padding:6px 2px 4px 2px;font-size:0.92rem;">{_info_html}</div>', unsafe_allow_html=True)
             st.markdown("**Dettaglio righe:**")
             for _, r in g.sort_values('Data Consegna', na_position='last').iterrows():
                 d_c  = r['Data Consegna']
@@ -737,12 +748,22 @@ def render_vista_atoplast(df_res=None, filtro_famiglie=None):
             badge, urgenza, col_u, d_friola, data_label = "⚪", "Data N/D", "#9e9e9e", None, "📦 Data N/D"
 
         with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa. | {tipi} | {data_label}".replace(",",".")):
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Quantità", f"{qta_tot:,} pa.".replace(",","."))
-            c2.metric("A Friola entro", d_friola.strftime("%d/%m/%Y") if d_friola else "N/D")
-            c3.metric("Data consegna", d_cons.strftime("%d/%m/%Y") if d_cons else "N/D")
+            # ── Riga compatta: tutti i dati chiave su una sola linea ──────────
+            _friola_str = d_friola.strftime('%d/%m/%Y') if d_friola else "N/D"
+            _cons_str   = d_cons.strftime('%d/%m/%Y') if d_cons else "N/D"
+            _badge_urgenza = (
+                f'<span style="background:{col_u};color:#fff;padding:2px 10px;border-radius:4px;font-weight:700;">⏱️ {urgenza}</span>'
+                if d_friola else
+                '<span style="color:#888;">📅 Data non confermata</span>'
+            )
+            _info_html = (
+                f'<span style="margin-right:18px;">📦 Qtà: <b>{qta_tot:,} pa.</b></span>'.replace(",",".")
+                + f'<span style="margin-right:18px;">🏭 A Friola: <b>{_friola_str}</b></span>'
+                + f'<span style="margin-right:18px;">📅 Consegna: <b>{_cons_str}</b></span>'
+                + _badge_urgenza
+            )
+            st.markdown(f'<div style="padding:6px 2px 4px 2px;font-size:0.92rem;">{_info_html}</div>', unsafe_allow_html=True)
             if d_friola:
-                st.markdown(f'<div style="background:{col_u};border-left:6px solid rgba(0,0,0,0.25);padding:8px 14px;border-radius:6px;margin:6px 0;color:#fff!important;font-weight:700;text-shadow:0 1px 2px rgba(0,0,0,0.4);">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
                 d_start = d_ord if d_ord is not None else d_friola - pd.Timedelta(days=30)
                 st.markdown(tbar_html(d_start, d_friola), unsafe_allow_html=True)
             st.markdown("**Dettaglio righe:**")

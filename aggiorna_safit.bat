@@ -42,18 +42,18 @@ if exist refresh_arca.vbs (
 echo [4/8] Preparazione file per GitHub...
 git add --all
 git commit -m "Auto-Update: %date% %time%"
-pause
+
 echo [5/8] Sincronizzazione con il Cloud (Rebase)...
 git pull origin main --rebase
-pause
+
 echo [6/8] Controllo conflitti...
 git checkout --ours .
 git add --all
 git rebase --continue 2>nul
-pause
+
 echo [7/8] Invio finale al Portale Online...
 git push origin main --force
-pause
+
 echo.
 echo ============================================================
 echo    FASE 3: APERTURA PORTALE SAFIT
@@ -69,5 +69,6 @@ echo    AGGIORNAMENTO COMPLETATO! CHIUSURA TRA 10 SECONDI...
 echo ============================================================
 C:\Windows\System32\timeout.exe /t 2 >nul
 
+start C:\Users\Venezian.Denis\Desktop\python_access_sql\Agente_arca_mail\avvia_agente.bat
 
 exit
