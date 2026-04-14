@@ -25,6 +25,10 @@ st.markdown("""
     .urgent-row { background-color: #ffebee !important; border-left: 8px solid #f44336; } 
     .oca-row { background-color: #f5f5f5 !important; border-left: 8px solid #9e9e9e; color: #666 !important; }
     .bom-row { background-color: #f3e5f5 !important; border-left: 8px solid #9c27b0; }
+    .disp-row  { background-color: #e8f5e9 !important; border-left: 6px solid #4caf50; }
+    .acq-row2  { background-color: #e3f2fd !important; border-left: 6px solid #2196f3; }
+    .prod-row2 { background-color: #fffde7 !important; border-left: 6px solid #fbc02d; }
+    .miss-row  { background-color: #ffebee !important; border-left: 6px solid #f44336; }
     .debug-box { background-color: #f8f9fa !important; color: #333 !important; padding: 12px; border-radius: 8px; border: 1px dotted #bbb; margin-bottom: 10px; display: flex; justify-content: space-around; font-size: 13px; font-weight: bold; }
     .kpi-card { background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px; border-radius: 10px; text-align: center; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
     .kpi-val { font-size: 24px; font-weight: bold; color: #1f77b4; }
@@ -1361,12 +1365,56 @@ if not df_res.empty:
             for art, g in df_view.sort_values('DT_EXP', na_position='last').groupby('ART_KEY', sort=False):
                 desc    = g['Articolo D'].iloc[0] if 'Articolo D' in g.columns else ''
                 qta_tot = int(g['Qta Residua'].sum())
-                s_i     = stock_raw.get(art, {'GIA': 0, 'ACQ': 0, 'PROD': 0, 'FIGLIO': 'NAN'})
-                # Badge urgenza temporale — stessa logica vista cliente/BTL
-                _d_min = g['DT_EXP'].dropna().min() if g['DT_EXP'].notna().any() else None
-                _stati = g['ST'].tolist()
-                if _d_min is not None:
-                    _gg = (pd.Timestamp(_d_min) - pd.Timestamp(datetime.now())).days
+                s_i     = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0, 'FIGLIO': 'NAN'})
+
+                # ── Alloca GIA/ACQ/PROD riga per riga in ordine cronologico ──
+                _gia_left  = float(s_i.get('GIA',  0))
+                _acq_left  = float(s_i.get('ACQ',  0))
+                _prod_left = float(s_i.get('PROD', 0))
+                g_sorted   = g.sort_values('DT_EXP', na_position='last')
+
+                _righe_calcolate = []   # (riga, stato_calcolato, css_calcolato)
+                for _, r in g_sorted.iterrows():
+                    q = float(r.get('Qta Residua', 0))
+                    if q <= 0:
+                        continue
+                    # Scala GIA
+                    take_gia = min(_gia_left, q)
+                    _gia_left -= take_gia
+                    q_rem = q - take_gia
+                    if q_rem <= 0:
+                        _righe_calcolate.append((r, 'DISPONIBILE', 'disp-row'))
+                        continue
+                    # Scala ACQ
+                    take_acq = min(_acq_left, q_rem)
+                    _acq_left -= take_acq
+                    q_rem -= take_acq
+                    if q_rem <= 0:
+                        _righe_calcolate.append((r, 'ACQUISTO', 'acq-row2'))
+                        continue
+                    # Scala PROD
+                    take_prod = min(_prod_left, q_rem)
+                    _prod_left -= take_prod
+                    q_rem -= take_prod
+                    if q_rem <= 0:
+                        _righe_calcolate.append((r, 'PRODUZIONE', 'prod-row2'))
+                        continue
+                    # Resto scoperto
+                    st_orig = str(r.get('ST', '')).strip().upper()
+                    _stato = 'DA PIANIFICARE' if st_orig == 'DA PIANIFICARE' else 'MANCANTE'
+                    _righe_calcolate.append((r, _stato, 'miss-row'))
+
+                # ── Badge: data della prima riga NON completamente coperta da GIA ──
+                _prima_scoperta_data = None
+                _primo_stato_critico = None
+                for (_r, _st, _cs) in _righe_calcolate:
+                    if _st not in ('DISPONIBILE',):
+                        _prima_scoperta_data = _r.get('DT_EXP', None)
+                        _primo_stato_critico = _st
+                        break
+
+                if _prima_scoperta_data is not None and pd.notnull(_prima_scoperta_data):
+                    _gg = (pd.Timestamp(_prima_scoperta_data) - pd.Timestamp(datetime.now())).days
                     if _gg < 0:
                         _badge = "🔴"
                     elif _gg <= 3:
@@ -1375,13 +1423,13 @@ if not df_res.empty:
                         _badge = "🟡"
                     else:
                         _badge = "🟢"
+                elif _primo_stato_critico is not None:
+                    # Data assente ma stato critico
+                    _badge = "🔴" if _primo_stato_critico in ('MANCANTE', 'DA PIANIFICARE') else "🟡"
                 else:
-                    if 'MANCANTE' in _stati or 'DA PIANIFICARE' in _stati:
-                        _badge = "🔴"
-                    elif 'PRODUZIONE' in _stati or 'ACQUISTO' in _stati:
-                        _badge = "🟡"
-                    else:
-                        _badge = "🟢"
+                    # Tutto coperto da GIA
+                    _badge = "🟢"
+
                 with st.expander(f"{_badge} {art} — {desc} | Residuo: {qta_tot:,} pa.".replace(",",".")):
                     st.markdown(
                         f'<div class="debug-box">'
@@ -1391,14 +1439,14 @@ if not df_res.empty:
                         f'</div>',
                         unsafe_allow_html=True
                     )
-                    for _, r in g.sort_values('DT_EXP').iterrows():
+                    for (r, _stato_calc, _css_calc) in _righe_calcolate:
                         tag = "📋 [OCA]" if r.get('Codice Documento') == "OCA" else "🛒 [OCI]"
                         cli = str(r.get('CLI_NAME', '')).split(' - ')[-1].strip()
                         dt  = r['DT_EXP'].strftime("%d/%m/%Y") if pd.notnull(r.get('DT_EXP')) else "N.D."
                         st.markdown(
-                            f'<div class="status-row {r["CS"]}">'
+                            f'<div class="status-row {_css_calc}">'
                             f'<span>{tag} 📅 {dt} | Q: {int(r["Qta Residua"])} pa. | {cli}</span>'
-                            f'<span><b>{r["ST"]}</b></span>'
+                            f'<span><b>{_stato_calc}</b></span>'
                             f'</div>',
                             unsafe_allow_html=True
                         )
