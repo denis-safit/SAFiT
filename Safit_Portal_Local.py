@@ -1362,7 +1362,27 @@ if not df_res.empty:
                 desc    = g['Articolo D'].iloc[0] if 'Articolo D' in g.columns else ''
                 qta_tot = int(g['Qta Residua'].sum())
                 s_i     = stock_raw.get(art, {'GIA': 0, 'ACQ': 0, 'PROD': 0, 'FIGLIO': 'NAN'})
-                with st.expander(f"📦 {art} — {desc} | Residuo: {qta_tot:,} pa.".replace(",",".")):
+                # Badge urgenza temporale — stessa logica vista cliente/BTL
+                _d_min = g['DT_EXP'].dropna().min() if g['DT_EXP'].notna().any() else None
+                _stati = g['ST'].tolist()
+                if _d_min is not None:
+                    _gg = (pd.Timestamp(_d_min) - pd.Timestamp(datetime.now())).days
+                    if _gg < 0:
+                        _badge = "🔴"
+                    elif _gg <= 3:
+                        _badge = "🟠"
+                    elif _gg <= 7:
+                        _badge = "🟡"
+                    else:
+                        _badge = "🟢"
+                else:
+                    if 'MANCANTE' in _stati or 'DA PIANIFICARE' in _stati:
+                        _badge = "🔴"
+                    elif 'PRODUZIONE' in _stati or 'ACQUISTO' in _stati:
+                        _badge = "🟡"
+                    else:
+                        _badge = "🟢"
+                with st.expander(f"{_badge} {art} — {desc} | Residuo: {qta_tot:,} pa.".replace(",",".")):
                     st.markdown(
                         f'<div class="debug-box">'
                         f'<span>📦 GIA: {int(s_i["GIA"])}</span>'
