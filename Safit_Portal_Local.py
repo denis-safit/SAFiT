@@ -474,42 +474,44 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
             badge, urgenza, col_u, d_friola, data_label = "⚪", "Data N/D", "#9e9e9e", None, "📦 Data N/D"
 
         with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa. | {tipi} | {data_label}".replace(",",".")):
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Quantità", f"{qta_tot:,} pa.".replace(",","."))
+            # ── Barra temporale (solo se data confermata) ─────────────────
             if data_confermata:
-                c2.metric("A Friola entro", d_friola.strftime("%d/%m/%Y") if d_friola else "N/D")
-                c3.metric("Data consegna BTL", d_cons.strftime("%d/%m/%Y"))
-            elif data_necessita:
-                gia_val = int(gia_map.get(str(art).strip().upper(), 0))
-                c2.metric("Prima necessità (OCI)", d_necessita_str := d_rif.strftime("%d/%m/%Y"),
-                          help="Data primo ordine cliente non coperto dalla giacenza attuale")
-                c3.metric("Giacenza attuale", f"{gia_val:,} pa.".replace(",","."),
-                          delta="⚠️ Scorta esaurita" if necessita_urgente else "✅ Coperto da giacenza")
-                st.info(f"📅 BTL non ha ancora confermato la data di consegna. "
-                        f"Prima necessità calcolata dagli ordini clienti: **{d_necessita_str}**")
-            else:
-                c2.metric("A Friola entro", "N/D")
-                c3.metric("Data consegna BTL", "Non confermata")
-                st.info("📅 BTL non ha ancora confermato la data. Nessun ordine cliente aperto trovato.")
-            if d_friola and data_confermata:
-                st.markdown(f'<div style="background:{col_u};border-left:6px solid rgba(0,0,0,0.25);padding:8px 14px;border-radius:6px;margin:6px 0;color:#fff!important;font-weight:700;text-shadow:0 1px 2px rgba(0,0,0,0.4);">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
                 d_start = d_ord if d_ord is not None else d_friola - pd.Timedelta(days=30)
                 st.markdown(tbar_html(d_start, d_friola), unsafe_allow_html=True)
-            st.markdown("**Dettaglio righe:**")
-            for _, r in g.sort_values('Data Consegna', na_position='last').iterrows():
-                d_c  = r['Data Consegna']
-                d_fs = (d_c - pd.Timedelta(days=ANTICIPO_BTL_GG)).strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
-                d_cs = d_c.strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
-                css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo','')) else 'acq-row'
-                st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pa. | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
+            elif data_necessita:
+                gia_val         = int(gia_map.get(str(art).strip().upper(), 0))
+                d_necessita_str = d_rif.strftime("%d/%m/%Y")
+                _delta_lbl      = "⚠️ Scorta esaurita" if necessita_urgente else "✅ Coperto da giacenza"
+                _info_html      = (
+                    f'<span style="margin-right:16px;">📋 Prima necessità (OCI): <b>{d_necessita_str}</b></span>'
+                    + f'<span style="margin-right:16px;">🗄️ Giacenza: <b>{gia_val:,} pa.</b></span>'.replace(",",".")
+                    + f'<span style="background:{col_u};color:#fff;padding:2px 9px;border-radius:4px;font-weight:700;font-size:0.85rem;">⏱️ {urgenza}</span>'
+                    + f'&nbsp;&nbsp;<span style="color:#888;font-size:0.83rem;">{_delta_lbl}</span>'
+                )
+                st.markdown(f'<div style="padding:4px 2px 2px 2px;font-size:0.9rem;">{_info_html}</div>', unsafe_allow_html=True)
+            else:
+                st.caption("📅 BTL non ha ancora confermato la data. Nessun ordine cliente aperto trovato.")
 
-            # ── Istruzioni di lavorazione divise per OFR / OFF ────────
+            st.markdown("<hr style='margin:6px 0;border:none;border-top:1px solid #e0e0e0;'>", unsafe_allow_html=True)
+
+            # ── Due colonne: righe ordine | istruzioni BTL ───────────────────
+            col_righe, col_istr = st.columns(2)
+
+            with col_righe:
+                st.markdown('<div style="font-weight:700;font-size:13px;color:#37474f;margin-bottom:4px;">📋 Righe ordine</div>', unsafe_allow_html=True)
+                for _, r in g.sort_values('Data Consegna', na_position='last').iterrows():
+                    d_c  = r['Data Consegna']
+                    d_fs = (d_c - pd.Timedelta(days=ANTICIPO_BTL_GG)).strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
+                    d_cs = d_c.strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
+                    css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo','')) else 'acq-row'
+                    st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pa. | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
+
+            # ── Istruzioni di lavorazione ─────────────────────────────────────
             istr_map  = carica_istruzioni_btl()
             art_up    = str(art).strip().upper()
             istr_list = istr_map.get(art_up, [])
 
             def _val(d, key):
-                """Valore pulito o None se vuoto/n.a./no/nan."""
                 v = str(d.get(key, '')).strip()
                 if v.lower() in ['nan', 'none', '', 'n.a.', 'no', '0']:
                     return None
@@ -534,28 +536,19 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 except: return 0
 
             def _score(d):
-                """Punteggio di completezza: quanti campi utili ha questa riga."""
                 campi = ['Piegatura','Tempra','Verniciatura','Tipo Vernice','Scatola','Note']
                 return sum(1 for c in campi if _val(d, c) is not None)
 
             def deduplica(lista):
-                """
-                Per ogni coppia (Tipo Doc, N. Doc) mantiene solo la riga
-                con il punteggio di completezza più alto.
-                Poi unisce le Note di tutte le righe duplicate se diverse.
-                """
                 from collections import defaultdict
                 gruppi = defaultdict(list)
                 for i in lista:
                     key = (str(i.get('Tipo Doc','')).strip().upper(),
                            str(i.get('N. Doc', '')).strip())
                     gruppi[key].append(i)
-
                 risultati = []
                 for key, rows in gruppi.items():
-                    # Prendi la riga più completa
                     best = max(rows, key=_score)
-                    # Unisci le note di tutte le righe se diverse
                     note_set = []
                     for r in rows:
                         n = _val(r, 'Note')
@@ -568,7 +561,6 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 return risultati
 
             def render_istr_block(istr, bg, border):
-                """Blocco istruzione pulito — solo campi utili, note in evidenza."""
                 piegatura = _val(istr, 'Piegatura')
                 tempra    = _val(istr, 'Tempra')
                 vern      = _val(istr, 'Verniciatura')
@@ -577,71 +569,37 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 note      = _val(istr, 'Note')
                 qta_i     = _qta(istr)
                 pz_sc     = _pz_sc(istr)
-
-                # Righe di dettaglio — solo se presenti
                 righe = []
                 if piegatura:
-                    righe.append(
-                        '<span style="display:inline-block;min-width:180px;">'
-                        '&#128295; <b>Piegatura</b></span> ' + piegatura
-                    )
+                    righe.append('<span style="display:inline-block;min-width:180px;">&#128295; <b>Piegatura</b></span> ' + piegatura)
                 if tempra:
-                    righe.append(
-                        '<span style="display:inline-block;min-width:180px;">'
-                        '&#128293; <b>Tempra</b></span> ' + tempra
-                    )
+                    righe.append('<span style="display:inline-block;min-width:180px;">&#128293; <b>Tempra</b></span> ' + tempra)
                 if vern:
                     vl = vern + (' &mdash; finitura: ' + finitura if finitura else '')
-                    righe.append(
-                        '<span style="display:inline-block;min-width:180px;">'
-                        '&#127912; <b>Verniciatura</b></span> ' + vl
-                    )
+                    righe.append('<span style="display:inline-block;min-width:180px;">&#127912; <b>Verniciatura</b></span> ' + vl)
                 if scatola:
                     sl = scatola + (' &mdash; ' + str(pz_sc) + ' pa./sc' if pz_sc > 0 else '')
-                    righe.append(
-                        '<span style="display:inline-block;min-width:180px;">'
-                        '&#128230; <b>Scatola</b></span> ' + sl
-                    )
-
+                    righe.append('<span style="display:inline-block;min-width:180px;">&#128230; <b>Scatola</b></span> ' + sl)
                 corpo = '<br>'.join(righe) if righe else '<i style="color:#888;">Nessun dettaglio specificato</i>'
-
                 note_html = ''
                 if note:
-                    note_html = (
-                        '<div style="background:#fff9c4;border-left:4px solid #f9a825;'
-                        'padding:8px 12px;border-radius:5px;margin-top:8px;'
-                        'font-size:14px;font-weight:700;color:#3e2723;">'
-                        '&#9888; NOTE: ' + note + '</div>'
-                    )
-
+                    note_html = ('<div style="background:#fff9c4;border-left:4px solid #f9a825;padding:8px 12px;border-radius:5px;margin-top:8px;font-size:14px;font-weight:700;color:#3e2723;">&#9888; NOTE: ' + note + '</div>')
                 qta_str = str(qta_i) + ' pz' if qta_i > 0 else ''
                 html = (
-                    '<div style="background:' + bg + ';border-left:5px solid ' + border + ';'
-                    'padding:12px 16px;border-radius:7px;margin:6px 0;'
-                    'font-size:14px;color:#1a1a1a;">'
-                    + ('<div style="font-size:12px;color:#78909c;margin-bottom:6px;">'
-                       'Q.t&agrave;: ' + qta_str + ' &mdash; ' + _data_str(istr) + '</div>'
-                       if qta_str else '')
-                    + corpo
-                    + note_html
-                    + '</div>'
+                    '<div style="background:' + bg + ';border-left:5px solid ' + border + ';padding:12px 16px;border-radius:7px;margin:6px 0;font-size:14px;color:#1a1a1a;">'
+                    + ('<div style="font-size:12px;color:#78909c;margin-bottom:6px;">Q.t&agrave;: ' + qta_str + ' &mdash; ' + _data_str(istr) + '</div>' if qta_str else '')
+                    + corpo + note_html + '</div>'
                 )
                 st.markdown(html, unsafe_allow_html=True)
 
-            if istr_list:
-                # Deduplicazione: un blocco per documento, riga più completa
-                tutti = deduplica(istr_list)
-
-                st.markdown(
-                    '<div style="font-weight:700;font-size:14px;margin:10px 0 6px 0;'
-                    'color:#37474f;border-bottom:2px solid #90a4ae;padding-bottom:4px;">'
-                    '&#128203; Istruzioni di lavorazione</div>',
-                    unsafe_allow_html=True
-                )
-                for istr in tutti:
-                    render_istr_block(istr, bg='#f8f9fa', border='#546e7a')
-            else:
-                st.caption("ℹ️ Nessuna istruzione disponibile per questo articolo.")
+            with col_istr:
+                st.markdown('<div style="font-weight:700;font-size:13px;color:#37474f;margin-bottom:4px;">📐 Istruzioni di lavorazione</div>', unsafe_allow_html=True)
+                if istr_list:
+                    tutti = deduplica(istr_list)
+                    for istr in tutti:
+                        render_istr_block(istr, bg='#f8f9fa', border='#546e7a')
+                else:
+                    st.caption("ℹ️ Nessuna istruzione disponibile.")
 
 @st.cache_data(ttl=1800)
 def carica_istruzioni_btl():
@@ -988,7 +946,7 @@ def _carica_storico_cronistoria(_mtime=0):
     if not os.path.exists(path):
         return pd.DataFrame()
     try:
-        df = pd.read_excel(path)
+        df = pd.read_excel(path, skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
         df['Codice Documento'] = df['Codice Documento'].ffill()
         df['Data Consegna']    = pd.to_datetime(df['Data Consegna'], errors='coerce').ffill()
