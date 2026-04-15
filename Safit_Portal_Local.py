@@ -353,7 +353,7 @@ def _carica_storico_base():
     if not os.path.exists(path):
         return pd.DataFrame()
     try:
-        df = pd.read_excel(path, skiprows=2)
+        df = pd.read_excel(path, skiprows=0)
         df.columns = [str(c).strip() for c in df.columns]
         # ffill Data Consegna: nella pivot ARCA appare solo sulla prima riga del gruppo
         df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce').ffill()
