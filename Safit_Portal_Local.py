@@ -981,8 +981,25 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
 # ===========================================================
 @st.cache_data(ttl=1800)
 def _carica_storico_cronistoria():
-    """Carica OCI+OCA+OFR+OFF aperti (Qta Residua > 0) per la cronistoria."""
-    df = _carica_storico_base()
+    """Carica OCI+OCA+OFR+OFF aperti (Qta Residua > 0) per la cronistoria.
+    Legge il file storico direttamente senza skiprows (header a riga 0)."""
+    path = PATH_STORICO_DATE
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        df = pd.read_excel(path)
+        df.columns = [str(c).strip() for c in df.columns]
+        df['Codice Documento'] = df['Codice Documento'].ffill()
+        df['Data Consegna']    = pd.to_datetime(df['Data Consegna'], errors='coerce').ffill()
+        df['Numero Documento'] = df['Numero Documento'].ffill()
+        df['Qta Doc']          = pd.to_numeric(df['Qta Doc'],     errors='coerce').fillna(0)
+        df['Qta Residua']      = pd.to_numeric(df['Qta Residua'], errors='coerce').fillna(0)
+        df['Data']             = pd.to_datetime(df.get('Data'),   errors='coerce')
+        # Rimuovi righe totale e articoli vuoti
+        df = df[~df['Codice Documento'].astype(str).str.contains('Totale|otale', na=False)]
+        df = df[df['Articolo C'].notna() & (df['Articolo C'].astype(str).str.strip() != '(vuoto)')]
+    except Exception:
+        return pd.DataFrame()
     if df.empty:
         return pd.DataFrame()
     doc_ok = ['OCI', 'OCA', 'OFR', 'OFF']
