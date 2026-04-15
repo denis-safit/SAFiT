@@ -1068,17 +1068,15 @@ def render_cronistoria_articolo(art_key):
         else:
             qta_tot_forn = int(df_forn['Qta Residua'].sum())
             delta = qta_tot_forn - int(df_cli['Qta Residua'].sum()) if not df_cli.empty else qta_tot_forn
-            delta_str = f"+{delta:,}".replace(",",".") if delta >= 0 else f"{delta:,}".replace(",",".")
+            delta_ico = "▲" if delta >= 0 else "▼"
             delta_col = "#4caf50" if delta >= 0 else "#f44336"
-            st.caption(
-                f"Totale residuo: **{qta_tot_forn:,} pa.**".replace(",",".")
-                + f" &nbsp;<span style='color:{delta_col};font-weight:700;font-size:11px;'>"
-                  f"({delta_str} vs clienti)</span>",
-                unsafe_allow_html=False
-            )
-            st.caption(
-                f"Totale residuo: **{qta_tot_forn:,} pa.** "
-                f"({'▲' if delta >= 0 else '▼'} {abs(delta):,} vs clienti)".replace(",",".")
+            delta_abs = f"{abs(delta):,}".replace(",",".")
+            qta_forn_fmt = f"{qta_tot_forn:,}".replace(",",".")
+            st.markdown(
+                f'Totale residuo: **{qta_forn_fmt} pa.** '
+                f'<span style="color:{delta_col};font-weight:700;font-size:11px;">'
+                f'({delta_ico} {delta_abs} vs clienti)</span>',
+                unsafe_allow_html=True
             )
             for _, r in df_forn.iterrows():
                 dc = r['Data Consegna']
