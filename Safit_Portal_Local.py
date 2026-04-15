@@ -972,10 +972,7 @@ def _carica_storico_cronistoria(_mtime=0):
 
 
 def render_cronistoria_articolo(art_key, df_ordini=None):
-    """
-    Mostra la cronistoria per un articolo: OCI/OCA (richieste clienti)
-    e OFR/OFF (ordini fornitore) affiancati per data di consegna.
-    # Badge stato da df_ordini (colonne ST, DT_EXP passate dal tab_det)
+    """Cronistoria OCI/OCA + OFR/OFF affiancati. df_ordini: ordini aperti con ST e DT_EXP."""
     STATO_BADGE = {
         'DISPONIBILE':    ('#4caf50', 'DISPONIBILE'),
         'COPERTO BOM':    ('#9c27b0', 'COPERTO BOM'),
@@ -984,14 +981,13 @@ def render_cronistoria_articolo(art_key, df_ordini=None):
         'MANCANTE':       ('#f44336', 'MANCANTE'),
         'DA PIANIFICARE': ('#9e9e9e', 'DA PIANIFICARE'),
     }
-    stato_map = {}  # data -> (colore, testo_stato)
+    stato_map = {}
     if df_ordini is not None and not df_ordini.empty:
         for _, _r in df_ordini.iterrows():
             _dt = _r.get('DT_EXP', None)
             _st = str(_r.get('ST', '')).strip().upper()
             if pd.notnull(_dt) and _st in STATO_BADGE:
                 stato_map[pd.Timestamp(_dt).date()] = STATO_BADGE[_st]
-    """
     try:
         _mtime = os.path.getmtime(PATH_STORICO_DATE) if os.path.exists(PATH_STORICO_DATE) else 0
         df_st = _carica_storico_cronistoria(_mtime)
