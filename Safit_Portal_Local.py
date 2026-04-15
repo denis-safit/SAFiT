@@ -25,10 +25,6 @@ st.markdown("""
     .urgent-row { background-color: #ffebee !important; border-left: 8px solid #f44336; } 
     .oca-row { background-color: #f5f5f5 !important; border-left: 8px solid #9e9e9e; color: #666 !important; }
     .bom-row { background-color: #f3e5f5 !important; border-left: 8px solid #9c27b0; }
-    .disp-row  { background-color: #e8f5e9 !important; border-left: 6px solid #4caf50; }
-    .acq-row2  { background-color: #e3f2fd !important; border-left: 6px solid #2196f3; }
-    .prod-row2 { background-color: #fffde7 !important; border-left: 6px solid #fbc02d; }
-    .miss-row  { background-color: #ffebee !important; border-left: 6px solid #f44336; }
     .debug-box { background-color: #f8f9fa !important; color: #333 !important; padding: 12px; border-radius: 8px; border: 1px dotted #bbb; margin-bottom: 10px; display: flex; justify-content: space-around; font-size: 13px; font-weight: bold; }
     .kpi-card { background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px; border-radius: 10px; text-align: center; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
     .kpi-val { font-size: 24px; font-weight: bold; color: #1f77b4; }
@@ -477,47 +473,37 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
         else:
             badge, urgenza, col_u, d_friola, data_label = "⚪", "Data N/D", "#9e9e9e", None, "📦 Data N/D"
 
-        # ── Titolo expander: emoji colore + badge urgenza + codice + desc + qtà ──
-        if d_rif is not None:
-            _pfx = "🔴" if giorni_friola < 0 else ("🟠" if giorni_friola <= 3 else ("🟡" if giorni_friola <= 7 else "🟢"))
-            _badge_txt = f"[{urgenza.upper()}]"
-        else:
-            _pfx, _badge_txt = "⚪", "[DATA N/D]"
-        _exp_title = f"{_pfx} {_badge_txt}  {art} — {desc}  |  {qta_tot:,} pa.".replace(",",".")
-        with st.expander(_exp_title):
-            # ── Barra temporale (solo se data confermata) ─────────────────
+        with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa. | {tipi} | {data_label}".replace(",",".")):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Quantità", f"{qta_tot:,} pa.".replace(",","."))
             if data_confermata:
+                c2.metric("A Friola entro", d_friola.strftime("%d/%m/%Y") if d_friola else "N/D")
+                c3.metric("Data consegna BTL", d_cons.strftime("%d/%m/%Y"))
+            elif data_necessita:
+                gia_val = int(gia_map.get(str(art).strip().upper(), 0))
+                c2.metric("Prima necessità (OCI)", d_necessita_str := d_rif.strftime("%d/%m/%Y"),
+                          help="Data primo ordine cliente non coperto dalla giacenza attuale")
+                c3.metric("Giacenza attuale", f"{gia_val:,} pa.".replace(",","."),
+                          delta="⚠️ Scorta esaurita" if necessita_urgente else "✅ Coperto da giacenza")
+                st.info(f"📅 BTL non ha ancora confermato la data di consegna. "
+                        f"Prima necessità calcolata dagli ordini clienti: **{d_necessita_str}**")
+            else:
+                c2.metric("A Friola entro", "N/D")
+                c3.metric("Data consegna BTL", "Non confermata")
+                st.info("📅 BTL non ha ancora confermato la data. Nessun ordine cliente aperto trovato.")
+            if d_friola and data_confermata:
+                st.markdown(f'<div style="background:{col_u};border-left:6px solid rgba(0,0,0,0.25);padding:8px 14px;border-radius:6px;margin:6px 0;color:#fff!important;font-weight:700;text-shadow:0 1px 2px rgba(0,0,0,0.4);">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
                 d_start = d_ord if d_ord is not None else d_friola - pd.Timedelta(days=30)
                 st.markdown(tbar_html(d_start, d_friola), unsafe_allow_html=True)
-            elif data_necessita:
-                gia_val         = int(gia_map.get(str(art).strip().upper(), 0))
-                d_necessita_str = d_rif.strftime("%d/%m/%Y")
-                _delta_lbl      = "⚠️ Scorta esaurita" if necessita_urgente else "✅ Coperto da giacenza"
-                _info_html      = (
-                    f'<span style="margin-right:16px;">📋 Prima necessità (OCI): <b>{d_necessita_str}</b></span>'
-                    + f'<span style="margin-right:16px;">🗄️ Giacenza: <b>{gia_val:,} pa.</b></span>'.replace(",",".")
-                    + f'<span style="background:{col_u};color:#fff;padding:2px 9px;border-radius:4px;font-weight:700;font-size:0.85rem;">⏱️ {urgenza}</span>'
-                    + f'&nbsp;&nbsp;<span style="color:#888;font-size:0.83rem;">{_delta_lbl}</span>'
-                )
-                st.markdown(f'<div style="padding:4px 2px 2px 2px;font-size:0.9rem;">{_info_html}</div>', unsafe_allow_html=True)
-            else:
-                st.caption("📅 BTL non ha ancora confermato la data. Nessun ordine cliente aperto trovato.")
+            st.markdown("**Dettaglio righe:**")
+            for _, r in g.sort_values('Data Consegna', na_position='last').iterrows():
+                d_c  = r['Data Consegna']
+                d_fs = (d_c - pd.Timedelta(days=ANTICIPO_BTL_GG)).strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
+                d_cs = d_c.strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
+                css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo','')) else 'acq-row'
+                st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pa. | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
 
-            st.markdown("<hr style='margin:6px 0;border:none;border-top:1px solid #e0e0e0;'>", unsafe_allow_html=True)
-
-            # ── Due colonne: righe ordine | istruzioni BTL ───────────────────
-            col_righe, col_istr = st.columns(2)
-
-            with col_righe:
-                st.markdown('<div style="font-weight:700;font-size:13px;color:#37474f;margin-bottom:4px;">📋 Righe ordine</div>', unsafe_allow_html=True)
-                for _, r in g.sort_values('Data Consegna', na_position='last').iterrows():
-                    d_c  = r['Data Consegna']
-                    d_fs = (d_c - pd.Timedelta(days=ANTICIPO_BTL_GG)).strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
-                    d_cs = d_c.strftime('%d/%m/%Y') if pd.notnull(d_c) else "N/D"
-                    css  = 'prod-row' if 'Lavorazione' in str(r.get('Tipo','')) else 'acq-row'
-                    st.markdown(f'<div class="status-row {css}" style="color:#1a1a1a!important;"><span>{r.get("Tipo","")} | Q: <b>{int(r["Qta Doc"]):,}</b> pa. | 📦 Friola: <b>{d_fs}</b> | Scad: {d_cs}</span></div>'.replace(",","."), unsafe_allow_html=True)
-
-            # ── Istruzioni di lavorazione ─────────────────────────────────────
+            # ── Istruzioni di lavorazione divise per OFR / OFF ────────
             istr_map  = carica_istruzioni_btl()
             art_up    = str(art).strip().upper()
             istr_list = istr_map.get(art_up, [])
@@ -642,14 +628,20 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
                 )
                 st.markdown(html, unsafe_allow_html=True)
 
-            with col_istr:
-                st.markdown('<div style="font-weight:700;font-size:13px;color:#37474f;margin-bottom:4px;">📐 Istruzioni di lavorazione</div>', unsafe_allow_html=True)
-                if istr_list:
-                    tutti = deduplica(istr_list)
-                    for istr in tutti:
-                        render_istr_block(istr, bg='#f8f9fa', border='#546e7a')
-                else:
-                    st.caption("ℹ️ Nessuna istruzione disponibile.")
+            if istr_list:
+                # Deduplicazione: un blocco per documento, riga più completa
+                tutti = deduplica(istr_list)
+
+                st.markdown(
+                    '<div style="font-weight:700;font-size:14px;margin:10px 0 6px 0;'
+                    'color:#37474f;border-bottom:2px solid #90a4ae;padding-bottom:4px;">'
+                    '&#128203; Istruzioni di lavorazione</div>',
+                    unsafe_allow_html=True
+                )
+                for istr in tutti:
+                    render_istr_block(istr, bg='#f8f9fa', border='#546e7a')
+            else:
+                st.caption("ℹ️ Nessuna istruzione disponibile per questo articolo.")
 
 @st.cache_data(ttl=1800)
 def carica_istruzioni_btl():
@@ -745,22 +737,12 @@ def render_vista_atoplast(df_res=None, filtro_famiglie=None):
             badge, urgenza, col_u, d_friola, data_label = "⚪", "Data N/D", "#9e9e9e", None, "📦 Data N/D"
 
         with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa. | {tipi} | {data_label}".replace(",",".")):
-            # ── Riga compatta: tutti i dati chiave su una sola linea ──────────
-            _friola_str = d_friola.strftime('%d/%m/%Y') if d_friola else "N/D"
-            _cons_str   = d_cons.strftime('%d/%m/%Y') if d_cons else "N/D"
-            _badge_urgenza = (
-                f'<span style="background:{col_u};color:#fff;padding:2px 10px;border-radius:4px;font-weight:700;">⏱️ {urgenza}</span>'
-                if d_friola else
-                '<span style="color:#888;">📅 Data non confermata</span>'
-            )
-            _info_html = (
-                f'<span style="margin-right:18px;">📦 Qtà: <b>{qta_tot:,} pa.</b></span>'.replace(",",".")
-                + f'<span style="margin-right:18px;">🏭 A Friola: <b>{_friola_str}</b></span>'
-                + f'<span style="margin-right:18px;">📅 Consegna: <b>{_cons_str}</b></span>'
-                + _badge_urgenza
-            )
-            st.markdown(f'<div style="padding:6px 2px 4px 2px;font-size:0.92rem;">{_info_html}</div>', unsafe_allow_html=True)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Quantità", f"{qta_tot:,} pa.".replace(",","."))
+            c2.metric("A Friola entro", d_friola.strftime("%d/%m/%Y") if d_friola else "N/D")
+            c3.metric("Data consegna", d_cons.strftime("%d/%m/%Y") if d_cons else "N/D")
             if d_friola:
+                st.markdown(f'<div style="background:{col_u};border-left:6px solid rgba(0,0,0,0.25);padding:8px 14px;border-radius:6px;margin:6px 0;color:#fff!important;font-weight:700;text-shadow:0 1px 2px rgba(0,0,0,0.4);">⏱️ {urgenza} alla consegna a Friola</div>', unsafe_allow_html=True)
                 d_start = d_ord if d_ord is not None else d_friola - pd.Timedelta(days=30)
                 st.markdown(tbar_html(d_start, d_friola), unsafe_allow_html=True)
             st.markdown("**Dettaglio righe:**")
@@ -932,30 +914,17 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
 
     with tab_ord_cli:
       # Dettaglio ordini per articolo
-      for art, g in df_cli.sort_values('DT_EXP', na_position='last').groupby('ART_KEY', sort=False):
+      for art, g in df_cli.groupby('ART_KEY'):
         desc     = g['Articolo D'].iloc[0]
         qta_tot  = int(g['Qta Residua'].sum())
         stati_g  = g['ST'].tolist()
-        # Colore expander = urgenza temporale (data consegna più vicina)
-        d_min = g['DT_EXP'].dropna().min() if g['DT_EXP'].notna().any() else None
-        if d_min is not None:
-            _gg = (pd.Timestamp(d_min) - pd.Timestamp(datetime.now())).days
-            if _gg < 0:
-                badge = "🔴"
-            elif _gg <= 3:
-                badge = "🟠"
-            elif _gg <= 7:
-                badge = "🟡"
-            else:
-                badge = "🟢"
+        # Colore expander = stato peggiore
+        if 'MANCANTE' in stati_g or 'DA PIANIFICARE' in stati_g:
+            badge = "🔴"
+        elif 'PRODUZIONE' in stati_g or 'ACQUISTO' in stati_g:
+            badge = "🟡"
         else:
-            # Nessuna data: fallback su stato ARCA
-            if 'MANCANTE' in stati_g or 'DA PIANIFICARE' in stati_g:
-                badge = "🔴"
-            elif 'PRODUZIONE' in stati_g or 'ACQUISTO' in stati_g:
-                badge = "🟡"
-            else:
-                badge = "🟢"
+            badge = "🟢"
 
         with st.expander(f"{badge} {art} — {desc} | {qta_tot:,} pa.".replace(",",".")):
             # Barra avanzamento articolo
@@ -1006,6 +975,156 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
 
 
 # ===========================================================
+
+# ===========================================================
+# CRONISTORIA ARTICOLO — OCI/OCA + OFR/OFF per data
+# ===========================================================
+@st.cache_data(ttl=1800)
+def _carica_storico_cronistoria():
+    """Carica OCI+OCA+OFR+OFF aperti (Qta Residua > 0) per la cronistoria."""
+    df = _carica_storico_base()
+    if df.empty:
+        return pd.DataFrame()
+    doc_ok = ['OCI', 'OCA', 'OFR', 'OFF']
+    df = df[df['Codice Documento'].isin(doc_ok) & (df['Qta Residua'] > 0)].copy()
+    df['Data Consegna'] = pd.to_datetime(df['Data Consegna'], errors='coerce')
+    df['_tipo'] = df['Codice Documento'].map({
+        'OCI': 'cliente', 'OCA': 'cliente',
+        'OFR': 'fornitore', 'OFF': 'fornitore',
+    })
+    return df
+
+
+def render_cronistoria_articolo(art_key):
+    """
+    Mostra la cronistoria per un articolo: OCI/OCA (richieste clienti)
+    e OFR/OFF (ordini fornitore) affiancati per data di consegna.
+    """
+    df_st = _carica_storico_cronistoria()
+    if df_st.empty:
+        return
+
+    df_art = df_st[
+        df_st['Articolo C'].astype(str).str.upper() == art_key.upper()
+    ].copy()
+
+    if df_art.empty:
+        st.caption("Nessuna riga storica trovata per questo articolo.")
+        return
+
+    df_cli = df_art[df_art['_tipo'] == 'cliente'].sort_values('Data Consegna')
+    df_forn = df_art[df_art['_tipo'] == 'fornitore'].sort_values('Data Consegna')
+
+    oggi = pd.Timestamp(datetime.now().date())
+
+    col_cli, col_forn = st.columns(2)
+
+    with col_cli:
+        st.markdown(
+            '<div style="font-size:12px;font-weight:700;color:#1f77b4;'
+            'border-bottom:2px solid #1f77b4;padding-bottom:3px;margin-bottom:6px;">'
+            '🛒 Richieste Clienti (OCI/OCA)</div>',
+            unsafe_allow_html=True
+        )
+        if df_cli.empty:
+            st.caption("Nessuna richiesta cliente aperta.")
+        else:
+            qta_tot_cli = int(df_cli['Qta Residua'].sum())
+            st.caption(f"Totale residuo: **{qta_tot_cli:,} pa.**".replace(",","."))
+            for _, r in df_cli.iterrows():
+                dc = r['Data Consegna']
+                dc_str = dc.strftime("%d/%m/%Y") if pd.notnull(dc) else "N/D"
+                qta = int(r['Qta Residua'])
+                cod_doc = str(r.get('Codice Documento',''))
+                cli = str(r.get('Cliente Fornitore CD','')).split(' - ')[-1].strip()
+                nr  = str(r.get('Numero Documento','')).strip()
+                # Colore urgenza
+                if pd.notnull(dc):
+                    gg = (dc - oggi).days
+                    if gg < 0:   bg, bc = "#ffebee", "#f44336"
+                    elif gg <= 7: bg, bc = "#fff3e0", "#ff9800"
+                    else:         bg, bc = "#e8f5e9", "#4caf50"
+                else:
+                    bg, bc = "#f5f5f5", "#9e9e9e"
+                st.markdown(
+                    f'<div style="background:{bg};border-left:4px solid {bc};'
+                    f'padding:6px 10px;border-radius:6px;margin-bottom:4px;font-size:12px;">'
+                    f'<b>📅 {dc_str}</b> &nbsp;|&nbsp; {cod_doc} N°{nr}<br>'
+                    f'<span style="color:#555;">{cli}</span> &nbsp;|&nbsp; '
+                    f'<b>{qta:,} pa.</b>'.replace(",",".")
+                    + f'</div>',
+                    unsafe_allow_html=True
+                )
+
+    with col_forn:
+        st.markdown(
+            '<div style="font-size:12px;font-weight:700;color:#ff9800;'
+            'border-bottom:2px solid #ff9800;padding-bottom:3px;margin-bottom:6px;">'
+            '🏭 Ordini Fornitore (OFR/OFF)</div>',
+            unsafe_allow_html=True
+        )
+        if df_forn.empty:
+            st.caption("Nessun ordine fornitore aperto.")
+        else:
+            qta_tot_forn = int(df_forn['Qta Residua'].sum())
+            delta = qta_tot_forn - int(df_cli['Qta Residua'].sum()) if not df_cli.empty else qta_tot_forn
+            delta_str = f"+{delta:,}".replace(",",".") if delta >= 0 else f"{delta:,}".replace(",",".")
+            delta_col = "#4caf50" if delta >= 0 else "#f44336"
+            st.caption(
+                f"Totale residuo: **{qta_tot_forn:,} pa.**".replace(",",".")
+                + f" &nbsp;<span style='color:{delta_col};font-weight:700;font-size:11px;'>"
+                  f"({delta_str} vs clienti)</span>",
+                unsafe_allow_html=False
+            )
+            st.caption(
+                f"Totale residuo: **{qta_tot_forn:,} pa.** "
+                f"({'▲' if delta >= 0 else '▼'} {abs(delta):,} vs clienti)".replace(",",".")
+            )
+            for _, r in df_forn.iterrows():
+                dc = r['Data Consegna']
+                dc_str = dc.strftime("%d/%m/%Y") if pd.notnull(dc) else "N/D"
+                qta = int(r['Qta Residua'])
+                cod_doc = str(r.get('Codice Documento',''))
+                forn = str(r.get('Cliente Fornitore CD','')).split(' - ')[-1].strip()
+                nr   = str(r.get('Numero Documento','')).strip()
+                if pd.notnull(dc):
+                    gg = (dc - oggi).days
+                    if gg < 0:    bg, bc = "#ffebee", "#f44336"
+                    elif gg <= 14: bg, bc = "#fff8e1", "#fbc02d"
+                    else:          bg, bc = "#f3e5f5", "#9c27b0"
+                else:
+                    bg, bc = "#f5f5f5", "#9e9e9e"
+                st.markdown(
+                    f'<div style="background:{bg};border-left:4px solid {bc};'
+                    f'padding:6px 10px;border-radius:6px;margin-bottom:4px;font-size:12px;">'
+                    f'<b>📅 {dc_str}</b> &nbsp;|&nbsp; {cod_doc} N°{nr}<br>'
+                    f'<span style="color:#555;">{forn}</span> &nbsp;|&nbsp; '
+                    f'<b>{qta:,} pa.</b>'.replace(",",".")
+                    + f'</div>',
+                    unsafe_allow_html=True
+                )
+
+    # Barra riepilogo copertura
+    if not df_cli.empty:
+        qta_c = int(df_cli['Qta Residua'].sum())
+        qta_f = int(df_forn['Qta Residua'].sum()) if not df_forn.empty else 0
+        pct = min(round(qta_f / qta_c * 100), 100) if qta_c > 0 else 0
+        col_bar = "#4caf50" if pct >= 100 else ("#ff9800" if pct >= 50 else "#f44336")
+        st.markdown(
+            f'<div style="margin-top:8px;font-size:11px;color:#555;">'
+            f'Copertura fornitore: <b>{pct}%</b> '
+            f'({qta_f:,} / {qta_c:,} pa.)'.replace(",",".")
+            + f'</div>',
+            unsafe_allow_html=True
+        )
+        p = min(max(pct, 0), 100)
+        st.markdown(
+            f'<div style="background:#e9ecef;border-radius:20px;height:10px;width:100%;overflow:hidden;margin:3px 0 8px 0;">'
+            f'<div style="width:{p}%;background:{col_bar};height:100%;border-radius:20px;"></div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
 # --- 5. DASHBOARD ---
 # ===========================================================
 df_res, stock_raw = load_and_process()
@@ -1096,7 +1215,7 @@ if not df_res.empty:
             'DA PIANIFICARE': 0.0,
         }
 
-        for art, g in df_in.sort_values('DT_EXP', na_position='last').groupby('ART_KEY', sort=False):
+        for art, g in df_in.groupby('ART_KEY'):
             s_i = stock_raw_in.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0, 'FIGLIO': 'NAN'})
             gia_left = float(s_i.get('GIA', 0))
             acq_left = float(s_i.get('ACQ', 0))
@@ -1362,75 +1481,11 @@ if not df_res.empty:
         if df_view.empty:
             st.info("Nessun ordine trovato con i filtri attivi.")
         else:
-            for art, g in df_view.sort_values('DT_EXP', na_position='last').groupby('ART_KEY', sort=False):
+            for art, g in df_view.groupby('ART_KEY'):
                 desc    = g['Articolo D'].iloc[0] if 'Articolo D' in g.columns else ''
                 qta_tot = int(g['Qta Residua'].sum())
-                s_i     = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0, 'FIGLIO': 'NAN'})
-
-                # ── Alloca GIA/ACQ/PROD riga per riga in ordine cronologico ──
-                _gia_left  = float(s_i.get('GIA',  0))
-                _acq_left  = float(s_i.get('ACQ',  0))
-                _prod_left = float(s_i.get('PROD', 0))
-                g_sorted   = g.sort_values('DT_EXP', na_position='last')
-
-                _righe_calcolate = []   # (riga, stato_calcolato, css_calcolato)
-                for _, r in g_sorted.iterrows():
-                    q = float(r.get('Qta Residua', 0))
-                    if q <= 0:
-                        continue
-                    # Scala GIA
-                    take_gia = min(_gia_left, q)
-                    _gia_left -= take_gia
-                    q_rem = q - take_gia
-                    if q_rem <= 0:
-                        _righe_calcolate.append((r, 'DISPONIBILE', 'disp-row'))
-                        continue
-                    # Scala ACQ
-                    take_acq = min(_acq_left, q_rem)
-                    _acq_left -= take_acq
-                    q_rem -= take_acq
-                    if q_rem <= 0:
-                        _righe_calcolate.append((r, 'ACQUISTO', 'acq-row2'))
-                        continue
-                    # Scala PROD
-                    take_prod = min(_prod_left, q_rem)
-                    _prod_left -= take_prod
-                    q_rem -= take_prod
-                    if q_rem <= 0:
-                        _righe_calcolate.append((r, 'PRODUZIONE', 'prod-row2'))
-                        continue
-                    # Resto scoperto
-                    st_orig = str(r.get('ST', '')).strip().upper()
-                    _stato = 'DA PIANIFICARE' if st_orig == 'DA PIANIFICARE' else 'MANCANTE'
-                    _righe_calcolate.append((r, _stato, 'miss-row'))
-
-                # ── Badge: data della prima riga NON completamente coperta da GIA ──
-                _prima_scoperta_data = None
-                _primo_stato_critico = None
-                for (_r, _st, _cs) in _righe_calcolate:
-                    if _st not in ('DISPONIBILE',):
-                        _prima_scoperta_data = _r.get('DT_EXP', None)
-                        _primo_stato_critico = _st
-                        break
-
-                if _prima_scoperta_data is not None and pd.notnull(_prima_scoperta_data):
-                    _gg = (pd.Timestamp(_prima_scoperta_data) - pd.Timestamp(datetime.now())).days
-                    if _gg < 0:
-                        _badge = "🔴"
-                    elif _gg <= 3:
-                        _badge = "🟠"
-                    elif _gg <= 7:
-                        _badge = "🟡"
-                    else:
-                        _badge = "🟢"
-                elif _primo_stato_critico is not None:
-                    # Data assente ma stato critico
-                    _badge = "🔴" if _primo_stato_critico in ('MANCANTE', 'DA PIANIFICARE') else "🟡"
-                else:
-                    # Tutto coperto da GIA
-                    _badge = "🟢"
-
-                with st.expander(f"{_badge} {art} — {desc} | Residuo: {qta_tot:,} pa.".replace(",",".")):
+                s_i     = stock_raw.get(art, {'GIA': 0, 'ACQ': 0, 'PROD': 0, 'FIGLIO': 'NAN'})
+                with st.expander(f"📦 {art} — {desc} | Residuo: {qta_tot:,} pa.".replace(",",".")):
                     st.markdown(
                         f'<div class="debug-box">'
                         f'<span>📦 GIA: {int(s_i["GIA"])}</span>'
@@ -1439,14 +1494,22 @@ if not df_res.empty:
                         f'</div>',
                         unsafe_allow_html=True
                     )
-                    for (r, _stato_calc, _css_calc) in _righe_calcolate:
+                    for _, r in g.sort_values('DT_EXP').iterrows():
                         tag = "📋 [OCA]" if r.get('Codice Documento') == "OCA" else "🛒 [OCI]"
                         cli = str(r.get('CLI_NAME', '')).split(' - ')[-1].strip()
                         dt  = r['DT_EXP'].strftime("%d/%m/%Y") if pd.notnull(r.get('DT_EXP')) else "N.D."
                         st.markdown(
-                            f'<div class="status-row {_css_calc}">'
+                            f'<div class="status-row {r["CS"]}">'
                             f'<span>{tag} 📅 {dt} | Q: {int(r["Qta Residua"])} pa. | {cli}</span>'
-                            f'<span><b>{_stato_calc}</b></span>'
+                            f'<span><b>{r["ST"]}</b></span>'
                             f'</div>',
                             unsafe_allow_html=True
                         )
+                    # Cronistoria: OCI/OCA + OFR/OFF affiancati per data
+                    st.markdown(
+                        '<div style="font-size:11px;font-weight:700;color:#546e7a;'
+                        'margin:12px 0 6px 0;border-top:1px solid #e0e0e0;padding-top:8px;">'
+                        '📅 Cronistoria Ordini — Clienti vs Fornitori</div>',
+                        unsafe_allow_html=True
+                    )
+                    render_cronistoria_articolo(art)
