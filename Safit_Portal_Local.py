@@ -1017,8 +1017,13 @@ def render_cronistoria_articolo(art_key):
     Mostra la cronistoria per un articolo: OCI/OCA (richieste clienti)
     e OFR/OFF (ordini fornitore) affiancati per data di consegna.
     """
-    df_st = _carica_storico_cronistoria()
+    try:
+        df_st = _carica_storico_cronistoria()
+    except Exception as e:
+        st.warning(f"Errore caricamento cronistoria: {e}")
+        return
     if df_st.empty:
+        st.caption(f"Dataset cronistoria vuoto — PATH_STORICO_DATE={PATH_STORICO_DATE}")
         return
 
     df_art = df_st[
