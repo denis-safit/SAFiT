@@ -14,7 +14,7 @@ except ImportError:
     _STORICO_DISPONIBILE = False
 
 # --- 1. CONFIGURAZIONE ---
-st.set_page_config(page_title="Safit Portal v3.8", layout="wide")
+st.set_page_config(page_title="Safit Portal v3.9", layout="wide")
 
 st.markdown("""
     <style>
@@ -971,10 +971,26 @@ def _carica_storico_cronistoria(_mtime=0):
     return df
 
 
-def render_cronistoria_articolo(art_key):
+def render_cronistoria_articolo(art_key, df_ordini=None):
     """
     Mostra la cronistoria per un articolo: OCI/OCA (richieste clienti)
     e OFR/OFF (ordini fornitore) affiancati per data di consegna.
+    # Badge stato da df_ordini (colonne ST, DT_EXP passate dal tab_det)
+    STATO_BADGE = {
+        'DISPONIBILE':    ('#4caf50', 'DISPONIBILE'),
+        'COPERTO BOM':    ('#9c27b0', 'COPERTO BOM'),
+        'ACQUISTO':       ('#2196f3', 'ACQUISTO'),
+        'PRODUZIONE':     ('#fbc02d', 'PRODUZIONE'),
+        'MANCANTE':       ('#f44336', 'MANCANTE'),
+        'DA PIANIFICARE': ('#9e9e9e', 'DA PIANIFICARE'),
+    }
+    stato_map = {}  # data -> (colore, testo_stato)
+    if df_ordini is not None and not df_ordini.empty:
+        for _, _r in df_ordini.iterrows():
+            _dt = _r.get('DT_EXP', None)
+            _st = str(_r.get('ST', '')).strip().upper()
+            if pd.notnull(_dt) and _st in STATO_BADGE:
+                stato_map[pd.Timestamp(_dt).date()] = STATO_BADGE[_st]
     """
     try:
         _mtime = os.path.getmtime(PATH_STORICO_DATE) if os.path.exists(PATH_STORICO_DATE) else 0
@@ -1028,10 +1044,21 @@ def render_cronistoria_articolo(art_key):
                     else:         bg, bc = "#e8f5e9", "#4caf50"
                 else:
                     bg, bc = "#f5f5f5", "#9e9e9e"
+                # Badge stato se disponibile
+                _dc_date = dc.date() if pd.notnull(dc) else None
+                _stato_info = stato_map.get(_dc_date, None) if _dc_date else None
+                _badge_html = ''
+                if _stato_info:
+                    _s_col, _s_txt = _stato_info
+                    _badge_html = (
+                        f' &nbsp;<span style="background:{_s_col};color:#fff;'
+                        f'padding:1px 7px;border-radius:10px;font-size:10px;'
+                        f'font-weight:700;">{_s_txt}</span>'
+                    )
                 st.markdown(
                     f'<div style="background:{bg};border-left:4px solid {bc};'
                     f'padding:6px 10px;border-radius:6px;margin-bottom:4px;font-size:12px;">'
-                    f'<b>📅 {dc_str}</b> &nbsp;|&nbsp; {cod_doc} N°{nr}<br>'
+                    f'<b>📅 {dc_str}</b> &nbsp;|&nbsp; {cod_doc} N°{nr}{_badge_html}<br>'
                     f'<span style="color:#555;">{cli}</span> &nbsp;|&nbsp; '
                     f'<b>{qta:,} pa.</b>'.replace(",",".")
                     + f'</div>',
@@ -1474,22 +1501,5 @@ if not df_res.empty:
                         f'</div>',
                         unsafe_allow_html=True
                     )
-                    for _, r in g.sort_values('DT_EXP').iterrows():
-                        tag = "📋 [OCA]" if r.get('Codice Documento') == "OCA" else "🛒 [OCI]"
-                        cli = str(r.get('CLI_NAME', '')).split(' - ')[-1].strip()
-                        dt  = r['DT_EXP'].strftime("%d/%m/%Y") if pd.notnull(r.get('DT_EXP')) else "N.D."
-                        st.markdown(
-                            f'<div class="status-row {r["CS"]}">'
-                            f'<span>{tag} 📅 {dt} | Q: {int(r["Qta Residua"])} pa. | {cli}</span>'
-                            f'<span><b>{r["ST"]}</b></span>'
-                            f'</div>',
-                            unsafe_allow_html=True
-                        )
                     # Cronistoria: OCI/OCA + OFR/OFF affiancati per data
-                    st.markdown(
-                        '<div style="font-size:11px;font-weight:700;color:#546e7a;'
-                        'margin:12px 0 6px 0;border-top:1px solid #e0e0e0;padding-top:8px;">'
-                        '📅 Cronistoria Ordini — Clienti vs Fornitori</div>',
-                        unsafe_allow_html=True
-                    )
-                    render_cronistoria_articolo(art)
+                    render_cronistoria_articolo(art, g)
