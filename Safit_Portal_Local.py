@@ -980,7 +980,8 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
 # CRONISTORIA ARTICOLO — OCI/OCA + OFR/OFF per data
 # ===========================================================
 @st.cache_data(ttl=1800)
-def _carica_storico_cronistoria():
+@st.cache_data(show_spinner=False)
+def _carica_storico_cronistoria(_mtime=0):
     """Carica OCI+OCA+OFR+OFF aperti (Qta Residua > 0) per la cronistoria.
     Legge il file storico direttamente senza skiprows (header a riga 0)."""
     path = PATH_STORICO_DATE
@@ -1018,7 +1019,8 @@ def render_cronistoria_articolo(art_key):
     e OFR/OFF (ordini fornitore) affiancati per data di consegna.
     """
     try:
-        df_st = _carica_storico_cronistoria()
+        _mtime = os.path.getmtime(PATH_STORICO_DATE) if os.path.exists(PATH_STORICO_DATE) else 0
+        df_st = _carica_storico_cronistoria(_mtime)
     except Exception as e:
         st.warning(f"Errore caricamento cronistoria: {e}")
         return
