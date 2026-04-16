@@ -240,6 +240,14 @@ def load_and_process():
                     if (s['GIA'] + s['ACQ']) >= qta_ordine: stato, colore = 'ACQUISTO', 'acq-row'
                     elif (s['GIA'] + s['ACQ'] + s['PROD']) >= qta_ordine: stato, colore = 'PRODUZIONE', 'prod-row'
                     else: stato, colore = 'MANCANTE', 'urgent-row'
+                    # Scala comunque la GIA residua: un OCI non coperto consuma
+                    # la GIA disponibile cosi' i clienti successivi non la trovano libera
+                    if art_code in curr_stocks:
+                        gia_consumata = min(curr_stocks[art_code]['GIA'], qta_ordine)
+                        curr_stocks[art_code]['GIA'] -= gia_consumata
+                        qta_rem = qta_ordine - gia_consumata
+                        acq_consumato = min(curr_stocks[art_code].get('ACQ', 0), qta_rem)
+                        curr_stocks[art_code]['ACQ'] = curr_stocks[art_code].get('ACQ', 0) - acq_consumato
 
             res = row.to_dict()
             res.update({'ST': stato, 'CS': colore, 'ART_KEY': art_code, 'DT_EXP': row[c_dat], 'CLI_NAME': str(row[c_cli]), 'DATA_ORD': pd.to_datetime(row.get('Data', None), errors='coerce')})
