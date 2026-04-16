@@ -998,11 +998,11 @@ def render_cronistoria_articolo(art_key, df_ordini=None):
                 # Colore urgenza
                 if pd.notnull(dc):
                     gg = (dc - oggi).days
-                    if gg < 0:   bg, bc = "#ffebee", "#f44336"
-                    elif gg <= 7: bg, bc = "#fff3e0", "#ff9800"
-                    else:         bg, bc = "#e8f5e9", "#4caf50"
+                    if gg < 0:   bc = "#f44336"
+                    elif gg <= 7: bc = "#ff9800"
+                    else:         bc = "#4caf50"
                 else:
-                    bg, bc = "#f5f5f5", "#9e9e9e"
+                    bc = "#9e9e9e"
                 # Badge stato se disponibile
                 _dc_date = dc.date() if pd.notnull(dc) else None
                 _stato_info = stato_map.get(_dc_date, None) if _dc_date else None
@@ -1015,12 +1015,11 @@ def render_cronistoria_articolo(art_key, df_ordini=None):
                         f'font-weight:700;">{_s_txt}</span>'
                     )
                 st.markdown(
-                    f'<div style="background:{bg};border-left:4px solid {bc};'
-                    f'padding:8px 12px;border-radius:6px;margin-bottom:4px;font-size:14px;'
-                    f'color:#1a1a1a !important;">'
-                    f'<span style="color:#1a1a1a !important;"><b>📅 {dc_str}</b> &nbsp;|&nbsp; {cod_doc} N°{nr}{_badge_html}</span><br>'
-                    f'<span style="color:#333 !important;font-size:13px;">{cli}</span> &nbsp;|&nbsp; '
-                    f'<span style="color:#1a1a1a !important;"><b>{qta:,} pa.</b></span>'.replace(",",".")
+                    f'<div style="border-left:4px solid {bc};'
+                    f'padding:8px 12px;border-radius:6px;margin-bottom:4px;font-size:14px;">'
+                    f'<b>📅 {dc_str}</b> &nbsp;|&nbsp; {cod_doc} N°{nr}{_badge_html}<br>'
+                    f'<span style="font-size:13px;">{cli}</span> &nbsp;|&nbsp; '
+                    f'<b>{qta:,} pa.</b>'.replace(",",".")
                     + f'</div>',
                     unsafe_allow_html=True
                 )
@@ -1056,18 +1055,17 @@ def render_cronistoria_articolo(art_key, df_ordini=None):
                 nr   = str(r.get('Numero Documento','')).strip()
                 if pd.notnull(dc):
                     gg = (dc - oggi).days
-                    if gg < 0:    bg, bc = "#ffebee", "#f44336"
-                    elif gg <= 14: bg, bc = "#fff8e1", "#fbc02d"
-                    else:          bg, bc = "#f3e5f5", "#9c27b0"
+                    if gg < 0:    bc = "#f44336"
+                    elif gg <= 14: bc = "#fbc02d"
+                    else:          bc = "#9c27b0"
                 else:
-                    bg, bc = "#f5f5f5", "#9e9e9e"
+                    bc = "#9e9e9e"
                 st.markdown(
-                    f'<div style="background:{bg};border-left:4px solid {bc};'
-                    f'padding:8px 12px;border-radius:6px;margin-bottom:4px;font-size:14px;'
-                    f'color:#1a1a1a !important;">'
-                    f'<span style="color:#1a1a1a !important;"><b>📅 {dc_str}</b> &nbsp;|&nbsp; {cod_doc} N°{nr}</span><br>'
-                    f'<span style="color:#333 !important;font-size:13px;">{forn}</span> &nbsp;|&nbsp; '
-                    f'<span style="color:#1a1a1a !important;"><b>{qta:,} pa.</b></span>'.replace(",",".")
+                    f'<div style="border-left:4px solid {bc};'
+                    f'padding:8px 12px;border-radius:6px;margin-bottom:4px;font-size:14px;">'
+                    f'<b>📅 {dc_str}</b> &nbsp;|&nbsp; {cod_doc} N°{nr}<br>'
+                    f'<span style="font-size:13px;">{forn}</span> &nbsp;|&nbsp; '
+                    f'<b>{qta:,} pa.</b>'.replace(",",".")
                     + f'</div>',
                     unsafe_allow_html=True
                 )
