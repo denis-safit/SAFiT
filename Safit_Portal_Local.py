@@ -36,6 +36,14 @@ st.markdown("""
     .kpi-card { background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px; border-radius: 10px; text-align: center; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
     .kpi-val { font-size: 24px; font-weight: bold; color: #1f77b4; }
     .user-info { padding: 10px; background: #f8f9fa; border-radius: 5px; border: 1px solid #eee; margin-bottom: 20px; text-align: center; }
+    /* Dark mode: forza testo leggibile in tutte le div inline con sfondo chiaro */
+    [data-theme="dark"] div[style*="background:#"] { color: #1a1a1a !important; }
+    [data-theme="dark"] div[style*="background:#"] span { color: #1a1a1a !important; }
+    [data-theme="dark"] div[style*="background:#"] b { color: #1a1a1a !important; }
+    [data-theme="dark"] .debug-box { background-color: #1e1e3a !important; color: #e0e0e0 !important; border-color: #4a4a8a !important; }
+    [data-theme="dark"] .debug-box * { color: #e0e0e0 !important; }
+    [data-theme="dark"] .kpi-card { background-color: #1e1e2e !important; border-color: #444 !important; }
+    [data-theme="dark"] .kpi-val { color: #64b5f6 !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -211,21 +219,28 @@ def load_and_process():
         for index, row in df_orders.iterrows():
             art_code = normalize_art_code(row.get(c_art, ''))
             qta_ordine = float(row[c_qta])
-            fonte = get_coverage(art_code, qta_ordine, curr_stocks)
-            
-            if fonte:
-                if str(fonte).strip().upper() == art_code:
-                    stato, colore = "DISPONIBILE", "on-time-row"
-                else:
-                    stato, colore = "COPERTO BOM", "bom-row"
-            else:
+
+            # OCA = ordine previsionale: NON scala la GIA
+            if row[c_tipo] == 'OCA':
                 s = curr_stocks.get(art_code, {'GIA':0, 'ACQ': 0, 'PROD': 0})
-                if (s['GIA'] + s['ACQ']) >= qta_ordine: stato, colore = "ACQUISTO", "acq-row"
-                elif (s['GIA'] + s['ACQ'] + s['PROD']) >= qta_ordine: stato, colore = "PRODUZIONE", "prod-row"
-                else: stato, colore = "MANCANTE", "urgent-row"
-            
-            if row[c_tipo] == 'OCA' and stato == "MANCANTE": stato, colore = "DA PIANIFICARE", "oca-row"
-            
+                if s['GIA'] >= qta_ordine: stato, colore = 'DISPONIBILE', 'on-time-row'
+                elif (s['GIA'] + s['ACQ']) >= qta_ordine: stato, colore = 'ACQUISTO', 'acq-row'
+                elif (s['GIA'] + s['ACQ'] + s['PROD']) >= qta_ordine: stato, colore = 'PRODUZIONE', 'prod-row'
+                else: stato, colore = 'DA PIANIFICARE', 'oca-row'
+            else:
+                # OCI = impegno reale: scala la GIA
+                fonte = get_coverage(art_code, qta_ordine, curr_stocks)
+                if fonte:
+                    if str(fonte).strip().upper() == art_code:
+                        stato, colore = 'DISPONIBILE', 'on-time-row'
+                    else:
+                        stato, colore = 'COPERTO BOM', 'bom-row'
+                else:
+                    s = curr_stocks.get(art_code, {'GIA':0, 'ACQ': 0, 'PROD': 0})
+                    if (s['GIA'] + s['ACQ']) >= qta_ordine: stato, colore = 'ACQUISTO', 'acq-row'
+                    elif (s['GIA'] + s['ACQ'] + s['PROD']) >= qta_ordine: stato, colore = 'PRODUZIONE', 'prod-row'
+                    else: stato, colore = 'MANCANTE', 'urgent-row'
+
             res = row.to_dict()
             res.update({'ST': stato, 'CS': colore, 'ART_KEY': art_code, 'DT_EXP': row[c_dat], 'CLI_NAME': str(row[c_cli]), 'DATA_ORD': pd.to_datetime(row.get('Data', None), errors='coerce')})
             final_results.append(res)
@@ -728,48 +743,16 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
         st.info("Nessun ordine aperto al momento.")
         return
 
-    # KPI cliente
-    tot_qta   = int(df_cli['Qta Residua'].sum())
-    # Calcolo allocando la disponibilità (GIA/ACQ/PROD) sulle righe di ciascun articolo
-    # in ordine di consegna: così le quantità coperte "in parte" da GIA finiscono nei PRONTI.
-    pronti_gia = 0.0
-    in_acquisto = 0.0
-    in_produzione = 0.0
-    mancanti = 0.0
-    for art, g in df_cli.groupby('ART_KEY'):
-        s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
-        gia_left = float(s_i.get('GIA', 0))
-        acq_left = float(s_i.get('ACQ', 0))
-        prod_left = float(s_i.get('PROD', 0))
-        g_sorted = g.sort_values(by='DT_EXP') if 'DT_EXP' in g.columns else g
-        for _, r in g_sorted.iterrows():
-            q = float(r.get('Qta Residua', 0))
-            if q <= 0:
-                continue
-            # Prima copertura con GIA
-            take = min(gia_left, q)
-            pronti_gia += take
-            gia_left -= take
-            q -= take
-            if q <= 0:
-                continue
-            # Poi copertura con ACQ
-            take = min(acq_left, q)
-            in_acquisto += take
-            acq_left -= take
-            q -= take
-            if q <= 0:
-                continue
-            # Poi copertura con PROD
-            take = min(prod_left, q)
-            in_produzione += take
-            prod_left -= take
-            q -= take
-            if q > 0:
-                mancanti += q
+    # KPI cliente — usa lo stato ST già calcolato dal motore (che alloca GIA su tutti i clienti
+    # in ordine di data, quindi riflette la disponibilità reale per questo cliente)
+    tot_qta = int(df_cli['Qta Residua'].sum())
+    pronti_gia    = float(df_cli[df_cli['ST'].isin(['DISPONIBILE','COPERTO BOM'])]['Qta Residua'].sum())
+    in_acquisto   = float(df_cli[df_cli['ST'] == 'ACQUISTO']['Qta Residua'].sum())
+    in_produzione = float(df_cli[df_cli['ST'] == 'PRODUZIONE']['Qta Residua'].sum())
+    mancanti      = float(df_cli[df_cli['ST'].isin(['MANCANTE','DA PIANIFICARE'])]['Qta Residua'].sum())
 
-    n_pronti = int(round(pronti_gia))
-    n_lavoro = int(round(in_acquisto + in_produzione))
+    n_pronti   = int(round(pronti_gia))
+    n_lavoro   = int(round(in_acquisto + in_produzione))
     n_mancanti = int(round(mancanti))
     pct_pronto = round(n_pronti / tot_qta * 100) if tot_qta > 0 else 0
 
@@ -793,52 +776,24 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
     # Accumulo per etichetta del grafico
     qty_by_label = {k: 0.0 for k in label_key_by_st.values()}
 
-    for art, g in df_cli.groupby('ART_KEY'):
-        s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
-        gia_left = float(s_i.get('GIA', 0))
-        acq_left = float(s_i.get('ACQ', 0))
-        prod_left = float(s_i.get('PROD', 0))
-        g_sorted = g.sort_values(by='DT_EXP') if 'DT_EXP' in g.columns else g
-
-        for _, r in g_sorted.iterrows():
-            q = float(r.get('Qta Residua', 0))
-            if q <= 0:
-                continue
-
-            # Portion split: GIA -> PRONTI, poi ACQ -> IN ARRIVO, poi PROD -> IN LAVORAZIONE
-            take_gia = min(gia_left, q)
-            gia_left -= take_gia
-            q_rem = q - take_gia
-
-            if take_gia > 0:
-                gia_label = 'Pronto (componente)' if str(r.get('ST', '')).strip().upper() == 'COPERTO BOM' else 'Pronto per la spedizione'
-                qty_by_label[gia_label] += take_gia
-
-            if q_rem <= 0:
-                continue
-
-            take_acq = min(acq_left, q_rem)
-            acq_left -= take_acq
-            q_rem -= take_acq
-            if take_acq > 0:
-                qty_by_label['In arrivo a magazzino'] += take_acq
-
-            if q_rem <= 0:
-                continue
-
-            take_prod = min(prod_left, q_rem)
-            prod_left -= take_prod
-            q_rem -= take_prod
-            if take_prod > 0:
-                qty_by_label['In lavorazione'] += take_prod
-
-            # Resto scoperto: usiamo lo stato originale (MANCANTE/DA PIANIFICARE)
-            if q_rem > 0:
-                st_line = str(r.get('ST', '')).strip().upper()
-                if st_line == 'DA PIANIFICARE':
-                    qty_by_label['Da confermare'] += q_rem
-                else:
-                    qty_by_label['In pianificazione'] += q_rem
+    # Grafico torta — usa ST del motore (già allocato correttamente su tutti i clienti)
+    for _, r in df_cli.iterrows():
+        q = float(r.get('Qta Residua', 0))
+        if q <= 0:
+            continue
+        st_line = str(r.get('ST', '')).strip().upper()
+        if st_line == 'DISPONIBILE':
+            qty_by_label['Pronto per la spedizione'] += q
+        elif st_line == 'COPERTO BOM':
+            qty_by_label['Pronto (componente)'] += q
+        elif st_line == 'ACQUISTO':
+            qty_by_label['In arrivo a magazzino'] += q
+        elif st_line == 'PRODUZIONE':
+            qty_by_label['In lavorazione'] += q
+        elif st_line == 'DA PIANIFICARE':
+            qty_by_label['Da confermare'] += q
+        else:
+            qty_by_label['In pianificazione'] += q
 
     df_torta = (
         pd.DataFrame(
@@ -896,18 +851,10 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
             # "Disponibile" per il cliente deve riflettere quanta parte della richiesta
             # può essere coperta dalla sola GIACENZA (GIA), anche se la riga è classificata
             # come "ACQUISTO" perché la GIA non è sufficiente a coprire tutto.
-            s_i = stock_raw.get(normalize_art_code(art), {'GIA': 0, 'ACQ': 0, 'PROD': 0})
-            gia_left = float(s_i.get('GIA', 0))
-            qta_pronta = 0.0
-            g_sorted = g.sort_values(by='DT_EXP') if 'DT_EXP' in g.columns else g
-            for _, r in g_sorted.iterrows():
-                q = float(r.get('Qta Residua', 0))
-                take = min(gia_left, q)
-                qta_pronta += take
-                gia_left -= take
-                if gia_left <= 0:
-                    break
-            qta_pronta = int(round(qta_pronta))
+            # Barra avanzamento — usa ST del motore per coerenza con allocazione globale GIA
+            qta_pronta = int(round(float(
+                g[g['ST'].isin(['DISPONIBILE','COPERTO BOM'])]['Qta Residua'].sum()
+            )))
             pct_art    = round(qta_pronta / qta_tot * 100) if qta_tot > 0 else 0
             bar_col    = '#4caf50' if pct_art >= 100 else ('#fbc02d' if pct_art > 0 else '#f44336')
             st.markdown(
@@ -1022,7 +969,7 @@ def render_cronistoria_articolo(art_key, df_ordini=None):
 
     with col_cli:
         st.markdown(
-            '<div style="font-size:12px;font-weight:700;color:#1f77b4;'
+            '<div style="font-size:13px;font-weight:700;color:#1f77b4;'
             'border-bottom:2px solid #1f77b4;padding-bottom:3px;margin-bottom:6px;">'
             '🛒 Richieste Clienti (OCI/OCA)</div>',
             unsafe_allow_html=True
@@ -1060,10 +1007,11 @@ def render_cronistoria_articolo(art_key, df_ordini=None):
                     )
                 st.markdown(
                     f'<div style="background:{bg};border-left:4px solid {bc};'
-                    f'padding:6px 10px;border-radius:6px;margin-bottom:4px;font-size:12px;">'
-                    f'<b>📅 {dc_str}</b> &nbsp;|&nbsp; {cod_doc} N°{nr}{_badge_html}<br>'
-                    f'<span style="color:#555;">{cli}</span> &nbsp;|&nbsp; '
-                    f'<b>{qta:,} pa.</b>'.replace(",",".")
+                    f'padding:8px 12px;border-radius:6px;margin-bottom:4px;font-size:14px;'
+                    f'color:#1a1a1a !important;">'
+                    f'<span style="color:#1a1a1a !important;"><b>📅 {dc_str}</b> &nbsp;|&nbsp; {cod_doc} N°{nr}{_badge_html}</span><br>'
+                    f'<span style="color:#333 !important;font-size:13px;">{cli}</span> &nbsp;|&nbsp; '
+                    f'<span style="color:#1a1a1a !important;"><b>{qta:,} pa.</b></span>'.replace(",",".")
                     + f'</div>',
                     unsafe_allow_html=True
                 )
@@ -1106,10 +1054,11 @@ def render_cronistoria_articolo(art_key, df_ordini=None):
                     bg, bc = "#f5f5f5", "#9e9e9e"
                 st.markdown(
                     f'<div style="background:{bg};border-left:4px solid {bc};'
-                    f'padding:6px 10px;border-radius:6px;margin-bottom:4px;font-size:12px;">'
-                    f'<b>📅 {dc_str}</b> &nbsp;|&nbsp; {cod_doc} N°{nr}<br>'
-                    f'<span style="color:#555;">{forn}</span> &nbsp;|&nbsp; '
-                    f'<b>{qta:,} pa.</b>'.replace(",",".")
+                    f'padding:8px 12px;border-radius:6px;margin-bottom:4px;font-size:14px;'
+                    f'color:#1a1a1a !important;">'
+                    f'<span style="color:#1a1a1a !important;"><b>📅 {dc_str}</b> &nbsp;|&nbsp; {cod_doc} N°{nr}</span><br>'
+                    f'<span style="color:#333 !important;font-size:13px;">{forn}</span> &nbsp;|&nbsp; '
+                    f'<span style="color:#1a1a1a !important;"><b>{qta:,} pa.</b></span>'.replace(",",".")
                     + f'</div>',
                     unsafe_allow_html=True
                 )
@@ -1121,7 +1070,7 @@ def render_cronistoria_articolo(art_key, df_ordini=None):
         pct = min(round(qta_f / qta_c * 100), 100) if qta_c > 0 else 0
         col_bar = "#4caf50" if pct >= 100 else ("#ff9800" if pct >= 50 else "#f44336")
         st.markdown(
-            f'<div style="margin-top:8px;font-size:11px;color:#555;">'
+            f'<div style="margin-top:8px;font-size:12px;color:#1a1a1a;">'
             f'Copertura fornitore: <b>{pct}%</b> '
             f'({qta_f:,} / {qta_c:,} pa.)'.replace(",",".")
             + f'</div>',
