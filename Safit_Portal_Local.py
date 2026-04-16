@@ -18,14 +18,21 @@ st.set_page_config(page_title="Safit Portal v3.9", layout="wide")
 
 st.markdown("""
     <style>
-    .status-row { display: flex; justify-content: space-between; padding: 10px; border-radius: 8px; margin-bottom: 6px; border: 1px solid #ddd; color: #000 !important; font-size: 14px; }
-    .on-time-row { background-color: #e8f5e9 !important; border-left: 6px solid #4caf50; } 
-    .acq-row { background-color: #e3f2fd !important; border-left: 6px solid #2196f3; }    
-    .prod-row { background-color: #fffde7 !important; border-left: 6px solid #fbc02d; }   
-    .urgent-row { background-color: #ffebee !important; border-left: 8px solid #f44336; } 
-    .oca-row { background-color: #f5f5f5 !important; border-left: 8px solid #9e9e9e; color: #666 !important; }
-    .bom-row { background-color: #f3e5f5 !important; border-left: 8px solid #9c27b0; }
-    .debug-box { background-color: #f8f9fa !important; color: #333 !important; padding: 12px; border-radius: 8px; border: 1px dotted #bbb; margin-bottom: 10px; display: flex; justify-content: space-around; font-size: 13px; font-weight: bold; }
+    .status-row { display: flex; justify-content: space-between; padding: 10px; border-radius: 8px; margin-bottom: 6px; border: 1px solid #555; color: #1a1a1a !important; font-size: 17px; font-weight: 500; }
+    .status-row * { color: #1a1a1a !important; }
+    .on-time-row { background-color: #c8e6c9 !important; border-left: 6px solid #2e7d32; }
+    .acq-row     { background-color: #bbdefb !important; border-left: 6px solid #1565c0; }
+    .prod-row    { background-color: #fff9c4 !important; border-left: 6px solid #f57f17; }
+    .urgent-row  { background-color: #ffcdd2 !important; border-left: 8px solid #c62828; }
+    .oca-row     { background-color: #e0e0e0 !important; border-left: 8px solid #616161; color: #333 !important; }
+    .oca-row *   { color: #333 !important; }
+    .bom-row     { background-color: #e1bee7 !important; border-left: 8px solid #6a1b9a; }
+    .disp-row    { background-color: #c8e6c9 !important; border-left: 6px solid #2e7d32; }
+    .acq-row2    { background-color: #bbdefb !important; border-left: 6px solid #1565c0; }
+    .prod-row2   { background-color: #fff9c4 !important; border-left: 6px solid #f57f17; }
+    .miss-row    { background-color: #ffcdd2 !important; border-left: 6px solid #c62828; }
+    .debug-box { background-color: #e8eaf6 !important; color: #1a1a2e !important; padding: 12px; border-radius: 8px; border: 2px solid #9fa8da; margin-bottom: 10px; display: flex; justify-content: space-around; font-size: 14px; font-weight: bold; }
+    .debug-box * { color: #1a1a2e !important; }
     .kpi-card { background-color: #ffffff; border: 1px solid #e0e0e0; padding: 15px; border-radius: 10px; text-align: center; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
     .kpi-val { font-size: 24px; font-weight: bold; color: #1f77b4; }
     .user-info { padding: 10px; background: #f8f9fa; border-radius: 5px; border: 1px solid #eee; margin-bottom: 20px; text-align: center; }
