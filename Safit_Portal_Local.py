@@ -852,6 +852,7 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
             # può essere coperta dalla sola GIACENZA (GIA), anche se la riga è classificata
             # come "ACQUISTO" perché la GIA non è sufficiente a coprire tutto.
             # Barra avanzamento — usa ST del motore per coerenza con allocazione globale GIA
+            g_sorted = g.sort_values(by='DT_EXP') if 'DT_EXP' in g.columns else g
             qta_pronta = int(round(float(
                 g[g['ST'].isin(['DISPONIBILE','COPERTO BOM'])]['Qta Residua'].sum()
             )))
