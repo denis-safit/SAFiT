@@ -114,7 +114,7 @@ def get_user_db():
             df_u.columns = [str(c).strip() for c in df_u.columns]
             return df_u.set_index('username')[['password', 'cliente_arca']].T.to_dict('list')
         except: pass
-    return {"safit_admin": ["admin2026", "TUTTI"], "btl": ["btl2026", "BTL"], "atoplast": ["atoplast2026", "ATOPLAST"]}
+    return {"safit_admin": ["admin2026", "TUTTI"], "btl": ["btl2026", "BTL"], "atoplast": ["atoplast2026", "ATOPLAST"], "zak": ["zak799", "ZAK"]}
 
 def clean_num(serie):
     s = serie.astype(str).str.replace(' ', '').str.replace('\xa0', '')
@@ -1093,6 +1093,98 @@ def render_cronistoria_articolo(art_key, df_ordini=None):
             unsafe_allow_html=True
         )
 
+
+# ===========================================================
+# FUNZIONE VISTA ZAK — Giacenze magazzino Barletta (Zaccagni)
+# ===========================================================
+@st.cache_data(show_spinner=False)
+def carica_giacenze_zak(_mtime=0):
+    """Carica articoli con GIA_SUD > 0 da Avanzamento_access.xlsx."""
+    if not os.path.exists(PATH_AVANZAMENTO):
+        return pd.DataFrame()
+    try:
+        df_av = pd.read_excel(PATH_AVANZAMENTO)
+        df_av.columns = [str(c).strip() for c in df_av.columns]
+        df_av['GIA_SUD'] = pd.to_numeric(df_av['GIA_SUD'], errors='coerce').fillna(0)
+        df_zak = df_av[df_av['GIA_SUD'] > 0][['CODICE','GIA_SUD']].copy()
+        df_zak.columns = ['Codice Articolo', 'Giacenza (pa.)']
+        # Prende descrizioni dallo storico
+        if os.path.exists(PATH_STORICO_DATE):
+            try:
+                df_st = pd.read_excel(PATH_STORICO_DATE, skiprows=2)
+                df_st.columns = [str(c).strip() for c in df_st.columns]
+                df_st['Articolo C'] = df_st['Articolo C'].astype(str).str.strip()
+                desc_map = (df_st.dropna(subset=['Articolo C','Articolo D'])
+                            .drop_duplicates('Articolo C')
+                            .set_index('Articolo C')['Articolo D']
+                            .to_dict())
+                df_zak['Descrizione'] = df_zak['Codice Articolo'].map(desc_map).fillna('N/D')
+            except Exception:
+                df_zak['Descrizione'] = 'N/D'
+        else:
+            df_zak['Descrizione'] = 'N/D'
+        return df_zak[['Codice Articolo', 'Descrizione', 'Giacenza (pa.)']].sort_values('Codice Articolo').reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame()
+
+
+def render_vista_zak():
+    """Vista ZaK — Giacenze magazzino Barletta (Zaccagni)."""
+    st.title("🏪 Giacenze Magazzino ZaK — Barletta")
+    st.caption("Giacenze presso **Zaccagni** (GIA_SUD) — aggiornate ad ogni refresh portale")
+
+    _mtime = os.path.getmtime(PATH_AVANZAMENTO) if os.path.exists(PATH_AVANZAMENTO) else 0
+    df_zak = carica_giacenze_zak(_mtime)
+
+    if df_zak.empty:
+        st.info("Nessuna giacenza trovata presso Zaccagni.")
+        return
+
+    # KPI riepilogo
+    tot_articoli = len(df_zak)
+    tot_paia     = int(df_zak['Giacenza (pa.)'].sum())
+    k1, k2 = st.columns(2)
+    k1.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#1f77b4">ARTICOLI PRESENTI</div><div class="kpi-val">{tot_articoli}</div></div>', unsafe_allow_html=True)
+    k2.markdown(f'<div class="kpi-card"><div style="font-size:11px;color:#4caf50">TOTALE PAIA</div><div class="kpi-val">{tot_paia:,}</div></div>'.replace(",","."), unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # Cerca articolo
+    search_zak = st.text_input("🔍 Cerca codice o descrizione:", key="zak_search").upper()
+    df_view = df_zak.copy()
+    if search_zak:
+        mask = (df_view['Codice Articolo'].str.upper().str.contains(search_zak, na=False) |
+                df_view['Descrizione'].str.upper().str.contains(search_zak, na=False))
+        df_view = df_view[mask]
+
+    st.caption(f"Visualizzati: **{len(df_view)}** articoli su {tot_articoli}")
+
+    # Tabella principale
+    st.dataframe(
+        df_view.style.format({'Giacenza (pa.)': '{:,.0f}'.replace(',','.')})
+               .bar(subset=['Giacenza (pa.)'], color='#bbdefb'),
+        use_container_width=True,
+        hide_index=True,
+        height=min(600, 38 + len(df_view) * 35),
+    )
+
+    # Download Excel
+    from io import BytesIO
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine='xlsxwriter') as w:
+        df_view.to_excel(w, index=False, sheet_name='Giacenze_ZaK')
+        wb = w.book
+        ws = w.sheets['Giacenze_ZaK']
+        ws.set_column(0, 0, 22)
+        ws.set_column(1, 1, 55)
+        ws.set_column(2, 2, 18)
+    st.download_button(
+        "📥 Esporta Excel",
+        data=buf.getvalue(),
+        file_name=f"ZaK_Giacenze_{datetime.now().strftime('%d%m%Y')}.xlsx",
+        use_container_width=True,
+    )
+
 # --- 5. DASHBOARD ---
 # ===========================================================
 df_res, stock_raw = load_and_process()
@@ -1122,6 +1214,7 @@ if not df_res.empty:
         permesso_up = st.session_state.permesso.upper()
         is_btl      = "BTL" in permesso_up and permesso_up != "TUTTI"
         is_atoplast = "ATOPLAST" in permesso_up and permesso_up != "TUTTI"
+        is_zak      = "ZAK" in permesso_up and permesso_up != "TUTTI"
         if is_admin:
             sel_cli = st.selectbox("Seleziona Cliente:", ["TUTTI"] + sorted(df_res['CLI_NAME'].unique().tolist()))
         else:
@@ -1134,6 +1227,7 @@ if not df_res.empty:
     permesso_up = st.session_state.permesso.upper()
     is_btl      = "BTL" in permesso_up and permesso_up != "TUTTI"
     is_atoplast = "ATOPLAST" in permesso_up and permesso_up != "TUTTI"
+    is_zak      = "ZAK" in permesso_up and permesso_up != "TUTTI"
 
     # ===========================================================
     # VISTE FORNITORI/SPECIALI — gestite prima del filtro cliente
@@ -1145,6 +1239,10 @@ if not df_res.empty:
 
     if is_atoplast:
         render_vista_atoplast(df_res)
+        st.stop()
+
+    if is_zak:
+        render_vista_zak()
         st.stop()
 
     # Filtro cliente — solo per utenti cliente normali e admin
