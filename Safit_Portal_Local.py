@@ -410,8 +410,8 @@ def _carica_storico_base():
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=1800)
-def carica_btl_da_storico():
+@st.cache_data(show_spinner=False)
+def carica_btl_da_storico(_mtime=0):
     """Carica OFR + OFF di BTL aperti (Qta Residua > 0). Data Consegna solo se presente in ARCA."""
     df = _carica_storico_base()
     if df.empty:
@@ -435,7 +435,8 @@ def render_vista_btl(df_res=None, filtro_famiglie=None):
     st.title("🏭 Lavorazioni & Acquisti BTL")
     st.caption(f"Anticipo consegna a Friola: **{ANTICIPO_BTL_GG} giorni** prima della data consegna")
 
-    df_btl_storico = carica_btl_da_storico()
+    _mtime = os.path.getmtime(PATH_STORICO_DATE) if os.path.exists(PATH_STORICO_DATE) else 0
+    df_btl_storico = carica_btl_da_storico(_mtime)
     if df_btl_storico.empty:
         st.info("Nessun ordine BTL trovato. Verifica che il file righe_ordini_storico_con_date.xlsx sia presente.")
         return
@@ -654,8 +655,8 @@ def carica_istruzioni_btl():
         return {}
 
 
-@st.cache_data(ttl=1800)
-def carica_atoplast_da_storico():
+@st.cache_data(show_spinner=False)
+def carica_atoplast_da_storico(_mtime=0):
     """Carica OFR + OFF di Atoplast aperti (Qta Residua > 0). Data Consegna solo se presente in ARCA."""
     df = _carica_storico_base()
     if df.empty:
@@ -677,7 +678,8 @@ def render_vista_atoplast(df_res=None, filtro_famiglie=None):
     st.title("🏭 Lavorazioni & Acquisti Atoplast")
     st.caption(f"Anticipo consegna a Friola: **{ANTICIPO_ATOPLAST_GG} giorni** prima della data consegna")
 
-    df_atp_storico = carica_atoplast_da_storico()
+    _mtime = os.path.getmtime(PATH_STORICO_DATE) if os.path.exists(PATH_STORICO_DATE) else 0
+    df_atp_storico = carica_atoplast_da_storico(_mtime)
     if df_atp_storico.empty:
         st.info("Nessun ordine Atoplast trovato. Verifica che il file righe_ordini_storico_con_date.xlsx sia presente.")
         return
