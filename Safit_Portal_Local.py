@@ -1161,7 +1161,7 @@ def render_vista_zak():
 
     # Tabella principale
     st.dataframe(
-        df_view.style.format({'Giacenza (pa.)': '{:,.0f}'.replace(',','.')})
+        df_view.style.format({'Giacenza (pa.)': lambda x: f"{int(x):,}".replace(',','.')})
                .bar(subset=['Giacenza (pa.)'], color='#bbdefb'),
         use_container_width=True,
         hide_index=True,
@@ -1383,8 +1383,8 @@ if not df_res.empty:
     st.session_state.filtro_famiglie = [] if _sel_fam == _TUTTI else [_sel_fam]
     st.session_state.filtro_stati    = [] if _sel_sta == _TUTTI else [_sel_sta]
 
-    tab_det, tab_op, tab_kpi, tab_stor, tab_btl, tab_atp = st.tabs(
-        ["🔍 Dettaglio Ordini", "📋 KPI Operativi", "📊 KPI Avanzati", "📈 KPI Storici", "🏭 Lavorazioni BTL", "🔵 Lavorazioni Atoplast"]
+    tab_det, tab_op, tab_kpi, tab_stor, tab_btl, tab_atp, tab_zak = st.tabs(
+        ["🔍 Dettaglio Ordini", "📋 KPI Operativi", "📊 KPI Avanzati", "📈 KPI Storici", "🏭 Lavorazioni BTL", "🔵 Lavorazioni Atoplast", "🏪 ZaK Barletta"]
     )
 
     with tab_op:
@@ -1543,6 +1543,9 @@ if not df_res.empty:
     with tab_atp:
         render_vista_atoplast(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
 
+
+    with tab_zak:
+        render_vista_zak()
     with tab_det:
         if df_view.empty:
             st.info("Nessun ordine trovato con i filtri attivi.")
