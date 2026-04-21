@@ -535,13 +535,14 @@ def render_kpi_qualita(filtro_cliente=None, filtro_famiglie=None):
                  "Ultimi 2 anni","Tutto lo storico","Intervallo personalizzato"],
                 index=2, key=f"{_key}_periodo")
         with c2:
-            fornitori_disp = sorted(
-                df_all[df_all['Codice Documento'].isin(['CFF','CFR'])]
-                ['Cliente'].dropna().unique().tolist()
-            )
-            sel_forn = st.multiselect("Filtra fornitore (per ritardi)",
-                                      fornitori_disp, key=f"{_key}_forn",
-                                      placeholder="Tutti i fornitori")
+            ESCLUDI_FAM = {'RIMBORSO SPESE','SPESE DI','POLVERE MP','TESSUTO KNOX',
+                           'SBAVATORE STAMPI','ALTRO','NAN','ACCIAIO 22MNB5',
+                           'GIUNTO A','ANGOLARE DI','ROSETTA FORO','SALTARELLO'}
+            fam_disp = sorted([f for f in df_all['Famiglia'].dropna().unique()
+                               if f not in ESCLUDI_FAM and len(f) > 3])
+            sel_fam = st.multiselect("Filtra famiglia prodotto",
+                                     fam_disp, key=f"{_key}_fam",
+                                     placeholder="Tutte le famiglie")
 
         data_da = data_a = None
         if periodo == "Intervallo personalizzato":
@@ -561,14 +562,17 @@ def render_kpi_qualita(filtro_cliente=None, filtro_famiglie=None):
         df_oci = df_f[df_f['Codice Documento'].isin(['OCI']) & (df_f['Qta Doc'] > 0)].copy()
         df_cff = df_f[df_f['Codice Documento'].isin(['CFF','CFR'])].copy()
 
-        # Filtra fornitore se selezionato
-        if sel_forn:
-            df_cff = df_cff[df_cff['Cliente'].isin(sel_forn)]
+        # Applica filtro famiglia su tutti i dataset
+        if sel_fam:
+            df_dvf = df_dvf[df_dvf['Famiglia'].isin(sel_fam)]
+            df_oci = df_oci[df_oci['Famiglia'].isin(sel_fam)]
+            df_cff = df_cff[df_cff['Famiglia'].isin(sel_fam)]
 
+        fam_lbl = f" — Famiglia: **{', '.join(sel_fam)}**" if sel_fam else ""
         st.caption(
             f"DVF: **{len(df_dvf):,}** righe | "
             f"OCI: **{len(df_oci):,}** righe | "
-            f"CFF/CFR: **{len(df_cff):,}** righe".replace(",",".")
+            f"CFF/CFR: **{len(df_cff):,}** righe{fam_lbl}".replace(",",".")
         )
 
         # Render sezioni
