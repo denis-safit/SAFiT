@@ -8,6 +8,11 @@ import re
 from bom_engine import get_coverage  
 from kpi_avanzati import render_kpi_avanzati
 try:
+    from kpi_qualita import render_kpi_qualita
+    _QUALITA_OK = True
+except ImportError:
+    _QUALITA_OK = False
+try:
     import storico_safit as stor
     _STORICO_DISPONIBILE = True
 except ImportError:
@@ -1383,8 +1388,8 @@ if not df_res.empty:
     st.session_state.filtro_famiglie = [] if _sel_fam == _TUTTI else [_sel_fam]
     st.session_state.filtro_stati    = [] if _sel_sta == _TUTTI else [_sel_sta]
 
-    tab_det, tab_op, tab_kpi, tab_stor, tab_btl, tab_atp, tab_zak = st.tabs(
-        ["🔍 Dettaglio Ordini", "📋 KPI Operativi", "📊 KPI Avanzati", "📈 KPI Storici", "🏭 Lavorazioni BTL", "🔵 Lavorazioni Atoplast", "🏪 ZaK Barletta"]
+    tab_det, tab_op, tab_kpi, tab_qual, tab_stor, tab_btl, tab_atp, tab_zak = st.tabs(
+        ["🔍 Dettaglio Ordini", "📋 KPI Operativi", "📊 KPI Avanzati", "🎯 KPI Qualità", "📈 KPI Storici", "🏭 Lavorazioni BTL", "🔵 Lavorazioni Atoplast", "🏪 ZaK Barletta"]
     )
 
     with tab_op:
@@ -1526,6 +1531,15 @@ if not df_res.empty:
             filtro_articolo=search if search else None,
             filtro_famiglie=st.session_state.filtro_famiglie or None
         )
+
+    with tab_qual:
+        if _QUALITA_OK:
+            render_kpi_qualita(
+                filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
+                filtro_famiglie=st.session_state.filtro_famiglie or None
+            )
+        else:
+            st.error("Modulo kpi_qualita.py non trovato.")
 
     with tab_stor:
         if _STORICO_DISPONIBILE:
