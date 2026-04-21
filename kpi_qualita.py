@@ -237,24 +237,26 @@ def _render_clienti(df_dvf, df_oci):
         df_show = df_gruppo.copy()
         df_show["Classe"] = df_show["Cliente"].map(pareto_map).fillna("C")
         df_show["Cliente"] = df_show["Cliente"].apply(
-            lambda x: str(x)[:15] + chr(8230) if len(str(x)) > 17 else str(x))
-        df_show["Euro"] = df_show["Valore"].apply(lambda v: f"{int(v):,}".replace(",","."))
-        df_out = df_show[["Cliente", "Euro", "Classe"]].copy()
-        COLORI = {"A": "#bbdefb", "B": "#c8e6c9", "C": "#e0e0e0"}
+            lambda x: str(x)[:18] + chr(8230) if len(str(x)) > 20 else str(x))
+        # Solo 2 colonne: Cliente e fatturato — il colore sfondo indica la classe
+        df_show["Fatturato"] = df_show["Valore"].apply(lambda v: f"{int(v):,}".replace(",","."))
+        df_out = df_show[["Cliente", "Fatturato", "Classe"]].copy()
+        COLORI = {"A": "#1565c0", "B": "#2e7d32", "C": "#424242"}
         def color_row(row):
-            bg = COLORI.get(row["Classe"], "#e0e0e0")
-            return [f"background-color:{bg};color:#1a1a1a"] * len(row)
+            bg = COLORI.get(row["Classe"], "#424242")
+            return [f"background-color:{bg};color:#ffffff"] * len(row)
         if caption:
             st.caption(caption)
         st.markdown(
             '<div style="font-size:10px;margin-bottom:4px;">'
-            '<span style="background:#bbdefb;color:#1a1a1a;padding:1px 5px;border-radius:4px;margin-right:3px;">A</span>'
-            '<span style="background:#c8e6c9;color:#1a1a1a;padding:1px 5px;border-radius:4px;margin-right:3px;">B</span>'
-            '<span style="background:#e0e0e0;color:#1a1a1a;padding:1px 5px;border-radius:4px;">C</span>'
+            '<span style="background:#1565c0;color:#fff;padding:1px 6px;border-radius:4px;margin-right:3px;font-weight:700;">A</span>'
+            '<span style="background:#2e7d32;color:#fff;padding:1px 6px;border-radius:4px;margin-right:3px;font-weight:700;">B</span>'
+            '<span style="background:#424242;color:#fff;padding:1px 6px;border-radius:4px;font-weight:700;">C</span>'
             '</div>', unsafe_allow_html=True)
         st.dataframe(
             df_out.style.apply(color_row, axis=1),
             use_container_width=True, hide_index=True,
+            column_order=["Cliente", "Fatturato"],
             height=min(500, 38 + len(df_out) * 35))
 
     if len(anni) >= 2:
