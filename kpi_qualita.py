@@ -355,8 +355,7 @@ def _render_quantita(df_oci):
         # Tabella riepilogo anno x famiglia
         df_pivot = (df_oci.groupby(['Famiglia','Anno'])['Qta Doc'].sum()
                     .unstack(fill_value=0))
-        st.dataframe(df_pivot.style.format('{:,.0f}').background_gradient(
-            cmap='Blues', axis=None),
+        st.dataframe(df_pivot.style.format('{:,.0f}'),
                      use_container_width=True)
 
     with tab_trend:
