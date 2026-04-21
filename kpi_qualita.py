@@ -84,6 +84,9 @@ def _carica_dati(path=PATH_STORICO):
             lambda x: 'Puntale' if x.startswith(PREF_PUNTALI)
             else ('Soletta' if x.startswith(PREF_SOLETTE) else 'Altro')
         )
+        df['Famiglia'] = df['Articolo D'].apply(
+            lambda x: ' '.join(str(x).split()[:2]).upper() if pd.notna(x) and str(x).strip() not in ('nan','(vuoto)','') else 'ALTRO'
+        )
         return df
     except Exception as e:
         st.warning(f"Errore lettura dati: {e}")
@@ -267,55 +270,113 @@ def _render_clienti(df_dvf, df_oci):
 
 
 # ==============================================================================
-# SEZIONE 3 — QUANTITÀ VENDUTE (OCI)
+# SEZIONE 3 — QUANTITÀ VENDUTE (OCI) — per famiglia merceologica
 # ==============================================================================
+# Palette colori per famiglie
+_FAM_COLORS = [
+    '#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd',
+    '#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'
+]
+
 def _render_quantita(df_oci):
-    _sec("📦 Quantità Vendute (OCI)")
+    _sec("📦 Quantità Vendute per Famiglia Merceologica (OCI)")
 
     if df_oci.empty:
         st.warning("Nessun dato OCI disponibile.")
         return
 
-    df_p = df_oci[df_oci['Categoria'] == 'Puntale']
-    df_s = df_oci[df_oci['Categoria'] == 'Soletta']
+    # Famiglie significative (escludi voci non merceologiche)
+    ESCLUDI = {'RIMBORSO SPESE','SPESE DI','POLVERE MP','TESSUTO KNOX',
+               'SBAVATORE STAMPI','ALTRO','NAN'}
+    df_oci = df_oci[~df_oci['Famiglia'].isin(ESCLUDI)].copy()
 
-    c1, c2, c3, c4 = st.columns(4)
-    _card(c1, "Puntali ordinati", f"{int(df_p['Qta Doc'].sum()):,}".replace(",","."), "pa. nel periodo", "g")
-    _card(c2, "Solette ordinate", f"{int(df_s['Qta Doc'].sum()):,}".replace(",","."), "pa. nel periodo", "p")
-    _card(c3, "Totale paia", f"{int(df_oci['Qta Doc'].sum()):,}".replace(",","."), "tutte le categorie")
-    _card(c4, "Ratio Puntali/Solette",
-          f"{df_p['Qta Doc'].sum()/df_s['Qta Doc'].sum():.1f}x" if df_s['Qta Doc'].sum() > 0 else "N/D",
-          "puntali ogni soletta", "o")
+    fam_tot = df_oci.groupby('Famiglia')['Qta Doc'].sum().sort_values(ascending=False)
+    fam_list = fam_tot.index.tolist()
+    tot_paia = int(df_oci['Qta Doc'].sum())
 
-    tab_mens, tab_ann = st.tabs(["📅 Mensile", "📆 Annuale"])
+    # KPI top famiglie
+    cols = st.columns(min(4, len(fam_list)))
+    for i, fam in enumerate(fam_list[:4]):
+        qta = int(fam_tot[fam])
+        pct = round(qta / tot_paia * 100, 1) if tot_paia > 0 else 0
+        _card(cols[i], fam, f"{qta:,}".replace(",","."), f"pa. — {pct}% del totale")
+
+    tab_fam, tab_mens, tab_ann, tab_trend = st.tabs(
+        ["🥧 Per famiglia", "📅 Mensile", "📆 Annuale", "📈 Trend famiglie"])
+
+    with tab_fam:
+        # Torta + barre affiancate
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            fig_pie = px.pie(
+                values=fam_tot.values, names=fam_tot.index,
+                color_discrete_sequence=_FAM_COLORS, hole=0.35,
+                title="Ripartizione % per famiglia")
+            fig_pie.update_traces(textinfo='label+percent', sort=True)
+            fig_pie.update_layout(height=350, margin=dict(t=40,b=0,l=0,r=0), showlegend=False)
+            st.plotly_chart(fig_pie, use_container_width=True)
+        with c2:
+            fig_bar = px.bar(
+                x=fam_tot.values, y=fam_tot.index, orientation='h',
+                color=fam_tot.index, color_discrete_sequence=_FAM_COLORS,
+                labels={'x':'Quantità (pa.)','y':''},
+                title="Quantità totale per famiglia")
+            fig_bar.update_layout(height=350, margin=dict(t=40,b=0,l=0,r=0),
+                                  plot_bgcolor='rgba(0,0,0,0)',
+                                  showlegend=False,
+                                  yaxis={'categoryorder':'total ascending'})
+            st.plotly_chart(fig_bar, use_container_width=True)
 
     with tab_mens:
-        df_pm = df_p.groupby('Mese')['Qta Doc'].sum().reset_index().rename(columns={'Qta Doc':'Puntali'})
-        df_sm = df_s.groupby('Mese')['Qta Doc'].sum().reset_index().rename(columns={'Qta Doc':'Solette'})
-        df_qm = df_pm.merge(df_sm, on='Mese', how='outer').fillna(0).sort_values('Mese')
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=df_qm['Mese'], y=df_qm['Puntali'], name='Puntali', marker_color='#1f77b4'))
-        fig.add_trace(go.Bar(x=df_qm['Mese'], y=df_qm['Solette'], name='Solette', marker_color='#9c27b0'))
-        fig.update_layout(barmode='group', height=300,
-                          margin=dict(t=10,b=40,l=0,r=0),
-                          plot_bgcolor='rgba(0,0,0,0)',
-                          legend=dict(orientation='h', y=-0.25),
-                          yaxis_title="Quantità (pa.)")
-        st.plotly_chart(fig, use_container_width=True)
+        df_m = (df_oci.groupby(['Mese','Famiglia'])['Qta Doc'].sum()
+                .reset_index().sort_values('Mese'))
+        fig_m = px.bar(df_m, x='Mese', y='Qta Doc', color='Famiglia',
+                       color_discrete_sequence=_FAM_COLORS,
+                       labels={'Qta Doc':'Quantità (pa.)','Mese':''},
+                       barmode='stack')
+        fig_m.update_layout(height=340, margin=dict(t=10,b=60,l=0,r=0),
+                             plot_bgcolor='rgba(0,0,0,0)',
+                             xaxis_tickangle=-45,
+                             legend=dict(orientation='h', y=-0.4))
+        st.plotly_chart(fig_m, use_container_width=True)
 
     with tab_ann:
-        df_pa = df_p.groupby('Anno')['Qta Doc'].sum().reset_index().rename(columns={'Qta Doc':'Puntali'})
-        df_sa = df_s.groupby('Anno')['Qta Doc'].sum().reset_index().rename(columns={'Qta Doc':'Solette'})
-        df_qa = df_pa.merge(df_sa, on='Anno', how='outer').fillna(0).sort_values('Anno')
-        fig_a = go.Figure()
-        fig_a.add_trace(go.Bar(x=df_qa['Anno'], y=df_qa['Puntali'], name='Puntali', marker_color='#1f77b4'))
-        fig_a.add_trace(go.Bar(x=df_qa['Anno'], y=df_qa['Solette'], name='Solette', marker_color='#9c27b0'))
-        fig_a.update_layout(barmode='group', height=300,
-                             margin=dict(t=10,b=10,l=0,r=0),
+        df_a = (df_oci.groupby(['Anno','Famiglia'])['Qta Doc'].sum()
+                .reset_index().sort_values('Anno'))
+        fig_a = px.bar(df_a, x='Anno', y='Qta Doc', color='Famiglia',
+                       color_discrete_sequence=_FAM_COLORS,
+                       labels={'Qta Doc':'Quantità (pa.)','Anno':''},
+                       barmode='stack', text_auto=False)
+        fig_a.update_layout(height=340, margin=dict(t=10,b=10,l=0,r=0),
                              plot_bgcolor='rgba(0,0,0,0)',
-                             legend=dict(orientation='h', y=-0.25),
-                             yaxis_title="Quantità (pa.)")
+                             legend=dict(orientation='h', y=-0.25))
         st.plotly_chart(fig_a, use_container_width=True)
+
+        # Tabella riepilogo anno x famiglia
+        df_pivot = (df_oci.groupby(['Famiglia','Anno'])['Qta Doc'].sum()
+                    .unstack(fill_value=0))
+        st.dataframe(df_pivot.style.format('{:,.0f}').background_gradient(
+            cmap='Blues', axis=None),
+                     use_container_width=True)
+
+    with tab_trend:
+        # Trend mensile per singola famiglia selezionabile
+        fam_sel = st.multiselect("Seleziona famiglie da confrontare:",
+                                  fam_list, default=fam_list[:3],
+                                  key="kq_fam_trend")
+        if fam_sel:
+            df_t = (df_oci[df_oci['Famiglia'].isin(fam_sel)]
+                    .groupby(['Mese','Famiglia'])['Qta Doc'].sum()
+                    .reset_index().sort_values('Mese'))
+            fig_t = px.line(df_t, x='Mese', y='Qta Doc', color='Famiglia',
+                            color_discrete_sequence=_FAM_COLORS,
+                            labels={'Qta Doc':'Quantità (pa.)','Mese':''},
+                            markers=True)
+            fig_t.update_layout(height=320, margin=dict(t=10,b=60,l=0,r=0),
+                                 plot_bgcolor='rgba(0,0,0,0)',
+                                 xaxis_tickangle=-45,
+                                 legend=dict(orientation='h', y=-0.4))
+            st.plotly_chart(fig_t, use_container_width=True)
 
 
 # ==============================================================================
