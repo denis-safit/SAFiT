@@ -236,11 +236,9 @@ def _render_clienti(df_dvf, df_oci):
             return
         df_show = df_gruppo.copy()
         df_show["Classe"] = df_show["Cliente"].map(pareto_map).fillna("C")
-        df_show["Cliente"] = df_show["Cliente"].apply(
-            lambda x: str(x)[:18] + chr(8230) if len(str(x)) > 20 else str(x))
-        # Solo 2 colonne: Cliente e fatturato — il colore sfondo indica la classe
-        df_show["Fatturato"] = df_show["Valore"].apply(lambda v: f"{int(v):,}".replace(",","."))
-        df_out = df_show[["Cliente", "Fatturato", "Classe"]].copy()
+        df_show["€"] = df_show["Valore"].apply(lambda v: f"{int(v):,}".replace(",","."))
+        # Fatturato PRIMA, cliente dopo — il fatturato è sempre corto
+        df_out = df_show[["€", "Cliente", "Classe"]].copy()
         COLORI = {"A": "#1565c0", "B": "#2e7d32", "C": "#424242"}
         def color_row(row):
             bg = COLORI.get(row["Classe"], "#424242")
@@ -256,7 +254,7 @@ def _render_clienti(df_dvf, df_oci):
         st.dataframe(
             df_out.style.apply(color_row, axis=1),
             use_container_width=True, hide_index=True,
-            column_order=["Cliente", "Fatturato"],
+            column_order=["€", "Cliente"],
             height=min(500, 38 + len(df_out) * 35))
 
     if len(anni) >= 2:
