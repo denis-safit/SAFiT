@@ -501,14 +501,14 @@ def _render_ritardo_fornitori(df_cff):
         st.plotly_chart(fig_hist, use_container_width=True)
 
     with tab_forn:
-        df_forn = df.groupby('Cliente').agg(
+        df_forn = df.groupby('Fornitore').agg(
             N_Carichi=('Delta_gg','count'),
             Delta_Medio=('Delta_gg','mean'),
             Pct_Puntuali=('Delta_gg', lambda x: round((x<=3).mean()*100,1)),
         ).reset_index().sort_values('Delta_Medio', ascending=False)
         df_forn['Delta_Medio'] = df_forn['Delta_Medio'].round(1)
 
-        fig_forn = px.bar(df_forn, x='Delta_Medio', y='Cliente', orientation='h',
+        fig_forn = px.bar(df_forn, x='Delta_Medio', y='Fornitore', orientation='h',
                           color='Pct_Puntuali',
                           color_continuous_scale=['#f44336','#ff9800','#4caf50'],
                           range_color=[0,100],
@@ -523,7 +523,7 @@ def _render_ritardo_fornitori(df_cff):
         st.plotly_chart(fig_forn, use_container_width=True)
 
         st.dataframe(df_forn.rename(columns={
-            'Cliente':'Fornitore','N_Carichi':'N° Carichi',
+            'Fornitore':'Fornitore','N_Carichi':'N° Carichi',
             'Delta_Medio':'Delta Medio (gg)','Pct_Puntuali':'% Puntuali'
         }).style.format({'Delta Medio (gg)':'{:.1f}','% Puntuali':'{:.1f}%'}),
                      use_container_width=True, hide_index=True)
