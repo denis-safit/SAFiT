@@ -236,19 +236,31 @@ def _render_clienti(df_dvf, df_oci):
             return
         df_show = df_gruppo.copy().rename(columns={'Valore': 'Fatturato (€)'})
         df_show['Classe'] = df_show['Cliente'].map(pareto_map).fillna('C')
+        # Tronca nome cliente per lasciare spazio al fatturato
+        df_show['Cliente'] = df_show['Cliente'].apply(
+            lambda x: str(x)[:16] + chr(8230) if len(str(x)) > 18 else str(x))
         def color_row(row):
-            return [f'background-color:{COLORI_PARETO.get(row["Classe"], "#f5f5f5")}'] * len(row)
+            bg = COLORI_PARETO.get(row["Classe"], "#f5f5f5")
+            return [f'background-color:{bg};color:#1a1a1a !important'] * len(row)
         if caption:
             st.caption(caption)
         st.markdown(
             '<div style="font-size:10px;margin-bottom:4px;">'
-            '<span style="background:#bbdefb;padding:1px 6px;border-radius:4px;margin-right:4px;">A top 50%</span>'
-            '<span style="background:#c8e6c9;padding:1px 6px;border-radius:4px;margin-right:4px;">B 50-80%</span>'
-            '<span style="background:#f5f5f5;border:1px solid #ddd;padding:1px 6px;border-radius:4px;">C coda</span>'
+            '<span style="background:#bbdefb;color:#1a1a1a;padding:1px 5px;border-radius:4px;margin-right:3px;">A</span>'
+            '<span style="background:#c8e6c9;color:#1a1a1a;padding:1px 5px;border-radius:4px;margin-right:3px;">B</span>'
+            '<span style="background:#e0e0e0;color:#1a1a1a;padding:1px 5px;border-radius:4px;">C</span>'
             '</div>', unsafe_allow_html=True)
         st.dataframe(
-            df_show.style.apply(color_row, axis=1).format({'Fatturato (€)': '{:,.0f}'}),
-            use_container_width=True, hide_index=True,
+            df_show.style
+                .apply(color_row, axis=1)
+                .format({'Fatturato (€)': '{:,.0f}'}),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                'Cliente':       st.column_config.TextColumn('Cliente',  width='small'),
+                'Fatturato (€)': st.column_config.NumberColumn('€',      format='%d', width='small'),
+                'Classe':        st.column_config.TextColumn('Cl.',      width='small'),
+            },
             height=min(500, 38 + len(df_show) * 35))
 
     if len(anni) >= 2:
