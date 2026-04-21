@@ -276,21 +276,24 @@ def _render_clienti(df_dvf, df_oci):
         v_stab  = df_stab_s['Valore'].sum() if not df_stab_s.empty else 0
         v_spor  = df_spor_s['Valore'].sum() if not df_spor_s.empty else 0
 
+        def _eur_short(v):
+            return f"€{v/1000:.0f}k" if v >= 1000 else f"€{v:.0f}"
+
         tab_t, tab_a, tab_p, tab_s, tab_sp = st.tabs([
-            f"👥 Tutti ({tot_cli}) — {_fmt_eur(v_tutti)}",
-            f"🟢 Acquisiti ({len(acquisiti)}) — {_fmt_eur(v_acq)}",
-            f"🔴 Persi ({len(persi)}) — {_fmt_eur(v_pers)}",
-            f"🔵 Stabili ({len(stabili)}) — {_fmt_eur(v_stab)}",
-            f"⚠️ Sporadici ({len(df_spor_s)}) — {_fmt_eur(v_spor)}",
+            f"👥 Tutti {tot_cli} · {_eur_short(v_tutti)}",
+            f"🟢 Nuovi {len(acquisiti)} · {_eur_short(v_acq)}",
+            f"🔴 Persi {len(persi)} · {_eur_short(v_pers)}",
+            f"🔵 Stabili {len(stabili)} · {_eur_short(v_stab)}",
+            f"⚠️ Sporadici {len(df_spor_s)} · {_eur_short(v_spor)}",
         ])
         with tab_t:
             _tab_clienti(df_tutti)
         with tab_a:
             _tab_clienti(df_acq_s, f"Clienti nuovi in {anno_curr}, non presenti in {anno_prev}")
         with tab_p:
-            _tab_clienti(df_pers_s, f"Clienti presenti in {anno_prev}, assenti in {anno_curr}")
+            _tab_clienti(df_pers_s, f"Clienti in {anno_prev}, assenti in {anno_curr}")
         with tab_s:
-            _tab_clienti(df_stab_s, f"Clienti attivi sia in {anno_prev} che in {anno_curr}")
+            _tab_clienti(df_stab_s, f"Clienti attivi in {anno_prev} e {anno_curr}")
         with tab_sp:
             _tab_clienti(df_spor_s, f"Clienti con 1 solo ordine nel {anno_curr}")
 
