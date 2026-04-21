@@ -20,6 +20,7 @@ from io import BytesIO
 import os as _os
 _DIR = _os.path.dirname(_os.path.abspath(__file__))
 PATH_STORICO = _os.path.join(_DIR, "righe_ordini_storico_con_date.xlsx")
+PATH_DETTAGLI = _os.path.join(_DIR, "dettagli_consegne.xlsx")
 
 # Prefissi codice articolo per categoria
 PREF_PUNTALI = ('PPU','PPT','PPA','PPF','PCT','PCP','CPU','PAT','PAC')
@@ -56,6 +57,35 @@ def _card(col, title, value, sub="", color=""):
 
 def _sec(title):
     st.markdown(f'<div class="kq-sec">{title}</div>', unsafe_allow_html=True)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _carica_dettagli_consegne(_mtime=0):
+    if not os.path.exists(PATH_DETTAGLI):
+        return pd.DataFrame()
+    try:
+        df = pd.read_excel(PATH_DETTAGLI)
+        df.columns = [str(c).strip() for c in df.columns]
+        df['DataDoc']        = pd.to_datetime(df['DataDoc'],        errors='coerce')
+        df['DataConsegnaB']  = pd.to_datetime(df['DataConsegnaB'],  errors='coerce')
+        df['dataconsegnaO']  = pd.to_datetime(df['dataconsegnaO'],  errors='coerce')
+        df['datadifference'] = pd.to_numeric(df['datadifference'],   errors='coerce')
+        # Solo righe OFF/OFR -> CFF/CFR
+        df = df[df['Cd_Do'].isin(['OFF','OFR']) & df['Cd_doB'].isin(['CFF','CFR'])].copy()
+        # Fallback: se dataconsegnaO mancante usa DataDoc (data ordine)
+        df['DC_prevista'] = df['dataconsegnaO'].fillna(df['DataDoc'])
+        df['Delta_gg'] = df['datadifference'].fillna(
+            (df['DataConsegnaB'] - df['DC_prevista']).dt.days)
+        df['Fornitore'] = df['CF_Descrizione'].astype(str).str.strip()
+        df['Data']      = df['DataConsegnaB']
+        df['Mese']      = df['DataConsegnaB'].dt.to_period('M').astype(str)
+        df['Anno']      = df['DataConsegnaB'].dt.year
+        df['Articolo C'] = df['Cd_AR'].astype(str).str.strip()
+        df['Famiglia']   = df['DORig_Descrizione'].apply(
+            lambda x: ' '.join(str(x).split()[:2]).upper() if pd.notna(x) else 'ALTRO')
+        return df[df['Delta_gg'].between(-30, 365)].copy()
+    except Exception as e:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -431,45 +461,13 @@ def _render_quantita(df_oci):
 def _render_ritardo_fornitori(df_cff):
     _sec("🚚 Puntualità Fornitori (CFF/CFR)")
 
-    if df_cff.empty:
-        st.warning("Nessun dato CFF/CFR disponibile.")
+    # Usa il file dettagli_consegne.xlsx che ha il collegamento diretto OFF->CFF
+    _mtime = os.path.getmtime(PATH_DETTAGLI) if os.path.exists(PATH_DETTAGLI) else 0
+    df = _carica_dettagli_consegne(_mtime)
+
+    if df.empty:
+        st.warning(f"File dettagli_consegne.xlsx non trovato in: {PATH_DETTAGLI}")
         return
-
-    # Calcolo delta corretto: collega CFF/CFR al relativo OFF/OFR
-    # tramite Fornitore+Articolo, usando Data Consegna DELL'ORDINE OFF (non del CFF)
-    df_all_local = _carica_dati()
-
-    # Estrai OFF/OFR con Data Consegna valorizzata (solo prima riga per numero documento)
-    df_off_loc = df_all_local[df_all_local['Codice Documento'].isin(['OFF','OFR'])].copy()
-    df_off_loc['DC_raw'] = pd.to_datetime(
-        df_all_local.loc[df_off_loc.index, 'Data Consegna'], errors='coerce')
-    # Prende la prima Data Consegna valorizzata per gruppo numero documento
-    nr_to_dc = (df_off_loc[df_off_loc['DC_raw'].notna()]
-                .drop_duplicates(subset=['Numero Documento'])
-                .set_index('Numero Documento')['DC_raw'].to_dict())
-    df_off_loc['DC_off'] = df_off_loc['Numero Documento'].map(nr_to_dc)
-    df_off_key = df_off_loc[df_off_loc['DC_off'].notna()][
-        ['Articolo C','Cliente','Data','DC_off']].copy()
-    df_off_key.columns = ['Articolo C','Fornitore','Data_OFF','DC_prevista']
-    df_off_key = df_off_key.sort_values('Data_OFF')
-
-    # Collega ogni CFF al suo OFF: stesso Fornitore+Articolo, Data_OFF <= Data_CFF
-    df = df_cff[df_cff['Data'].notna()].copy()
-    df_merge = df[['Articolo C','Cliente','Data']].copy()
-    df_merge.columns = ['Articolo C','Fornitore','Data_CFF']
-    merged = df_merge.merge(df_off_key, on=['Articolo C','Fornitore'], how='left')
-    merged = merged[merged['Data_OFF'] <= merged['Data_CFF']]
-    merged = (merged.sort_values('Data_OFF')
-              .groupby(['Articolo C','Fornitore','Data_CFF']).last().reset_index())
-    merged['Delta_gg'] = (merged['Data_CFF'] - merged['DC_prevista']).dt.days
-
-    # Rimappa il delta sul df originale
-    df = df.copy()
-    df['_key'] = list(zip(df['Articolo C'], df['Cliente'], df['Data']))
-    merged['_key'] = list(zip(merged['Articolo C'], merged['Fornitore'], merged['Data_CFF']))
-    delta_map = merged.set_index('_key')['Delta_gg'].to_dict()
-    df['Delta_gg'] = df['_key'].map(delta_map)
-    df = df[df['Delta_gg'].notna() & df['Delta_gg'].between(-30, 180)]
 
     if df.empty:
         st.warning("Nessun delta calcolabile.")
