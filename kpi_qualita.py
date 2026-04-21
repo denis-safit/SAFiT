@@ -234,14 +234,16 @@ def _render_clienti(df_dvf, df_oci):
         if df_gruppo.empty:
             st.caption("Nessun cliente in questo gruppo.")
             return
-        df_show = df_gruppo.copy().rename(columns={'Valore': 'Fatturato (€)'})
-        df_show['Classe'] = df_show['Cliente'].map(pareto_map).fillna('C')
-        # Tronca nome cliente per lasciare spazio al fatturato
-        df_show['Cliente'] = df_show['Cliente'].apply(
-            lambda x: str(x)[:16] + chr(8230) if len(str(x)) > 18 else str(x))
+        df_show = df_gruppo.copy()
+        df_show["Classe"] = df_show["Cliente"].map(pareto_map).fillna("C")
+        df_show["Cliente"] = df_show["Cliente"].apply(
+            lambda x: str(x)[:15] + chr(8230) if len(str(x)) > 17 else str(x))
+        df_show["Euro"] = df_show["Valore"].apply(lambda v: f"{int(v):,}".replace(",","."))
+        df_out = df_show[["Cliente", "Euro", "Classe"]].copy()
+        COLORI = {"A": "#bbdefb", "B": "#c8e6c9", "C": "#e0e0e0"}
         def color_row(row):
-            bg = COLORI_PARETO.get(row["Classe"], "#f5f5f5")
-            return [f'background-color:{bg};color:#1a1a1a !important'] * len(row)
+            bg = COLORI.get(row["Classe"], "#e0e0e0")
+            return [f"background-color:{bg};color:#1a1a1a"] * len(row)
         if caption:
             st.caption(caption)
         st.markdown(
@@ -251,17 +253,9 @@ def _render_clienti(df_dvf, df_oci):
             '<span style="background:#e0e0e0;color:#1a1a1a;padding:1px 5px;border-radius:4px;">C</span>'
             '</div>', unsafe_allow_html=True)
         st.dataframe(
-            df_show.style
-                .apply(color_row, axis=1)
-                .format({'Fatturato (€)': '{:,.0f}'}),
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                'Cliente':       st.column_config.TextColumn('Cliente',  width='small'),
-                'Fatturato (€)': st.column_config.NumberColumn('€',      format='%d', width='small'),
-                'Classe':        st.column_config.TextColumn('Cl.',      width='small'),
-            },
-            height=min(500, 38 + len(df_show) * 35))
+            df_out.style.apply(color_row, axis=1),
+            use_container_width=True, hide_index=True,
+            height=min(500, 38 + len(df_out) * 35))
 
     if len(anni) >= 2:
         anno_curr = max(anni)
