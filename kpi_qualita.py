@@ -279,23 +279,21 @@ def _render_clienti(df_dvf, df_oci):
         def _eur_short(v):
             return f"€{v/1000:.0f}k" if v >= 1000 else f"€{v:.0f}"
 
-        tab_t, tab_a, tab_p, tab_s, tab_sp = st.tabs([
-            f"👥 Tutti {tot_cli} · {_eur_short(v_tutti)}",
-            f"🟢 Nuovi {len(acquisiti)} · {_eur_short(v_acq)}",
-            f"🔴 Persi {len(persi)} · {_eur_short(v_pers)}",
-            f"🔵 Stabili {len(stabili)} · {_eur_short(v_stab)}",
-            f"⚠️ Sporadici {len(df_spor_s)} · {_eur_short(v_spor)}",
-        ])
-        with tab_t:
-            _tab_clienti(df_tutti)
-        with tab_a:
-            _tab_clienti(df_acq_s, f"Clienti nuovi in {anno_curr}, non presenti in {anno_prev}")
-        with tab_p:
-            _tab_clienti(df_pers_s, f"Clienti in {anno_prev}, assenti in {anno_curr}")
-        with tab_s:
-            _tab_clienti(df_stab_s, f"Clienti attivi in {anno_prev} e {anno_curr}")
-        with tab_sp:
-            _tab_clienti(df_spor_s, f"Clienti con 1 solo ordine nel {anno_curr}")
+        HEADER = [
+            ("👥 Tutti", tot_cli,         v_tutti, df_tutti,  "#1f77b4", None),
+            ("🟢 Nuovi", len(acquisiti),  v_acq,   df_acq_s,  "#4caf50", f"Nuovi in {anno_curr}, assenti in {anno_prev}"),
+            ("🔴 Persi", len(persi),       v_pers,  df_pers_s, "#f44336", f"Presenti in {anno_prev}, assenti in {anno_curr}"),
+            ("🔵 Stabili", len(stabili),   v_stab,  df_stab_s, "#1565c0", f"Attivi in {anno_prev} e {anno_curr}"),
+            ("⚠️ Sporadici", len(df_spor_s), v_spor, df_spor_s, "#ff9800", f"1 solo ordine nel {anno_curr}"),
+        ]
+        cols = st.columns(5)
+        for col, (label, n, v, df_g, color, caption) in zip(cols, HEADER):
+            with col:
+                st.markdown(
+                    f'<div style="background:{color};color:#fff;padding:8px 10px;border-radius:8px 8px 0 0;font-weight:700;font-size:13px;text-align:center;">'
+                    f'{label}<br><span style="font-size:11px;font-weight:400;">{n} clienti · {_eur_short(v)}</span></div>',
+                    unsafe_allow_html=True)
+                _tab_clienti(df_g, caption)
 
     else:
         df_tutti = df_dvf.groupby('Cliente')['Valore'].sum().sort_values(ascending=False).reset_index()
