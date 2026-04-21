@@ -189,6 +189,38 @@ def _render_clienti(df_dvf, df_oci):
 
     tot_cli = df_dvf['Cod_Cliente'].nunique()
 
+    # Calcola classe Pareto globale per colorare le righe
+    df_pb = df_dvf.groupby('Cliente')['Valore'].sum().sort_values(ascending=False).reset_index()
+    df_pb['Pct_Cum'] = df_pb['Valore'].cumsum() / df_pb['Valore'].sum() * 100
+    df_pb['Classe'] = df_pb['Pct_Cum'].apply(lambda x: 'A' if x <= 50 else ('B' if x <= 80 else 'C'))
+    pareto_map = df_pb.set_index('Cliente')['Classe'].to_dict()
+
+    COLORI_PARETO = {'A': '#bbdefb', 'B': '#c8e6c9', 'C': '#f5f5f5'}
+
+    def _fmt_eur(v):
+        return f"€ {v:,.0f}".replace(",", ".")
+
+    def _tab_clienti(df_gruppo, caption=None):
+        if df_gruppo.empty:
+            st.caption("Nessun cliente in questo gruppo.")
+            return
+        df_show = df_gruppo.copy().rename(columns={'Valore': 'Fatturato (€)'})
+        df_show['Classe'] = df_show['Cliente'].map(pareto_map).fillna('C')
+        def color_row(row):
+            return [f'background-color:{COLORI_PARETO.get(row["Classe"], "#f5f5f5")}'] * len(row)
+        if caption:
+            st.caption(caption)
+        st.markdown(
+            '<div style="font-size:10px;margin-bottom:4px;">'
+            '<span style="background:#bbdefb;padding:1px 6px;border-radius:4px;margin-right:4px;">A top 50%</span>'
+            '<span style="background:#c8e6c9;padding:1px 6px;border-radius:4px;margin-right:4px;">B 50-80%</span>'
+            '<span style="background:#f5f5f5;border:1px solid #ddd;padding:1px 6px;border-radius:4px;">C coda</span>'
+            '</div>', unsafe_allow_html=True)
+        st.dataframe(
+            df_show.style.apply(color_row, axis=1).format({'Fatturato (€)': '{:,.0f}'}),
+            use_container_width=True, hide_index=True,
+            height=min(500, 38 + len(df_show) * 35))
+
     if len(anni) >= 2:
         anno_curr = max(anni)
         anno_prev = sorted([a for a in anni if a < anno_curr])[-1]
@@ -196,7 +228,6 @@ def _render_clienti(df_dvf, df_oci):
         persi     = cli_per_anno[anno_prev] - cli_per_anno[anno_curr]
         stabili   = cli_per_anno[anno_curr] & cli_per_anno[anno_prev]
 
-        # Prepara dataframe per ogni gruppo
         df_tutti  = df_dvf.groupby('Cliente')['Valore'].sum().sort_values(ascending=False).reset_index()
         df_acq_s  = (df_dvf[(df_dvf['Anno']==anno_curr) & (df_dvf['Cod_Cliente'].isin(acquisiti))]
                      .groupby('Cliente')['Valore'].sum().sort_values(ascending=False).reset_index())
@@ -204,61 +235,41 @@ def _render_clienti(df_dvf, df_oci):
                      .groupby('Cliente')['Valore'].sum().sort_values(ascending=False).reset_index())
         df_stab_s = (df_dvf[(df_dvf['Anno']==anno_curr) & (df_dvf['Cod_Cliente'].isin(stabili))]
                      .groupby('Cliente')['Valore'].sum().sort_values(ascending=False).reset_index())
-
-        # Clienti sporadici
         n_ordini  = df_dvf[df_dvf['Anno']==anno_curr].groupby('Cod_Cliente')['Numero Documento'].nunique()
         sporadici = n_ordini[n_ordini == 1].index
         df_spor_s = (df_dvf[(df_dvf['Anno']==anno_curr) & (df_dvf['Cod_Cliente'].isin(sporadici))]
                      .groupby('Cliente')['Valore'].sum().sort_values(ascending=False).reset_index())
 
-        # 4 colonne affiancate con tabella sotto ogni KPI
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            _card(c1, "Clienti totali", str(tot_cli), "con almeno 1 DVF")
-            st.dataframe(df_tutti.style.format({'Valore':'{:,.0f}'}),
-                         use_container_width=True, hide_index=True,
-                         height=min(400, 38 + len(df_tutti)*35))
-        with c2:
-            _card(c2, f"Acquisiti {anno_curr}", str(len(acquisiti)), f"non in {anno_prev}", "g")
-            if not df_acq_s.empty:
-                st.dataframe(df_acq_s.style.format({'Valore':'{:,.0f}'}),
-                             use_container_width=True, hide_index=True,
-                             height=min(400, 38 + len(df_acq_s)*35))
-            else:
-                st.caption("Nessuno")
-        with c3:
-            _card(c3, f"Persi {anno_curr}", str(len(persi)), f"erano in {anno_prev}", "r")
-            if not df_pers_s.empty:
-                st.dataframe(df_pers_s.style.format({'Valore':'{:,.0f}'}),
-                             use_container_width=True, hide_index=True,
-                             height=min(400, 38 + len(df_pers_s)*35))
-            else:
-                st.caption("Nessuno")
-        with c4:
-            _card(c4, "Stabili", str(len(stabili)), f"in entrambi gli anni")
-            if not df_stab_s.empty:
-                st.dataframe(df_stab_s.style.format({'Valore':'{:,.0f}'}),
-                             use_container_width=True, hide_index=True,
-                             height=min(400, 38 + len(df_stab_s)*35))
+        v_tutti = df_tutti['Valore'].sum()
+        v_acq   = df_acq_s['Valore'].sum()  if not df_acq_s.empty  else 0
+        v_pers  = df_pers_s['Valore'].sum() if not df_pers_s.empty else 0
+        v_stab  = df_stab_s['Valore'].sum() if not df_stab_s.empty else 0
+        v_spor  = df_spor_s['Valore'].sum() if not df_spor_s.empty else 0
 
-        # Sporadici separati sotto
-        _sec(f"⚠️ Clienti sporadici {anno_curr} (1 solo ordine nell'anno)")
-        s1, s2 = st.columns([1, 3])
-        with s1:
-            _card(s1, f"Sporadici {anno_curr}", str(len(df_spor_s)), "1 solo ordine nell'anno", "o")
-        with s2:
-            if not df_spor_s.empty:
-                st.dataframe(df_spor_s.style.format({'Valore':'{:,.0f}'}),
-                             use_container_width=True, hide_index=True,
-                             height=min(300, 38 + len(df_spor_s)*35))
+        tab_t, tab_a, tab_p, tab_s, tab_sp = st.tabs([
+            f"👥 Tutti ({tot_cli}) — {_fmt_eur(v_tutti)}",
+            f"🟢 Acquisiti ({len(acquisiti)}) — {_fmt_eur(v_acq)}",
+            f"🔴 Persi ({len(persi)}) — {_fmt_eur(v_pers)}",
+            f"🔵 Stabili ({len(stabili)}) — {_fmt_eur(v_stab)}",
+            f"⚠️ Sporadici ({len(df_spor_s)}) — {_fmt_eur(v_spor)}",
+        ])
+        with tab_t:
+            _tab_clienti(df_tutti)
+        with tab_a:
+            _tab_clienti(df_acq_s, f"Clienti nuovi in {anno_curr}, non presenti in {anno_prev}")
+        with tab_p:
+            _tab_clienti(df_pers_s, f"Clienti presenti in {anno_prev}, assenti in {anno_curr}")
+        with tab_s:
+            _tab_clienti(df_stab_s, f"Clienti attivi sia in {anno_prev} che in {anno_curr}")
+        with tab_sp:
+            _tab_clienti(df_spor_s, f"Clienti con 1 solo ordine nel {anno_curr}")
 
     else:
-        # Solo anno corrente disponibile
-        c1, = st.columns(1)
-        _card(c1, "Clienti totali", str(tot_cli), "con almeno 1 DVF")
         df_tutti = df_dvf.groupby('Cliente')['Valore'].sum().sort_values(ascending=False).reset_index()
-        st.dataframe(df_tutti.style.format({'Valore':'{:,.0f}'}),
-                     use_container_width=True, hide_index=True)
+        v_tutti  = df_tutti['Valore'].sum()
+        tab_t, = st.tabs([f"👥 Tutti ({tot_cli}) — {_fmt_eur(v_tutti)}"])
+        with tab_t:
+            _tab_clienti(df_tutti)
 
     # Pareto: clienti A+B (80% del fatturato)
     _sec("📊 Legge di Pareto — Clienti A+B (80% fatturato)")
