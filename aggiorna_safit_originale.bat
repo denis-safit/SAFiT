@@ -3,6 +3,7 @@ title Aggiornamento Portale SAFIT - DEFINITIVO + APERTURA WEB
 color 0B
 cls
 
+:: 1. IMPOSTAZIONE PERCORSI
 set DIR_GIT=C:\Users\Venezian.Denis\Desktop\python_access_sql\git-files
 set DB_PONTE=%DIR_GIT%\Estrattore_Safit.accdb
 set EXCEL_FILE=%DIR_GIT%\Avanzamento_access.xlsx
@@ -34,19 +35,9 @@ echo            FASE 2: AGGIORNAMENTO ARCA E GIT
 echo ============================================================
 
 echo [3/8] Aggiornamento Pivot ARCA...
-del /f /q "%TEMP%\arca_done.tmp" 2>nul
-start "" /min cmd /c "%DIR_GIT%\run_arca.bat"
-
-set _s=0
-:spin
-C:\Windows\System32\timeout.exe /t 1 >nul
-set /a _s=(_s+1) %% 4
-if %_s%==0 echo ^|  Aggiornamento ARCA in corso...
-if %_s%==1 echo /  Aggiornamento ARCA in corso...
-if %_s%==2 echo -  Aggiornamento ARCA in corso...
-if %_s%==3 echo \  Aggiornamento ARCA in corso...
-if not exist "%TEMP%\arca_done.tmp" goto spin
-echo [OK] Pivot ARCA aggiornato!
+if exist refresh_arca.vbs (
+    cscript //nologo refresh_arca.vbs
+)
 
 echo [4/8] Preparazione file per GitHub...
 git add --all
@@ -68,24 +59,15 @@ echo ============================================================
 echo    FASE 3: APERTURA PORTALE SAFIT
 echo ============================================================
 echo [8/8] Apertura Browser...
+
+:: LANCIO DEL PORTALE WEB
 start chrome.exe "https://qey2qqomzpzjmuxb8mfm5h.streamlit.app"
 
 echo.
 echo ============================================================
-echo    AGGIORNAMENTO COMPLETATO!
+echo    AGGIORNAMENTO COMPLETATO! CHIUSURA TRA 10 SECONDI...
 echo ============================================================
 C:\Windows\System32\timeout.exe /t 2 >nul
 
-
-
-
-
-
-pause 
-
-
-
-
-start C:\Users\Venezian.Denis\Desktop\python_access_sql\Agente_arca_mail\avvia_agente.bat
-
+echo start C:\Users\Venezian.Denis\Desktop\python_access_sql\Agente_arca_mail\avvia_agente.bat
 exit
