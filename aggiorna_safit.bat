@@ -11,7 +11,7 @@ set EXCEL_FILE=%DIR_GIT%\Avanzamento_access.xlsx
 cd /d "%DIR_GIT%"
 
 echo ============================================================
-echo            FASE 1: ESTRAZIONE DATI ACCESS V3.8
+echo            FASE 1: ESTRAZIONE DATI ACCESS V3.9
 echo ============================================================
 
 echo [1/8] Pulizia file Excel precedente...
@@ -59,12 +59,11 @@ echo ============================================================
 echo    FASE 3: APERTURA PORTALE SAFIT
 echo ============================================================
 echo [8/8] Apertura Browser...
-
 start chrome.exe "https://qey2qqomzpzjmuxb8mfm5h.streamlit.app"
 
 echo.
 echo ============================================================
-echo    AGGIORNAMENTO COMPLETATO! CHIUSURA TRA 10 SECONDI...
+echo    AGGIORNAMENTO COMPLETATO! CHIUSURA TRA 2 SECONDI...
 echo ============================================================
 C:\Windows\System32\timeout.exe /t 2 >nul
 

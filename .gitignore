@@ -1,8 +1,11 @@
-# File temporanei Excel (aperti da Office)
+# File lock Access
+*.laccdb
+*.ldb
+# File temporanei Excel
 ~$*.xlsx
 ~$*.xls
 ~$*.xlsm
-# File temporanei sistema
+# Sistema
 *.tmp
 Thumbs.db
 .DS_Store
