@@ -29,21 +29,6 @@ if not exist "%EXCEL_FILE%" (
 )
 echo [OK] File Excel creato con successo!
 
-echo Chiusura Avanzamento_access.xlsx...
-cscript //nologo chiudi_avanzamento.vbs
-C:\Windows\System32\timeout.exe /t 2 >nul
-echo [OK] File chiuso.
-
-
-
-
-pause 
-
-
-
-
-
-
 echo.
 echo ============================================================
 echo            FASE 2: AGGIORNAMENTO ARCA E GIT
@@ -74,14 +59,15 @@ echo ============================================================
 echo    FASE 3: APERTURA PORTALE SAFIT
 echo ============================================================
 echo [8/8] Apertura Browser...
+
+:: LANCIO DEL PORTALE WEB
 start chrome.exe "https://qey2qqomzpzjmuxb8mfm5h.streamlit.app"
 
 echo.
 echo ============================================================
-echo    AGGIORNAMENTO COMPLETATO!
+echo    AGGIORNAMENTO COMPLETATO! CHIUSURA TRA 10 SECONDI...
 echo ============================================================
 C:\Windows\System32\timeout.exe /t 2 >nul
 
-start C:\Users\Venezian.Denis\Desktop\python_access_sql\Agente_arca_mail\avvia_agente.bat
-
+echo start C:\Users\Venezian.Denis\Desktop\python_access_sql\Agente_arca_mail\avvia_agente.bat
 exit
