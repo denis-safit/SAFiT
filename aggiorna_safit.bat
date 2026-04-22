@@ -11,7 +11,7 @@ set EXCEL_FILE=%DIR_GIT%\Avanzamento_access.xlsx
 cd /d "%DIR_GIT%"
 
 echo ============================================================
-echo            FASE 1: ESTRAZIONE DATI ACCESS V3.9
+echo            FASE 1: ESTRAZIONE DATI ACCESS V3.8
 echo ============================================================
 
 echo [1/8] Pulizia file Excel precedente...
@@ -34,15 +34,10 @@ echo ============================================================
 echo            FASE 2: AGGIORNAMENTO ARCA E GIT
 echo ============================================================
 
-echo [3/8] Aggiornamento Pivot ARCA (6 file Excel)...
-echo       Attendere circa 90 secondi...
+echo [3/8] Aggiornamento Pivot ARCA...
 if exist refresh_arca.vbs (
     cscript //nologo refresh_arca.vbs
 )
-echo [OK] File Excel aggiornati!
-
-echo [3b] Pulizia file temporanei Excel...
-for /f "delims=" %%F in ('dir /b /s "~$*.xlsx" 2^>nul') do del /f /q "%%F" 2>nul
 
 echo [4/8] Preparazione file per GitHub...
 git add --all
@@ -63,13 +58,13 @@ echo.
 echo ============================================================
 echo    FASE 3: APERTURA PORTALE SAFIT
 echo ============================================================
-
 echo [8/8] Apertura Browser...
+
 start chrome.exe "https://qey2qqomzpzjmuxb8mfm5h.streamlit.app"
 
 echo.
 echo ============================================================
-echo    AGGIORNAMENTO COMPLETATO!
+echo    AGGIORNAMENTO COMPLETATO! CHIUSURA TRA 10 SECONDI...
 echo ============================================================
 C:\Windows\System32\timeout.exe /t 2 >nul
 

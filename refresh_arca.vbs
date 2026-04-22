@@ -1,39 +1,40 @@
-Dim objExcel, objWB
 Set objExcel = CreateObject("Excel.Application")
 objExcel.Visible = False
 objExcel.DisplayAlerts = False
 
-Dim BASE
-BASE = "C:\Users\Venezian.Denis\Desktop\python_access_sql\git-files\"
+' ── File 1: righe_Ordini_ARCA.xlsx ──────────────────────────────────────────
+Set objWorkbook = objExcel.Workbooks.Open("C:\Users\Venezian.Denis\Desktop\python_access_sql\git-files\righe_Ordini_ARCA.xlsx")
+objWorkbook.RefreshAll
+WScript.Sleep 10000
+objWorkbook.Save
+objWorkbook.Close
 
-' ── Helper: apri, aggiorna, salva, chiudi ───────────────────────────────────
-Sub RefreshFile(filename, waitSec)
-    Dim path
-    path = BASE & filename
-    On Error Resume Next
-    Set objWB = objExcel.Workbooks.Open(path)
-    If Err.Number <> 0 Then
-        WScript.Echo "ERRORE apertura: " & filename
-        Err.Clear
-        Exit Sub
-    End If
-    On Error GoTo 0
-    objWB.RefreshAll
-    WScript.Sleep waitSec * 1000
-    objWB.Save
-    objWB.Close False
-    WScript.Echo "OK: " & filename
-End Sub
+' ── File 2: righe_ordini_storico_con_date.xlsx ──────────────────────────────
+Set objWorkbook2 = objExcel.Workbooks.Open("C:\Users\Venezian.Denis\Desktop\python_access_sql\git-files\righe_ordini_storico_con_date.xlsx")
+objWorkbook2.RefreshAll
+WScript.Sleep 15000
+objWorkbook2.Save
+objWorkbook2.Close
 
-' ── Aggiornamento file in ordine (più leggeri prima) ────────────────────────
-WScript.Echo "=== Avvio refresh ARCA ==="
+' ── File 3: btl_istruzioni.xlsx ─────────────────────────────────────────────
+Set objWorkbook3 = objExcel.Workbooks.Open("C:\Users\Venezian.Denis\Desktop\python_access_sql\git-files\btl_istruzioni.xlsx")
+objWorkbook3.RefreshAll
+WScript.Sleep 8000
+objWorkbook3.Save
+objWorkbook3.Close
 
-Call RefreshFile("btl_istruzioni.xlsx",                  8)
-Call RefreshFile("dettagli_consegne_CLI.xlsx",           12)
-Call RefreshFile("dettagli_consegne.xlsx",               12)
-Call RefreshFile("righe_Ordini_ARCA.xlsx",               12)
-Call RefreshFile("Avanzamento_access.xlsx",              10)
-Call RefreshFile("righe_ordini_storico_con_date.xlsx",   18)
+' ── File 4: dettagli_consegne_CLI.xlsx ──────────────────────────────────────
+Set objWorkbook4 = objExcel.Workbooks.Open("C:\Users\Venezian.Denis\Desktop\python_access_sql\git-files\dettagli_consegne_CLI.xlsx")
+objWorkbook4.RefreshAll
+WScript.Sleep 12000
+objWorkbook4.Save
+objWorkbook4.Close
 
-WScript.Echo "=== Tutti i file aggiornati ==="
+' ── File 5: dettagli_consegne.xlsx ──────────────────────────────────────────
+Set objWorkbook5 = objExcel.Workbooks.Open("C:\Users\Venezian.Denis\Desktop\python_access_sql\git-files\dettagli_consegne.xlsx")
+objWorkbook5.RefreshAll
+WScript.Sleep 12000
+objWorkbook5.Save
+objWorkbook5.Close
+
 objExcel.Quit
