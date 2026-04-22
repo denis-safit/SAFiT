@@ -15,6 +15,7 @@ cd /d "%DIR_GIT%"
 :: ============================================================
 ::  FASE 1: ESTRAZIONE DATI ACCESS
 :: ============================================================
+pause
 cls
 echo.
 echo  ╔══════════════════════════════════════════════════╗
@@ -28,7 +29,7 @@ echo        OK.
 echo.
 echo  [2/4] Lancio Access ^(Macro Vai_Safit^)...
 start "" "msaccess.exe" "%DB_PONTE%" /x Vai_Safit
-
+pause
 echo.
 echo  In attesa generazione file Access...
 set /a _sp=0
