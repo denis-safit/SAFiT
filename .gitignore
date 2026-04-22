@@ -1,0 +1,8 @@
+# File temporanei Excel (aperti da Office)
+~$*.xlsx
+~$*.xls
+~$*.xlsm
+# File temporanei sistema
+*.tmp
+Thumbs.db
+.DS_Store
