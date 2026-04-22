@@ -11,13 +11,8 @@ set EXCEL_FILE=%DIR_GIT%\Avanzamento_access.xlsx
 cd /d "%DIR_GIT%"
 
 echo ============================================================
-echo            FASE 1: ESTRAZIONE DATI ACCESS V3.9
+echo            FASE 1: ESTRAZIONE DATI ACCESS V3.8
 echo ============================================================
-
-echo [0/8] Chiusura processi Excel e Access residui...
-taskkill /f /im MSACCESS.EXE >nul 2>&1
-taskkill /f /im EXCEL.EXE >nul 2>&1
-C:\Windows\System32\timeout.exe /t 2 >nul
 
 echo [1/8] Pulizia file Excel precedente...
 if exist "%EXCEL_FILE%" del /f /q "%EXCEL_FILE%"
@@ -33,6 +28,21 @@ if not exist "%EXCEL_FILE%" (
     goto loop
 )
 echo [OK] File Excel creato con successo!
+
+echo Chiusura Avanzamento_access.xlsx...
+cscript //nologo chiudi_avanzamento.vbs
+C:\Windows\System32\timeout.exe /t 2 >nul
+echo [OK] File chiuso.
+
+
+
+
+pause 
+
+
+
+
+
 
 echo.
 echo ============================================================
@@ -70,7 +80,6 @@ echo.
 echo ============================================================
 echo    AGGIORNAMENTO COMPLETATO!
 echo ============================================================
-pause
 C:\Windows\System32\timeout.exe /t 2 >nul
 
 start C:\Users\Venezian.Denis\Desktop\python_access_sql\Agente_arca_mail\avvia_agente.bat
