@@ -36,17 +36,7 @@ echo ============================================================
 echo [3/8] Aggiornamento Pivot ARCA...
 del /f /q "%TEMP%\arca_done.tmp" 2>nul
 start "" /min cmd /c "%DIR_GIT%\run_arca.bat"
-
-set _s=0
-:spin
-C:\Windows\System32\timeout.exe /t 1 >nul
-set /a _s=(_s+1) %% 4
-if %_s%==0 echo ^|  Aggiornamento ARCA in corso...
-if %_s%==1 echo /  Aggiornamento ARCA in corso...
-if %_s%==2 echo -  Aggiornamento ARCA in corso...
-if %_s%==3 echo \  Aggiornamento ARCA in corso...
-if not exist "%TEMP%\arca_done.tmp" goto spin
-echo [OK] Pivot ARCA aggiornato!
+python "%DIR_GIT%\spinner_arca.py" "%TEMP%\arca_done.tmp"
 
 echo [4/8] Preparazione file per GitHub...
 git add --all
@@ -75,7 +65,6 @@ echo ============================================================
 echo    AGGIORNAMENTO COMPLETATO!
 echo ============================================================
 C:\Windows\System32\timeout.exe /t 2 >nul
-
 
 
 
