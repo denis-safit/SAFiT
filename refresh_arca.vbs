@@ -1,20 +1,39 @@
+Dim objExcel, objWB
 Set objExcel = CreateObject("Excel.Application")
-' Nasconde Excel mentre lavora
 objExcel.Visible = False
 objExcel.DisplayAlerts = False
 
-' ── File 1: righe_Ordini_ARCA.xlsx (motore principale) ──────────────────────
-Set objWorkbook = objExcel.Workbooks.Open("C:\Users\Venezian.Denis\Desktop\python_access_sql\git-files\righe_Ordini_ARCA.xlsx")
-objWorkbook.RefreshAll
-WScript.Sleep 10000
-objWorkbook.Save
-objWorkbook.Close
+Dim BASE
+BASE = "C:\Users\Venezian.Denis\Desktop\python_access_sql\git-files\"
 
-' ── File 2: righe_ordini_storico_con_date.xlsx (BTL, Atoplast, Cronistoria) ──
-Set objWorkbook2 = objExcel.Workbooks.Open("C:\Users\Venezian.Denis\Desktop\python_access_sql\git-files\righe_ordini_storico_con_date.xlsx")
-objWorkbook2.RefreshAll
-WScript.Sleep 15000
-objWorkbook2.Save
-objWorkbook2.Close
+' ── Helper: apri, aggiorna, salva, chiudi ───────────────────────────────────
+Sub RefreshFile(filename, waitSec)
+    Dim path
+    path = BASE & filename
+    On Error Resume Next
+    Set objWB = objExcel.Workbooks.Open(path)
+    If Err.Number <> 0 Then
+        WScript.Echo "ERRORE apertura: " & filename
+        Err.Clear
+        Exit Sub
+    End If
+    On Error GoTo 0
+    objWB.RefreshAll
+    WScript.Sleep waitSec * 1000
+    objWB.Save
+    objWB.Close False
+    WScript.Echo "OK: " & filename
+End Sub
 
+' ── Aggiornamento file in ordine (più leggeri prima) ────────────────────────
+WScript.Echo "=== Avvio refresh ARCA ==="
+
+Call RefreshFile("btl_istruzioni.xlsx",                  8)
+Call RefreshFile("dettagli_consegne_CLI.xlsx",           12)
+Call RefreshFile("dettagli_consegne.xlsx",               12)
+Call RefreshFile("righe_Ordini_ARCA.xlsx",               12)
+Call RefreshFile("Avanzamento_access.xlsx",              10)
+Call RefreshFile("righe_ordini_storico_con_date.xlsx",   18)
+
+WScript.Echo "=== Tutti i file aggiornati ==="
 objExcel.Quit
