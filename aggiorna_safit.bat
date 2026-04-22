@@ -14,6 +14,11 @@ echo ============================================================
 echo            FASE 1: ESTRAZIONE DATI ACCESS V3.9
 echo ============================================================
 
+echo [0/8] Chiusura processi Excel e Access residui...
+taskkill /f /im MSACCESS.EXE >nul 2>&1
+taskkill /f /im EXCEL.EXE >nul 2>&1
+C:\Windows\System32\timeout.exe /t 2 >nul
+
 echo [1/8] Pulizia file Excel precedente...
 if exist "%EXCEL_FILE%" del /f /q "%EXCEL_FILE%"
 
@@ -63,7 +68,7 @@ start chrome.exe "https://qey2qqomzpzjmuxb8mfm5h.streamlit.app"
 
 echo.
 echo ============================================================
-echo    AGGIORNAMENTO COMPLETATO! CHIUSURA TRA 2 SECONDI...
+echo    AGGIORNAMENTO COMPLETATO!
 echo ============================================================
 C:\Windows\System32\timeout.exe /t 2 >nul
 
