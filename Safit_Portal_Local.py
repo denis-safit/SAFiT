@@ -1433,6 +1433,9 @@ if not df_res.empty:
             from kpi_avanzati import carica_storico_arca as _carica_sto
 
             _df_sto = _carica_sto()
+            # Filtra solo OCI (ordini clienti interni) per coerenza con i KPI operativi
+            if 'Codice Documento' in _df_sto.columns:
+                _df_sto = _df_sto[_df_sto['Codice Documento'] == 'OCI'].copy()
             if not _df_sto.empty and not df_view.empty and 'Famiglia' in df_view.columns:
                 st.markdown("---")
                 st.markdown("**🎯 Performance per Famiglia** — vendite periodo vs media storica")
