@@ -1693,33 +1693,7 @@ if not df_res.empty:
         df_export.at[i, 'COP_GRZ'] = cop_grz
         df_export.at[i, 'MANCANTE_QTA'] = manc
 
-        with kpi_tab_avz:
-            # Usa _admin come suffisso cliente per evitare key duplicate con vista cliente
-            render_kpi_avanzati(
-                filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
-                filtro_articolo=search if search else None,
-                filtro_famiglie=st.session_state.filtro_famiglie or None,
-                key_prefix="adm"
-            )
 
-        with kpi_tab_qual:
-            if _QUALITA_OK:
-                render_kpi_qualita(
-                    filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
-                    filtro_famiglie=st.session_state.filtro_famiglie or None
-                )
-            else:
-                st.error("Modulo kpi_qualita.py non trovato.")
-
-        with kpi_tab_stor:
-            if _STORICO_DISPONIBILE:
-                stor.render_kpi_storici(
-                    filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
-                    filtro_articolo=search if search else None,
-                    filtro_famiglie=st.session_state.filtro_famiglie or None
-                )
-            else:
-                st.error("Modulo storico_safit.py non trovato.")
 
     st.sidebar.download_button(
         "📊 Esporta Report (filtri attivi, completo + stock)",
@@ -1727,6 +1701,33 @@ if not df_res.empty:
         file_name=f"Safit_Report_{datetime.now().strftime('%d%m')}.xlsx",
         use_container_width=True,
     )
+
+    with kpi_tab_avz:
+        render_kpi_avanzati(
+            filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
+            filtro_articolo=search if search else None,
+            filtro_famiglie=st.session_state.filtro_famiglie or None,
+            key_prefix="adm"
+        )
+
+    with kpi_tab_qual:
+        if _QUALITA_OK:
+            render_kpi_qualita(
+                filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
+                filtro_famiglie=st.session_state.filtro_famiglie or None
+            )
+        else:
+            st.error("Modulo kpi_qualita.py non trovato.")
+
+    with kpi_tab_stor:
+        if _STORICO_DISPONIBILE:
+            stor.render_kpi_storici(
+                filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
+                filtro_articolo=search if search else None,
+                filtro_famiglie=st.session_state.filtro_famiglie or None
+            )
+        else:
+            st.error("Modulo storico_safit.py non trovato.")
 
     with tab_btl:
         render_vista_btl(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
