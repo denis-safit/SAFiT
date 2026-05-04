@@ -1477,16 +1477,22 @@ if not df_res.empty:
                         _df_op = _df_sto.copy()
                         _gg_op = max(1, (_df_sto["Data"].max() - _df_sto["Data"].min()).days)
 
-                _anni_sto = max(1, (_df_sto['Data'].max() - _df_sto['Data'].min()).days / 365)
+                # Media giornaliera storica (tutto lo storico OCI)
+                _gg_sto = max(1, (_df_sto['Data'].max() - _df_sto['Data'].min()).days)
                 _df_sto_fam = _df_sto.groupby('Famiglia')['Qta Doc'].sum().reset_index()
-                _df_sto_fam['Media_Anno'] = _df_sto_fam['Qta Doc'] / _anni_sto
-                _df_sto_fam['Media_Periodo'] = _df_sto_fam['Media_Anno'] * (_gg_op / 365)
+                _df_sto_fam['Media_Giorno_Sto'] = _df_sto_fam['Qta Doc'] / _gg_sto
 
+                # Media giornaliera periodo selezionato
                 _df_per_fam = _df_op.groupby('Famiglia')['Qta Doc'].sum().reset_index()
                 _df_per_fam.columns = ['Famiglia', 'Qta_Periodo']
-                _df_g = _df_per_fam.merge(_df_sto_fam[['Famiglia','Media_Periodo']], on='Famiglia', how='left')
+                _df_per_fam['Media_Giorno_Per'] = _df_per_fam['Qta_Periodo'] / max(1, _gg_op)
+
+                # Unisci e calcola %
+                _df_g = _df_per_fam.merge(_df_sto_fam[['Famiglia','Media_Giorno_Sto']], on='Famiglia', how='left')
                 _df_g = _df_g[_df_g['Qta_Periodo'] > 0].copy()
-                _df_g['Pct'] = (_df_g['Qta_Periodo'] / _df_g['Media_Periodo'] * 100).clip(0, 200)
+                _df_g['Pct'] = (_df_g['Media_Giorno_Per'] / _df_g['Media_Giorno_Sto'] * 100).clip(0, 200)
+                # Per le etichette mostra i valori giornalieri x1000 per leggibilità
+                _df_g['Media_Periodo'] = (_df_g['Media_Giorno_Sto'] * _gg_op).round(0).astype(int)
                 _df_g = _df_g.sort_values('Qta_Periodo', ascending=False).head(10)
 
                 def _gauge_op(pct, qta, media, fam):
