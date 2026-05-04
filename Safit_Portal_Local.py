@@ -1388,39 +1388,44 @@ if not df_res.empty:
     st.session_state.filtro_famiglie = [] if _sel_fam == _TUTTI else [_sel_fam]
     st.session_state.filtro_stati    = [] if _sel_sta == _TUTTI else [_sel_sta]
 
-    tab_det, tab_op, tab_kpi, tab_qual, tab_stor, tab_btl, tab_atp, tab_zak = st.tabs(
-        ["🔍 Dettaglio Ordini", "📋 KPI Operativi", "📊 KPI Avanzati", "🎯 KPI Qualità", "📈 KPI Storici", "🏭 Lavorazioni BTL", "🔵 Lavorazioni Atoplast", "🏪 ZaK Barletta"]
+    tab_det, tab_kpi_main, tab_btl, tab_atp, tab_zak = st.tabs(
+        ["🔍 Dettaglio Ordini", "📊 KPI", "🏭 Lavorazioni BTL", "🔵 Lavorazioni Atoplast", "🏪 ZaK Barletta"]
     )
 
-    with tab_op:
-        k1, k2, k3, k4 = st.columns(4)
-        k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">FILTRATI</div><div class="kpi-val">{int(df_view["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
-        k2.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#4caf50">PRONTI (GIA)</div><div class="kpi-val">{n_pronti_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
-        k3.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#9c27b0">BOM (FIGLI)</div><div class="kpi-val">{n_bom_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
-        k4.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#f44336">MANCANTI</div><div class="kpi-val">{n_mancanti_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
+    with tab_kpi_main:
+        # ── Sotto-tab KPI (uno alla volta) ───────────────────────────────────
+        kpi_tab_op, kpi_tab_avz, kpi_tab_qual, kpi_tab_stor = st.tabs([
+            "📋 Operativi", "📊 Avanzati", "🎯 Qualità", "📈 Storici"
+        ])
+        with kpi_tab_op:
+            k1, k2, k3, k4 = st.columns(4)
+            k1.markdown(f'<div class="kpi-card"><div style="font-size:11px">FILTRATI</div><div class="kpi-val">{int(df_view["Qta Residua"].sum()):,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
+            k2.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#4caf50">PRONTI (GIA)</div><div class="kpi-val">{n_pronti_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
+            k3.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#9c27b0">BOM (FIGLI)</div><div class="kpi-val">{n_bom_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
+            k4.markdown(f'<div class="kpi-card"><div style="font-size:11px; color:#f44336">MANCANTI</div><div class="kpi-val">{n_mancanti_admin:,}</div></div>'.replace(",", "."), unsafe_allow_html=True)
 
-        # Grafici copertura — usano df_view già filtrato per stato e famiglia
-        df_fam_chart   = df_view.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
-        df_stato_chart = (
-            df_view.groupby('ST')['Qta Residua'].sum().reset_index()
-            .rename(columns={'ST': 'ST', 'Qta Residua': 'Qta Residua'})
-            .sort_values('Qta Residua', ascending=False)
-            .reset_index(drop=True)
-        )
+            # Grafici copertura — usano df_view già filtrato per stato e famiglia
+            df_fam_chart   = df_view.groupby('Famiglia')['Qta Residua'].sum().reset_index().sort_values('Qta Residua', ascending=False).head(10)
+            df_stato_chart = (
+                df_view.groupby('ST')['Qta Residua'].sum().reset_index()
+                .rename(columns={'ST': 'ST', 'Qta Residua': 'Qta Residua'})
+                .sort_values('Qta Residua', ascending=False)
+                .reset_index(drop=True)
+            )
 
-        col_g1, col_g2 = st.columns(2)
-        with col_g1:
-            st.markdown("##### Stato Copertura")
-            fig_stato = px.pie(df_stato_chart, values='Qta Residua', names='ST', color='ST', color_discrete_map=COLOR_MAP)
-            fig_stato.update_traces(textinfo='label+percent', hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>')
-            fig_stato.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=False, height=320)
-            st.plotly_chart(fig_stato, use_container_width=True)
-        with col_g2:
-            st.markdown("##### Top 10 Famiglie")
-            fig_fam = px.pie(df_fam_chart, values='Qta Residua', names='Famiglia', hole=0.35)
-            fig_fam.update_traces(textinfo='label+percent', hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>', sort=True)
-            fig_fam.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=False, height=320)
-            st.plotly_chart(fig_fam, use_container_width=True)
+            col_g1, col_g2 = st.columns(2)
+            with col_g1:
+                st.markdown("##### Stato Copertura")
+                fig_stato = px.pie(df_stato_chart, values='Qta Residua', names='ST', color='ST', color_discrete_map=COLOR_MAP)
+                fig_stato.update_traces(textinfo='label+percent', hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>')
+                fig_stato.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=False, height=320)
+                st.plotly_chart(fig_stato, use_container_width=True)
+            with col_g2:
+                st.markdown("##### Top 10 Famiglie")
+                fig_fam = px.pie(df_fam_chart, values='Qta Residua', names='Famiglia', hole=0.35)
+                fig_fam.update_traces(textinfo='label+percent', hovertemplate='<b>%{label}</b><br>Qta: %{value:,.0f}<br>%{percent}<extra></extra>', sort=True)
+                fig_fam.update_layout(margin=dict(t=10,b=0,l=0,r=0), showlegend=False, height=320)
+                st.plotly_chart(fig_fam, use_container_width=True)
 
     # Download Excel: include TUTTI i campi del dataset filtrato in base
     # alle selezioni attive (famiglie/stati) che l'utente vede a schermo.
@@ -1518,38 +1523,38 @@ if not df_res.empty:
         df_export.at[i, 'COP_GRZ'] = cop_grz
         df_export.at[i, 'MANCANTE_QTA'] = manc
 
+        with kpi_tab_avz:
+            render_kpi_avanzati(
+                filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
+                filtro_articolo=search if search else None,
+                filtro_famiglie=st.session_state.filtro_famiglie or None
+            )
+
+        with kpi_tab_qual:
+            if _QUALITA_OK:
+                render_kpi_qualita(
+                    filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
+                    filtro_famiglie=st.session_state.filtro_famiglie or None
+                )
+            else:
+                st.error("Modulo kpi_qualita.py non trovato.")
+
+        with kpi_tab_stor:
+            if _STORICO_DISPONIBILE:
+                stor.render_kpi_storici(
+                    filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
+                    filtro_articolo=search if search else None,
+                    filtro_famiglie=st.session_state.filtro_famiglie or None
+                )
+            else:
+                st.error("Modulo storico_safit.py non trovato.")
+
     st.sidebar.download_button(
         "📊 Esporta Report (filtri attivi, completo + stock)",
         data=to_excel_full(df_export),
         file_name=f"Safit_Report_{datetime.now().strftime('%d%m')}.xlsx",
         use_container_width=True,
     )
-
-    with tab_kpi:
-        render_kpi_avanzati(
-            filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
-            filtro_articolo=search if search else None,
-            filtro_famiglie=st.session_state.filtro_famiglie or None
-        )
-
-    with tab_qual:
-        if _QUALITA_OK:
-            render_kpi_qualita(
-                filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
-                filtro_famiglie=st.session_state.filtro_famiglie or None
-            )
-        else:
-            st.error("Modulo kpi_qualita.py non trovato.")
-
-    with tab_stor:
-        if _STORICO_DISPONIBILE:
-            stor.render_kpi_storici(
-                filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
-                filtro_articolo=search if search else None,
-                filtro_famiglie=st.session_state.filtro_famiglie or None
-            )
-        else:
-            st.error("Modulo storico_safit.py non trovato.")
 
     with tab_btl:
         render_vista_btl(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
