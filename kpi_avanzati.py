@@ -860,10 +860,6 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         df_gauge['Pct'] = (df_gauge['Qta_Periodo'] / df_gauge['Media_Periodo'] * 100).clip(0, 200)
         df_gauge = df_gauge.sort_values('Qta_Periodo', ascending=False)
 
-        # DEBUG TEMPORANEO — rimuovere dopo verifica
-        st.write(f"DEBUG gauge: df_f righe={len(df_f)}, famiglie periodo={len(df_periodo_fam)}, df_gauge={len(df_gauge)}")
-        if not df_periodo_fam.empty:
-            st.write("Famiglie periodo:", df_periodo_fam['Famiglia'].tolist())
         if df_gauge.empty:
             st.info("Nessuna famiglia con vendite nel periodo selezionato.")
         else:
@@ -927,7 +923,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                                 'tickfont': {'size': 9, 'color': '#8B949E'},
                                 'tickcolor': '#8B949E',
                             },
-                            'bar': {'color': '#E6EDF3', 'thickness': 0.04},
+                            'bar': {'color': '#FFD700', 'thickness': 0.08},
                             'bgcolor': 'rgba(0,0,0,0)',
                             'borderwidth': 0,
                             'steps': [
