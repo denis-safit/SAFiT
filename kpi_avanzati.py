@@ -309,7 +309,7 @@ def kpi_card(col, title, value, sub="", color=""):
 
 # ── Rendering principale ──────────────────────────────────────────────────────
 
-def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_articolo=None, filtro_famiglie=None, key_prefix=""):
+def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_articolo=None, filtro_famiglie=None, key_prefix="kpi"):
     """
     Punto di ingresso. Da chiamare nella vista admin del portale.
     """
@@ -354,7 +354,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         # ── Filtri ────────────────────────────────────────────────────────────
         import hashlib as _hl
         _key_suffix = _hl.md5((
-            str(key_prefix or "kpi") +
+            str(key_prefix) +
             str(filtro_cliente or "") +
             str(filtro_articolo or "") +
             str(sorted(filtro_famiglie or []))
@@ -366,12 +366,12 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                 "Periodo",
                 ["Ultimi 90 gg", "Ultimi 6 mesi", "Ultimo anno",
                  "Tutto lo storico", "Intervallo personalizzato"],
-                index=2, key=None
+                index=2, key=f"kpi_periodo_{_key_suffix}"
             )
         with c2:
             famiglie = sorted(df_oci['Famiglia'].dropna().unique().tolist())
             sel_fam  = st.multiselect("Famiglia", famiglie,
-                                       
+                                       key=f"kpi_fam_{_key_suffix}",
                                        placeholder="Tutte le famiglie")
 
         # Se intervallo personalizzato: mostra i due date_input
@@ -383,13 +383,13 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                 data_da = st.date_input(
                     "📅 Dal", value=data_min_d,
                     min_value=data_min_d, max_value=data_max_d,
-                    format="DD/MM/YYYY"
+                    key=f"kpi_da_{_key_suffix}", format="DD/MM/YYYY"
                 )
             with dc2:
                 data_a = st.date_input(
                     "📅 Al", value=data_max_d,
                     min_value=data_min_d, max_value=data_max_d,
-                    format="DD/MM/YYYY"
+                    key=f"kpi_a_{_key_suffix}", format="DD/MM/YYYY"
                 )
 
         if filtro_cliente:
@@ -803,7 +803,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                 file_name=f"Solleciti_Riordino_{datetime.now().strftime('%d%m%Y')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
-                key=None
+                key=f"btn_solleciti_{_key_suffix}"
             )
 
             # Elenco righe alert
@@ -1021,7 +1021,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                     with cols[j]:
                         st.plotly_chart(fig, use_container_width=True,
                                         config={'displayModeBar': False},
-                                        key=None)
+                                        key=f"gauge_{fam}_{_key_suffix}")
 
                 for j in range(len(riga), N_COL):
                     cols[j].empty()
