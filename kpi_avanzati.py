@@ -868,6 +868,142 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
             famiglie_gauge = df_gauge['Famiglia'].tolist()
             righe = [famiglie_gauge[i:i+N_COL] for i in range(0, len(famiglie_gauge), N_COL)]
 
+            import math as _math
+
+            def _disegna_gauge(pct, qta, media, fam):
+                """
+                Disegna un contagiri con vera lancetta a ago.
+                Arco rosso 0-100%, arco verde 100-200%.
+                Lancetta = linea dal centro verso il bordo.
+                """
+                # Angoli: 0%=-180°, 100%=-90° (in su), 200%=0°
+                # In coordinate plotly (x,y): angolo 0=destra, 90=su
+                # Usiamo angolo_plot = 180 - pct/200*180 per avere sx→destra
+                def pct_to_angle(p):
+                    # 0% -> 180° (sx), 100% -> 90° (cima), 200% -> 0° (dx)
+                    return _math.radians(180 - (p / 200) * 180)
+
+                # Punti arco (semicerchio)
+                N = 60
+                R_EST = 1.0   # raggio esterno
+                R_INT = 0.55  # raggio interno
+
+                def arco_xy(a_start_pct, a_end_pct, r_est, r_int, n=N):
+                    xs, ys = [], []
+                    for i in range(n+1):
+                        p = a_start_pct + (a_end_pct - a_start_pct) * i / n
+                        a = pct_to_angle(p)
+                        xs.append(r_est * _math.cos(a))
+                        ys.append(r_est * _math.sin(a))
+                    for i in range(n+1):
+                        p = a_end_pct - (a_end_pct - a_start_pct) * i / n
+                        a = pct_to_angle(p)
+                        xs.append(r_int * _math.cos(a))
+                        ys.append(r_int * _math.sin(a))
+                    xs.append(xs[0]); ys.append(ys[0])
+                    return xs, ys
+
+                fig = go.Figure()
+
+                # Arco rosso 0-100%
+                rx, ry = arco_xy(0, 100, R_EST, R_INT)
+                fig.add_trace(go.Scatter(
+                    x=rx, y=ry, fill='toself',
+                    fillcolor='#C62828', line=dict(color='#C62828', width=0),
+                    showlegend=False, hoverinfo='skip', mode='lines'
+                ))
+
+                # Arco verde 100-200%
+                gx, gy = arco_xy(100, 200, R_EST, R_INT)
+                fig.add_trace(go.Scatter(
+                    x=gx, y=gy, fill='toself',
+                    fillcolor='#388E3C', line=dict(color='#388E3C', width=0),
+                    showlegend=False, hoverinfo='skip', mode='lines'
+                ))
+
+                # Linea separatrice a 100% (gialla)
+                a100 = pct_to_angle(100)
+                fig.add_trace(go.Scatter(
+                    x=[R_INT * _math.cos(a100), R_EST * _math.cos(a100)],
+                    y=[R_INT * _math.sin(a100), R_EST * _math.sin(a100)],
+                    mode='lines', line=dict(color='#FFD700', width=2),
+                    showlegend=False, hoverinfo='skip'
+                ))
+
+                # Lancetta a ago
+                a_lanc = pct_to_angle(pct)
+                lx = 0.90 * _math.cos(a_lanc)
+                ly = 0.90 * _math.sin(a_lanc)
+                # Ago: da centro (0,0) a punta
+                fig.add_trace(go.Scatter(
+                    x=[0, lx], y=[0, ly],
+                    mode='lines',
+                    line=dict(color='#111111', width=3),
+                    showlegend=False, hoverinfo='skip'
+                ))
+                # Cerchio centrale
+                theta_c = [_math.radians(i) for i in range(361)]
+                r_c = 0.07
+                fig.add_trace(go.Scatter(
+                    x=[r_c * _math.cos(t) for t in theta_c],
+                    y=[r_c * _math.sin(t) for t in theta_c],
+                    fill='toself', fillcolor='#111111',
+                    line=dict(color='#111111', width=0),
+                    showlegend=False, hoverinfo='skip', mode='lines'
+                ))
+
+                # Tick marks a 0%, 50%, 100%, 150%, 200%
+                for tick_pct, label in [(0,'0%'),(50,'50%'),(100,'100%'),(150,'150%'),(200,'200%')]:
+                    a_t = pct_to_angle(tick_pct)
+                    x0 = R_EST * _math.cos(a_t)
+                    y0 = R_EST * _math.sin(a_t)
+                    x1 = (R_EST + 0.08) * _math.cos(a_t)
+                    y1 = (R_EST + 0.08) * _math.sin(a_t)
+                    fig.add_trace(go.Scatter(
+                        x=[x0, x1], y=[y0, y1],
+                        mode='lines', line=dict(color='#8B949E', width=1),
+                        showlegend=False, hoverinfo='skip'
+                    ))
+                    fig.add_annotation(
+                        x=(R_EST + 0.20) * _math.cos(a_t),
+                        y=(R_EST + 0.20) * _math.sin(a_t),
+                        text=label, showarrow=False,
+                        font=dict(size=8, color='#8B949E'),
+                        xanchor='center', yanchor='middle'
+                    )
+
+                # Valore % e label famiglia al centro-basso
+                col_pct = '#66BB6A' if pct >= 100 else '#EF5350'
+                fig.add_annotation(
+                    x=0, y=-0.25,
+                    text=f"<b style='font-size:16px;color:{col_pct}'>{pct:.0f}%</b>",
+                    showarrow=False, font=dict(size=14, color=col_pct),
+                    xanchor='center', yanchor='top'
+                )
+                fig.add_annotation(
+                    x=0, y=-0.45,
+                    text=f"<b>{fam}</b>",
+                    showarrow=False, font=dict(size=11, color='#C9D1D9'),
+                    xanchor='center', yanchor='top'
+                )
+                fig.add_annotation(
+                    x=0, y=-0.60,
+                    text=f"{qta:,} pa. | media: {media:,} pa.".replace(",","."),
+                    showarrow=False, font=dict(size=9, color='#8B949E'),
+                    xanchor='center', yanchor='top'
+                )
+
+                fig.update_layout(
+                    height=260,
+                    margin=dict(t=10, b=10, l=10, r=10),
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    xaxis=dict(visible=False, range=[-1.5, 1.5], scaleanchor='y'),
+                    yaxis=dict(visible=False, range=[-0.8, 1.3]),
+                    showlegend=False,
+                )
+                return fig
+
             for riga in righe:
                 cols = st.columns(N_COL)
                 for j, fam in enumerate(riga):
@@ -875,93 +1011,11 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                     pct   = float(row['Pct'])
                     qta   = int(row['Qta_Periodo'])
                     media = int(row['Media_Periodo'])
-
-                    # Crea il contagiri con plotly
-                    # L'arco va da -180° a 0° (sx a dx)
-                    # 0%   = -180° (estremo sx)
-                    # 100% = -90°  (verticale, in alto)
-                    # 200% = 0°    (estremo dx)
-                    import math as _math
-                    # Angolo lancetta: da -180 a 0 proporzionale a 0-200%
-                    angolo_deg = -180 + (pct / 200) * 180
-                    angolo_rad = _math.radians(angolo_deg)
-                    lx = _math.cos(angolo_rad) * 0.75
-                    ly = _math.sin(angolo_rad) * 0.75
-
-                    fig = go.Figure()
-
-                    # Arco rosso: 0–100% (da -180° a -90°)
-                    theta_rosso = [_math.degrees(_math.radians(-180 + i * 90/50)) for i in range(51)]
-                    fig.add_trace(go.Scatterpolar(
-                        r=[1]*51 + [0.65]*51 + [1],
-                        theta=theta_rosso + theta_rosso[::-1] + [theta_rosso[0]],
-                        fill='toself', fillcolor='#E53935',
-                        line=dict(color='#E53935', width=0),
-                        showlegend=False, hoverinfo='skip'
-                    ))
-
-                    # Arco verde: 100–200% (da -90° a 0°)
-                    theta_verde = [_math.degrees(_math.radians(-90 + i * 90/50)) for i in range(51)]
-                    fig.add_trace(go.Scatterpolar(
-                        r=[1]*51 + [0.65]*51 + [1],
-                        theta=theta_verde + theta_verde[::-1] + [theta_verde[0]],
-                        fill='toself', fillcolor='#66BB6A',
-                        line=dict(color='#66BB6A', width=0),
-                        showlegend=False, hoverinfo='skip'
-                    ))
-
-                    # Usa go.Indicator per il gauge vero con lancetta
-                    fig2 = go.Figure(go.Indicator(
-                        mode="gauge+number",
-                        value=pct,
-                        number={'suffix': '%', 'font': {'size': 16, 'color': '#E6EDF3'}},
-                        gauge={
-                            'axis': {
-                                'range': [0, 200],
-                                'tickvals': [0, 50, 100, 150, 200],
-                                'ticktext': ['0%', '50%', '100%', '150%', '200%'],
-                                'tickfont': {'size': 9, 'color': '#8B949E'},
-                                'tickcolor': '#8B949E',
-                            },
-                            'bar': {'color': '#FFD700', 'thickness': 0.08},
-                            'bgcolor': 'rgba(0,0,0,0)',
-                            'borderwidth': 0,
-                            'steps': [
-                                {'range': [0, 100],   'color': '#C62828'},
-                                {'range': [100, 200], 'color': '#388E3C'},
-                            ],
-                            'threshold': {
-                                'line': {'color': '#FFD700', 'width': 2},
-                                'thickness': 0.75,
-                                'value': 100
-                            }
-                        },
-                        domain={'x': [0, 1], 'y': [0.1, 1]}
-                    ))
-
-                    fig2.update_layout(
-                        height=200,
-                        margin=dict(t=20, b=0, l=10, r=10),
-                        paper_bgcolor='rgba(22,27,34,0)',
-                        font=dict(color='#E6EDF3'),
-                        annotations=[
-                            dict(
-                                x=0.5, y=0.0,
-                                text=f"<b>{fam}</b><br>"
-                                     f"<span style='font-size:11px'>{qta:,} pa. | media: {media:,} pa.</span>".replace(",","."),
-                                showarrow=False,
-                                font=dict(size=12, color='#C9D1D9'),
-                                align='center',
-                                xref='paper', yref='paper'
-                            )
-                        ]
-                    )
-
+                    fig = _disegna_gauge(pct, qta, media, fam)
                     with cols[j]:
-                        st.plotly_chart(fig2, use_container_width=True,
+                        st.plotly_chart(fig, use_container_width=True,
                                         config={'displayModeBar': False},
                                         key=f"gauge_{fam}_{_key_suffix}")
 
-                # Colonne vuote se riga incompleta
                 for j in range(len(riga), N_COL):
                     cols[j].empty()
