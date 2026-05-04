@@ -352,13 +352,8 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         )
 
         # ── Filtri ────────────────────────────────────────────────────────────
-        import hashlib as _hl
-        _key_suffix = _hl.md5((
-            str(key_prefix or "") +
-            str(filtro_cliente or "") +
-            str(filtro_articolo or "") +
-            str(filtro_famiglie or "")
-        ).encode()).hexdigest()[:8]
+        _CALL_COUNTER[0] += 1
+        _key_suffix = f"kpi{_CALL_COUNTER[0]}"
 
         c1, c2 = st.columns([1, 2])
         with c1:
