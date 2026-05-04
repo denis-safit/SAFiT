@@ -899,7 +899,7 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
                 )
 
     with tab_kpi_cli:
-        render_kpi_avanzati(filtro_cliente=nome_cliente, key_prefix="cli")
+        st.info("📊 Per i KPI avanzati di questo cliente vai al tab **KPI → Avanzati** con il cliente selezionato.")
 
 
 # ===========================================================
