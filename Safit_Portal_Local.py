@@ -1523,6 +1523,143 @@ if not df_res.empty:
         df_export.at[i, 'COP_GRZ'] = cop_grz
         df_export.at[i, 'MANCANTE_QTA'] = manc
 
+        # ── CONTAGIRI PER FAMIGLIA (KPI Operativi) ──────────────────────────
+        # Calcola performance per famiglia usando df_view (già filtrato) e storico
+        import math as _math_g
+        from kpi_avanzati import carica_storico_arca as _carica_sto
+
+        _df_sto = _carica_sto()
+        if not _df_sto.empty and not df_view.empty and 'Famiglia' in df_view.columns:
+            st.markdown("---")
+            st.markdown("**🎯 Performance per Famiglia** — vendite periodo vs media storica")
+            st.caption("Rosso: sotto la media storica | Verde: sopra | 100% = media attesa")
+
+            _anni_sto = max(1, (_df_sto['Data'].max() - _df_sto['Data'].min()).days / 365)
+            _df_sto_fam = _df_sto.groupby('Famiglia')['Qta Doc'].sum().reset_index()
+            _df_sto_fam['Media_Anno'] = _df_sto_fam['Qta Doc'] / _anni_sto
+
+            # Periodo: usa ultimi 365gg come default per tab operativi
+            _cutoff_op = pd.Timestamp(datetime.now() - timedelta(days=365))
+            _df_op = _df_sto[_df_sto['Data'] >= _cutoff_op] if 'Data' in _df_sto.columns else _df_sto
+            _gg_op = 365
+            _df_sto_fam['Media_Periodo'] = _df_sto_fam['Media_Anno'] * (_gg_op / 365)
+
+            _df_per_fam = _df_op.groupby('Famiglia')['Qta Doc'].sum().reset_index()
+            _df_per_fam.columns = ['Famiglia', 'Qta_Periodo']
+            _df_g = _df_per_fam.merge(_df_sto_fam[['Famiglia','Media_Periodo']], on='Famiglia', how='left')
+            _df_g = _df_g[_df_g['Qta_Periodo'] > 0].copy()
+            _df_g['Pct'] = (_df_g['Qta_Periodo'] / _df_g['Media_Periodo'] * 100).clip(0, 200)
+            _df_g = _df_g.sort_values('Qta_Periodo', ascending=False)
+
+            def _gauge_op(pct, qta, media, fam):
+                def _pta(p):
+                    return _math_g.radians(180 - (p / 200) * 180)
+                N = 50
+                RE, RI = 1.0, 0.58
+
+                def _arco(s, e, re, ri):
+                    xs, ys = [], []
+                    for i in range(N+1):
+                        a = _pta(s + (e-s)*i/N)
+                        xs.append(re*_math_g.cos(a)); ys.append(re*_math_g.sin(a))
+                    for i in range(N+1):
+                        a = _pta(e - (e-s)*i/N)
+                        xs.append(ri*_math_g.cos(a)); ys.append(ri*_math_g.sin(a))
+                    xs.append(xs[0]); ys.append(ys[0])
+                    return xs, ys
+
+                fig = go.Figure()
+                rx, ry = _arco(0, 100, RE, RI)
+                fig.add_trace(go.Scatter(x=rx, y=ry, fill='toself',
+                    fillcolor='#C62828', line=dict(color='#C62828', width=0),
+                    showlegend=False, hoverinfo='skip', mode='lines'))
+                gx, gy = _arco(100, 200, RE, RI)
+                fig.add_trace(go.Scatter(x=gx, y=gy, fill='toself',
+                    fillcolor='#2E7D32', line=dict(color='#2E7D32', width=0),
+                    showlegend=False, hoverinfo='skip', mode='lines'))
+
+                # Separatore 100% giallo
+                a100 = _pta(100)
+                fig.add_trace(go.Scatter(
+                    x=[RI*_math_g.cos(a100), RE*_math_g.cos(a100)],
+                    y=[RI*_math_g.sin(a100), RE*_math_g.sin(a100)],
+                    mode='lines', line=dict(color='#FFD700', width=2),
+                    showlegend=False, hoverinfo='skip'))
+
+                # Lancetta
+                al = _pta(pct)
+                fig.add_trace(go.Scatter(
+                    x=[0, 0.88*_math_g.cos(al)], y=[0, 0.88*_math_g.sin(al)],
+                    mode='lines', line=dict(color='#111', width=4),
+                    showlegend=False, hoverinfo='skip'))
+                tc = [_math_g.radians(i) for i in range(361)]
+                fig.add_trace(go.Scatter(
+                    x=[0.07*_math_g.cos(t) for t in tc],
+                    y=[0.07*_math_g.sin(t) for t in tc],
+                    fill='toself', fillcolor='#111',
+                    line=dict(color='#111', width=0),
+                    showlegend=False, hoverinfo='skip', mode='lines'))
+
+                # Tick 0/100/200%
+                for tp, lb in [(0,'0%'),(100,'100%'),(200,'200%')]:
+                    at = _pta(tp)
+                    fig.add_trace(go.Scatter(
+                        x=[RE*_math_g.cos(at), (RE+0.07)*_math_g.cos(at)],
+                        y=[RE*_math_g.sin(at), (RE+0.07)*_math_g.sin(at)],
+                        mode='lines', line=dict(color='#666', width=1),
+                        showlegend=False, hoverinfo='skip'))
+                    fig.add_annotation(
+                        x=(RE+0.22)*_math_g.cos(at), y=(RE+0.22)*_math_g.sin(at),
+                        text=lb, showarrow=False,
+                        font=dict(size=9, color='#555'),
+                        xanchor='center', yanchor='middle')
+
+                # Valori testo — grandi e ben visibili
+                col_p = '#2E7D32' if pct >= 100 else '#C62828'
+                fig.add_annotation(x=0, y=-0.18,
+                    text=f"<b>{pct:.0f}%</b>",
+                    showarrow=False, font=dict(size=22, color=col_p),
+                    xanchor='center', yanchor='top')
+                fig.add_annotation(x=0, y=-0.42,
+                    text=f"<b>{fam}</b>",
+                    showarrow=False, font=dict(size=13, color='#1a1a2e'),
+                    xanchor='center', yanchor='top')
+                fig.add_annotation(x=0, y=-0.60,
+                    text=f"{qta:,} pa. | med: {media:,} pa.".replace(",","."),
+                    showarrow=False, font=dict(size=11, color='#444'),
+                    xanchor='center', yanchor='top')
+
+                fig.update_layout(
+                    height=210,
+                    margin=dict(t=8, b=8, l=8, r=8),
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    xaxis=dict(visible=False, range=[-1.45, 1.45], scaleanchor='y'),
+                    yaxis=dict(visible=False, range=[-0.80, 1.25]),
+                    showlegend=False,
+                )
+                return fig
+
+            if not _df_g.empty:
+                _N_COL = 4
+                _righe = [_df_g['Famiglia'].tolist()[i:i+_N_COL]
+                          for i in range(0, len(_df_g), _N_COL)]
+                for _riga in _righe:
+                    _cols = st.columns(_N_COL)
+                    for _j, _fam in enumerate(_riga):
+                        _row = _df_g[_df_g['Famiglia'] == _fam].iloc[0]
+                        with _cols[_j]:
+                            st.plotly_chart(
+                                _gauge_op(float(_row['Pct']),
+                                          int(_row['Qta_Periodo']),
+                                          int(_row['Media_Periodo']), _fam),
+                                use_container_width=True,
+                                config={'displayModeBar': False},
+                                key=f"gop_{_fam}"
+                            )
+                    for _j in range(len(_riga), _N_COL):
+                        _cols[_j].empty()
+
         with kpi_tab_avz:
             render_kpi_avanzati(
                 filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
