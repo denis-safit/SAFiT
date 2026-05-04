@@ -1599,6 +1599,7 @@ if not df_res.empty:
                     xs.append(xs[0]); ys.append(ys[0])
                     return xs, ys
 
+                import plotly.graph_objects as go
                 fig = go.Figure()
                 rx, ry = _arco(0, 100, RE, RI)
                 fig.add_trace(go.Scatter(x=rx, y=ry, fill='toself',
