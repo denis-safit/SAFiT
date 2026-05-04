@@ -1534,14 +1534,45 @@ if not df_res.empty:
             st.markdown("**🎯 Performance per Famiglia** — vendite periodo vs media storica")
             st.caption("Rosso: sotto la media storica | Verde: sopra | 100% = media attesa")
 
+            from datetime import datetime as _dt_op, timedelta as _td_op
+
+            # Selettore periodo
+            _gg_map_op = {"Ultimi 90 gg": 90, "Ultimi 6 mesi": 180,
+                          "Ultimo anno": 365, "Tutto lo storico": 9999}
+            _pc1, _pc2 = st.columns([1, 2])
+            with _pc1:
+                _periodo_op = st.selectbox(
+                    "Periodo performance",
+                    list(_gg_map_op.keys()) + ["Intervallo personalizzato"],
+                    index=2, key="kpi_op_periodo"
+                )
+            if _periodo_op == "Intervallo personalizzato":
+                _dmin = _df_sto["Data"].min().date() if not _df_sto.empty else _dt_op(2024,1,1).date()
+                _dmax = _df_sto["Data"].max().date() if not _df_sto.empty else _dt_op.now().date()
+                _pd1, _pd2 = st.columns(2)
+                with _pd1:
+                    _da_op = st.date_input("📅 Dal", value=_dmin,
+                        min_value=_dmin, max_value=_dmax,
+                        key="kpi_op_da", format="DD/MM/YYYY")
+                with _pd2:
+                    _a_op = st.date_input("📅 Al", value=_dmax,
+                        min_value=_dmin, max_value=_dmax,
+                        key="kpi_op_a", format="DD/MM/YYYY")
+                _df_op = _df_sto[(_df_sto["Data"] >= pd.Timestamp(_da_op)) &
+                                  (_df_sto["Data"] <= pd.Timestamp(_a_op))]
+                _gg_op = max(1, (pd.Timestamp(_a_op) - pd.Timestamp(_da_op)).days)
+            else:
+                _gg_op = _gg_map_op[_periodo_op]
+                if _gg_op < 9999:
+                    _cutoff_op = pd.Timestamp(_dt_op.now() - _td_op(days=_gg_op))
+                    _df_op = _df_sto[_df_sto["Data"] >= _cutoff_op]
+                else:
+                    _df_op = _df_sto.copy()
+                    _gg_op = max(1, (_df_sto["Data"].max() - _df_sto["Data"].min()).days)
+
             _anni_sto = max(1, (_df_sto['Data'].max() - _df_sto['Data'].min()).days / 365)
             _df_sto_fam = _df_sto.groupby('Famiglia')['Qta Doc'].sum().reset_index()
             _df_sto_fam['Media_Anno'] = _df_sto_fam['Qta Doc'] / _anni_sto
-
-            # Periodo: usa ultimi 365gg come default per tab operativi
-            _cutoff_op = pd.Timestamp(datetime.now() - timedelta(days=365))
-            _df_op = _df_sto[_df_sto['Data'] >= _cutoff_op] if 'Data' in _df_sto.columns else _df_sto
-            _gg_op = 365
             _df_sto_fam['Media_Periodo'] = _df_sto_fam['Media_Anno'] * (_gg_op / 365)
 
             _df_per_fam = _df_op.groupby('Famiglia')['Qta Doc'].sum().reset_index()
