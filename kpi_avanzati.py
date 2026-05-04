@@ -352,6 +352,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         )
 
         # ── Filtri ────────────────────────────────────────────────────────────
+        global _CALL_COUNTER
         _CALL_COUNTER[0] += 1
         _key_suffix = f"kpi{_CALL_COUNTER[0]}"
 
