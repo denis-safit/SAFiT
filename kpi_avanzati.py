@@ -27,7 +27,7 @@ import os
 import os as _os
 _DIR = _os.path.dirname(_os.path.abspath(__file__))
 PATH_STORICO   = _os.path.join(_DIR, "righe_ordini_storico_con_date.xlsx")
-PATH_CONSEGNE  = _os.path.join(_DIR, "dettagli_consegne_CLI.xlsx")
+PATH_CONSEGNE  = _os.path.join(_DIR, "dettagli_consegne.xlsx")
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 KPI_CSS = """
@@ -116,7 +116,7 @@ def carica_storico_arca(path=PATH_STORICO):
 @st.cache_data(ttl=1800, show_spinner=False)
 def carica_dettagli_consegne(path=PATH_CONSEGNE):
     """
-    Carica il file dettagli_consegne_CLI.xlsx esportato da ARCA.
+    Carica il file dettagli_consegne.xlsx esportato da ARCA.
     Contiene già lo scostamento calcolato (datadifference) per ogni riga DVF.
     Colonne chiave:
       Cd_CF, CF_Descrizione, Cd_AR, DORig_Descrizione,
@@ -154,9 +154,9 @@ def carica_dettagli_consegne(path=PATH_CONSEGNE):
 
 
 def get_oci_oca(df):
-    """Filtra solo OCI e OCA con quantità > 0."""
+    """Filtra solo OCI con quantità > 0."""
     return df[
-        df['Codice Documento'].isin(['OCI', 'OCA']) &
+        df['Codice Documento'].isin(['OCI']) &
         (df['Qta Doc'] > 0)
     ].copy()
 
@@ -228,7 +228,7 @@ def calcola_frequenza_riordino(df_ordini):
 
 def calcola_scostamento_consegna(df_cons, filtro_cliente=None, filtro_articolo=None, filtro_famiglie=None, cutoff=None):
     """
-    Calcola puntualità consegne dal file dettagli_consegne_CLI.xlsx.
+    Calcola puntualità consegne dal file dettagli_consegne.xlsx.
     Usa datadifference già calcolato da ARCA — nessun join complicato.
     Positivo = ritardo, Negativo = anticipo, 0 = puntuale.
     """
@@ -348,7 +348,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
 
         st.caption(
             f"📁 Storico caricato: **{len(df_all):,}** righe totali | "
-            f"**{len(df_oci):,}** OCI/OCA | **{len(df_dvf):,}** DVF".replace(",",".")
+            f"**{len(df_oci):,}** OCI | **{len(df_dvf):,}** DVF".replace(",",".")
         )
 
         # ── Filtri ────────────────────────────────────────────────────────────
@@ -622,7 +622,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         df_det_cons = carica_dettagli_consegne()
         if df_det_cons.empty:
             st.info(
-                "File `dettagli_consegne_CLI.xlsx` non trovato. "
+                "File `dettagli_consegne.xlsx` non trovato. "
                 "Esporta il report da ARCA e caricalo su GitHub."
             )
             df_cons, summary = pd.DataFrame(), {}
@@ -638,7 +638,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         if df_cons.empty:
             st.info(
                 "Nessuna riga trovata nel file consegne per i filtri selezionati. "
-                "Verifica che il file `dettagli_consegne_CLI.xlsx` contenga dati "
+                "Verifica che il file `dettagli_consegne.xlsx` contenga dati "
                 "per il cliente/periodo selezionato."
             )
         else:
@@ -816,3 +816,152 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                     f'</div>',
                     unsafe_allow_html=True
                 )
+
+
+        # ════════════════════════════════════════════════════════════════════
+        # SEZIONE — INDICATORI A CONTAGIRI PER FAMIGLIA
+        # Lancetta = vendite periodo filtrato
+        # 100% = media storica totale per quella famiglia
+        # Arco rosso: 0–100%, arco verde: 100–200%
+        # ════════════════════════════════════════════════════════════════════
+        st.markdown('<div class="sec-h">🎯 Performance per Famiglia</div>',
+                    unsafe_allow_html=True)
+        st.caption(
+            "La lancetta indica le vendite del periodo selezionato. "
+            "100% = media storica della famiglia. "
+            "Rosso: sotto media — Verde: sopra media."
+        )
+
+        # Calcola media storica per famiglia su tutto lo storico OCI
+        df_storico_fam = df_oci.groupby('Famiglia')['Qta Doc'].sum().reset_index()
+        # Numero di anni distinti nello storico per normalizzare
+        anni_storico = max(1, (df_oci['Data'].max() - df_oci['Data'].min()).days / 365)
+
+        # Calcola vendite periodo filtrato per famiglia
+        df_periodo_fam = df_f.groupby('Famiglia')['Qta Doc'].sum().reset_index()
+        df_periodo_fam.columns = ['Famiglia', 'Qta_Periodo']
+
+        # Calcola durata del periodo filtrato in anni per normalizzare
+        if periodo == "Intervallo personalizzato":
+            gg_periodo = (pd.Timestamp(data_a) - pd.Timestamp(data_da)).days
+        else:
+            gg_periodo = gg if gg < 9999 else (df_oci['Data'].max() - df_oci['Data'].min()).days
+        gg_periodo = max(1, gg_periodo)
+
+        # Media storica annualizzata poi scalata al periodo → valore atteso nel periodo
+        df_storico_fam['Media_Anno'] = df_storico_fam['Qta Doc'] / anni_storico
+        df_storico_fam['Media_Periodo'] = df_storico_fam['Media_Anno'] * (gg_periodo / 365)
+
+        # Unisci
+        df_gauge = df_periodo_fam.merge(
+            df_storico_fam[['Famiglia', 'Media_Periodo']], on='Famiglia', how='left'
+        )
+        df_gauge = df_gauge[df_gauge['Qta_Periodo'] > 0].copy()
+        df_gauge['Pct'] = (df_gauge['Qta_Periodo'] / df_gauge['Media_Periodo'] * 100).clip(0, 200)
+        df_gauge = df_gauge.sort_values('Qta_Periodo', ascending=False)
+
+        if df_gauge.empty:
+            st.info("Nessuna famiglia con vendite nel periodo selezionato.")
+        else:
+            # Griglia: max 4 per riga
+            N_COL = 4
+            famiglie_gauge = df_gauge['Famiglia'].tolist()
+            righe = [famiglie_gauge[i:i+N_COL] for i in range(0, len(famiglie_gauge), N_COL)]
+
+            for riga in righe:
+                cols = st.columns(N_COL)
+                for j, fam in enumerate(riga):
+                    row = df_gauge[df_gauge['Famiglia'] == fam].iloc[0]
+                    pct   = float(row['Pct'])
+                    qta   = int(row['Qta_Periodo'])
+                    media = int(row['Media_Periodo'])
+
+                    # Crea il contagiri con plotly
+                    # L'arco va da -180° a 0° (sx a dx)
+                    # 0%   = -180° (estremo sx)
+                    # 100% = -90°  (verticale, in alto)
+                    # 200% = 0°    (estremo dx)
+                    import math as _math
+                    # Angolo lancetta: da -180 a 0 proporzionale a 0-200%
+                    angolo_deg = -180 + (pct / 200) * 180
+                    angolo_rad = _math.radians(angolo_deg)
+                    lx = _math.cos(angolo_rad) * 0.75
+                    ly = _math.sin(angolo_rad) * 0.75
+
+                    fig = go.Figure()
+
+                    # Arco rosso: 0–100% (da -180° a -90°)
+                    theta_rosso = [_math.degrees(_math.radians(-180 + i * 90/50)) for i in range(51)]
+                    fig.add_trace(go.Scatterpolar(
+                        r=[1]*51 + [0.65]*51 + [1],
+                        theta=theta_rosso + theta_rosso[::-1] + [theta_rosso[0]],
+                        fill='toself', fillcolor='#E53935',
+                        line=dict(color='#E53935', width=0),
+                        showlegend=False, hoverinfo='skip'
+                    ))
+
+                    # Arco verde: 100–200% (da -90° a 0°)
+                    theta_verde = [_math.degrees(_math.radians(-90 + i * 90/50)) for i in range(51)]
+                    fig.add_trace(go.Scatterpolar(
+                        r=[1]*51 + [0.65]*51 + [1],
+                        theta=theta_verde + theta_verde[::-1] + [theta_verde[0]],
+                        fill='toself', fillcolor='#66BB6A',
+                        line=dict(color='#66BB6A', width=0),
+                        showlegend=False, hoverinfo='skip'
+                    ))
+
+                    # Usa go.Indicator per il gauge vero con lancetta
+                    fig2 = go.Figure(go.Indicator(
+                        mode="gauge+number",
+                        value=pct,
+                        number={'suffix': '%', 'font': {'size': 16, 'color': '#E6EDF3'}},
+                        gauge={
+                            'axis': {
+                                'range': [0, 200],
+                                'tickvals': [0, 50, 100, 150, 200],
+                                'ticktext': ['0%', '50%', '100%', '150%', '200%'],
+                                'tickfont': {'size': 9, 'color': '#8B949E'},
+                                'tickcolor': '#8B949E',
+                            },
+                            'bar': {'color': '#E6EDF3', 'thickness': 0.04},
+                            'bgcolor': 'rgba(0,0,0,0)',
+                            'borderwidth': 0,
+                            'steps': [
+                                {'range': [0, 100],   'color': '#C62828'},
+                                {'range': [100, 200], 'color': '#388E3C'},
+                            ],
+                            'threshold': {
+                                'line': {'color': '#FFD700', 'width': 2},
+                                'thickness': 0.75,
+                                'value': 100
+                            }
+                        },
+                        domain={'x': [0, 1], 'y': [0.1, 1]}
+                    ))
+
+                    fig2.update_layout(
+                        height=200,
+                        margin=dict(t=20, b=0, l=10, r=10),
+                        paper_bgcolor='rgba(22,27,34,0)',
+                        font=dict(color='#E6EDF3'),
+                        annotations=[
+                            dict(
+                                x=0.5, y=0.0,
+                                text=f"<b>{fam}</b><br>"
+                                     f"<span style='font-size:11px'>{qta:,} pa. | media: {media:,} pa.</span>".replace(",","."),
+                                showarrow=False,
+                                font=dict(size=12, color='#C9D1D9'),
+                                align='center',
+                                xref='paper', yref='paper'
+                            )
+                        ]
+                    )
+
+                    with cols[j]:
+                        st.plotly_chart(fig2, use_container_width=True,
+                                        config={'displayModeBar': False},
+                                        key=f"gauge_{fam}_{_key_suffix}")
+
+                # Colonne vuote se riga incompleta
+                for j in range(len(riga), N_COL):
+                    cols[j].empty()
