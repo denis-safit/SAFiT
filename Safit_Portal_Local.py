@@ -899,7 +899,7 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
                 )
 
     with tab_kpi_cli:
-        render_kpi_avanzati(filtro_cliente=nome_cliente)
+        render_kpi_avanzati(filtro_cliente=nome_cliente, key_prefix="cli")
 
 
 # ===========================================================
@@ -1695,11 +1695,11 @@ if not df_res.empty:
 
         with kpi_tab_avz:
             # Usa _admin come suffisso cliente per evitare key duplicate con vista cliente
-            _cli_kpi = (sel_cli if sel_cli != "TUTTI" else None) or "_admin"
             render_kpi_avanzati(
-                filtro_cliente=_cli_kpi,
+                filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
                 filtro_articolo=search if search else None,
-                filtro_famiglie=st.session_state.filtro_famiglie or None
+                filtro_famiglie=st.session_state.filtro_famiglie or None,
+                key_prefix="adm"
             )
 
         with kpi_tab_qual:
