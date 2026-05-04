@@ -309,7 +309,7 @@ def kpi_card(col, title, value, sub="", color=""):
 
 # ── Rendering principale ──────────────────────────────────────────────────────
 
-def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_articolo=None, filtro_famiglie=None):
+def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_articolo=None, filtro_famiglie=None, key_prefix=""):
     """
     Punto di ingresso. Da chiamare nella vista admin del portale.
     """
@@ -352,7 +352,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         )
 
         # ── Filtri ────────────────────────────────────────────────────────────
-        _key_suffix = str(filtro_cliente or "tutti").lower().replace(" ", "_")[:20]
+        _key_suffix = (key_prefix + "_" if key_prefix else "") + str(filtro_cliente or "tutti").lower().replace(" ", "_")[:20]
 
         c1, c2 = st.columns([1, 2])
         with c1:
