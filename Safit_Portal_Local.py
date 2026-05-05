@@ -1564,56 +1564,74 @@ if not df_res.empty:
                         mode='lines', line=dict(color='#FFD700', width=3),
                         showlegend=False, hoverinfo='skip'))
 
-                    # Lancetta
+                    # Lancetta — bianca con bordo scuro per visibilità su tutti gli sfondi
                     al = _pta(pct)
                     fig.add_trace(go.Scatter(
                         x=[0, 0.88*_math_g.cos(al)], y=[0, 0.88*_math_g.sin(al)],
-                        mode='lines', line=dict(color='#111', width=4),
+                        mode='lines', line=dict(color='#FFFFFF', width=4),
+                        showlegend=False, hoverinfo='skip'))
+                    # Bordo lancetta (leggermente più larga e scura sotto)
+                    fig.add_trace(go.Scatter(
+                        x=[0, 0.88*_math_g.cos(al)], y=[0, 0.88*_math_g.sin(al)],
+                        mode='lines', line=dict(color='#333333', width=7),
+                        showlegend=False, hoverinfo='skip'))
+                    fig.add_trace(go.Scatter(
+                        x=[0, 0.88*_math_g.cos(al)], y=[0, 0.88*_math_g.sin(al)],
+                        mode='lines', line=dict(color='#FFFFFF', width=3),
                         showlegend=False, hoverinfo='skip'))
                     tc = [_math_g.radians(i) for i in range(361)]
                     fig.add_trace(go.Scatter(
                         x=[0.07*_math_g.cos(t) for t in tc],
                         y=[0.07*_math_g.sin(t) for t in tc],
-                        fill='toself', fillcolor='#111',
-                        line=dict(color='#111', width=0),
+                        fill='toself', fillcolor='#FFFFFF',
+                        line=dict(color='#333', width=1),
                         showlegend=False, hoverinfo='skip', mode='lines'))
 
-                    # Tick
+                    # Tick — colore neutro visibile su entrambi i temi
                     for tp, lb in [(-100,'-100%'),(-50,'-50%'),(0,'0'),(50,'+50%'),(100,'+100%')]:
                         at = _pta(tp)
                         fig.add_trace(go.Scatter(
                             x=[RE*_math_g.cos(at), (RE+0.07)*_math_g.cos(at)],
                             y=[RE*_math_g.sin(at), (RE+0.07)*_math_g.sin(at)],
-                            mode='lines', line=dict(color='#555', width=1),
+                            mode='lines', line=dict(color='#AAAAAA', width=1),
                             showlegend=False, hoverinfo='skip'))
                         fig.add_annotation(
                             x=(RE+0.26)*_math_g.cos(at), y=(RE+0.26)*_math_g.sin(at),
                             text=lb, showarrow=False,
-                            font=dict(size=8, color='#555'),
+                            font=dict(size=8, color='#AAAAAA'),
                             xanchor='center', yanchor='middle')
 
-                    col_p = '#1B5E20' if pct >= 0 else '#B71C1C'
+                    # Valori testo — colori ad alto contrasto su entrambi i temi
+                    col_p = '#00C853' if pct >= 0 else '#FF5252'  # verde/rosso brillante
                     segno = '+' if pct >= 0 else ''
-                    fig.add_annotation(x=0, y=-0.18,
+                    # Scostamento %
+                    fig.add_annotation(x=0, y=-0.16,
                         text=f"<b>{segno}{pct:.0f}%</b>",
-                        showarrow=False, font=dict(size=22, color=col_p),
+                        showarrow=False, font=dict(size=24, color=col_p),
                         xanchor='center', yanchor='top')
-                    fig.add_annotation(x=0, y=-0.42,
+                    # Nome famiglia
+                    fig.add_annotation(x=0, y=-0.40,
                         text=f"<b>{fam}</b>",
-                        showarrow=False, font=dict(size=13, color='#1a1a2e'),
+                        showarrow=False, font=dict(size=12, color='#E0E0E0'),
                         xanchor='center', yanchor='top')
-                    fig.add_annotation(x=0, y=-0.60,
-                        text=f"{qta:,} pa. | med: {media:,} pa.".replace(",","."),
-                        showarrow=False, font=dict(size=11, color='#444'),
+                    # Valori assoluti: totale, pa/gg periodo, pa/gg storico
+                    _gg_per_label = max(1, _gg_op)
+                    _pagg_per = qta / _gg_per_label
+                    _pagg_sto = media / _gg_per_label  # media è già media_giorno_sto * gg_op
+                    _pagg_sto_real = _df_sto_fam[_df_sto_fam['Famiglia']==fam]['Media_Giorno_Sto'].values
+                    _pagg_sto_val = float(_pagg_sto_real[0]) if len(_pagg_sto_real) > 0 else 0
+                    fig.add_annotation(x=0, y=-0.56,
+                        text=f"{qta:,.0f} pa. | {_pagg_per:.1f} pa./gg → sto: {_pagg_sto_val:.1f} pa./gg".replace(",","."),
+                        showarrow=False, font=dict(size=9, color='#BBBBBB'),
                         xanchor='center', yanchor='top')
 
                     fig.update_layout(
-                        height=210,
+                        height=230,
                         margin=dict(t=8, b=8, l=8, r=8),
                         paper_bgcolor='rgba(0,0,0,0)',
                         plot_bgcolor='rgba(0,0,0,0)',
                         xaxis=dict(visible=False, range=[-1.55, 1.55], scaleanchor='y'),
-                        yaxis=dict(visible=False, range=[-0.85, 1.35]),
+                        yaxis=dict(visible=False, range=[-0.92, 1.35]),
                         showlegend=False,
                     )
                     return fig
