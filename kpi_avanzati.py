@@ -949,18 +949,22 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                     mode='lines', line=dict(color='#FFD700', width=3),
                     showlegend=False, hoverinfo='skip'))
 
-                # Lancetta
+                # Lancetta — bianca con bordo per visibilità su tutti gli sfondi
                 al = _pta(pct)
                 fig.add_trace(go.Scatter(
                     x=[0, 0.90*_m.cos(al)], y=[0, 0.90*_m.sin(al)],
-                    mode='lines', line=dict(color='#111111', width=3),
+                    mode='lines', line=dict(color='#333333', width=7),
+                    showlegend=False, hoverinfo='skip'))
+                fig.add_trace(go.Scatter(
+                    x=[0, 0.90*_m.cos(al)], y=[0, 0.90*_m.sin(al)],
+                    mode='lines', line=dict(color='#FFFFFF', width=3),
                     showlegend=False, hoverinfo='skip'))
                 tc = [_m.radians(i) for i in range(361)]
                 fig.add_trace(go.Scatter(
                     x=[0.07*_m.cos(t) for t in tc],
                     y=[0.07*_m.sin(t) for t in tc],
-                    fill='toself', fillcolor='#111111',
-                    line=dict(color='#111111', width=0),
+                    fill='toself', fillcolor='#FFFFFF',
+                    line=dict(color='#333', width=1),
                     showlegend=False, hoverinfo='skip', mode='lines'))
 
                 # Tick
@@ -969,36 +973,40 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                     fig.add_trace(go.Scatter(
                         x=[RE*_m.cos(at), (RE+0.08)*_m.cos(at)],
                         y=[RE*_m.sin(at), (RE+0.08)*_m.sin(at)],
-                        mode='lines', line=dict(color='#8B949E', width=1),
+                        mode='lines', line=dict(color='#AAAAAA', width=1),
                         showlegend=False, hoverinfo='skip'))
                     fig.add_annotation(
                         x=(RE+0.26)*_m.cos(at), y=(RE+0.26)*_m.sin(at),
                         text=lb, showarrow=False,
-                        font=dict(size=8, color='#8B949E'),
+                        font=dict(size=8, color='#AAAAAA'),
                         xanchor='center', yanchor='middle')
 
-                col_pct = '#1B5E20' if pct >= 0 else '#B71C1C'
+                col_pct = '#00C853' if pct >= 0 else '#FF5252'
                 segno = '+' if pct >= 0 else ''
-                fig.add_annotation(x=0, y=-0.25,
+                fig.add_annotation(x=0, y=-0.22,
                     text=f"<b>{segno}{pct:.0f}%</b>",
-                    showarrow=False, font=dict(size=16, color=col_pct),
+                    showarrow=False, font=dict(size=20, color=col_pct),
                     xanchor='center', yanchor='top')
-                fig.add_annotation(x=0, y=-0.45,
+                fig.add_annotation(x=0, y=-0.44,
                     text=f"<b>{fam}</b>",
-                    showarrow=False, font=dict(size=11, color='#C9D1D9'),
+                    showarrow=False, font=dict(size=11, color='#E0E0E0'),
                     xanchor='center', yanchor='top')
+                # pa/gg periodo e storico
+                _pagg_per = qta / max(1, gg_periodo)
+                _pagg_sto_s = df_storico_fam[df_storico_fam['Famiglia']==fam]['Media_Giorno_Sto'].values
+                _pagg_sto_v = float(_pagg_sto_s[0]) if len(_pagg_sto_s) > 0 else (media / max(1, gg_periodo))
                 fig.add_annotation(x=0, y=-0.60,
-                    text=f"{qta:,} pa. | med: {media:,} pa.".replace(",","."),
-                    showarrow=False, font=dict(size=9, color='#8B949E'),
+                    text=f"{qta:,.0f} pa. | {_pagg_per:.1f} pa./gg → sto: {_pagg_sto_v:.1f} pa./gg".replace(",","."),
+                    showarrow=False, font=dict(size=9, color='#BBBBBB'),
                     xanchor='center', yanchor='top')
 
                 fig.update_layout(
-                    height=260,
+                    height=270,
                     margin=dict(t=10, b=10, l=10, r=10),
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)',
                     xaxis=dict(visible=False, range=[-1.55, 1.55], scaleanchor='y'),
-                    yaxis=dict(visible=False, range=[-0.85, 1.35]),
+                    yaxis=dict(visible=False, range=[-0.92, 1.35]),
                     showlegend=False,
                 )
                 return fig
