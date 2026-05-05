@@ -841,29 +841,31 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         # Calcola media storica per famiglia su tutto lo storico OCI
         df_storico_fam = df_oci.groupby('Famiglia')['Qta Doc'].sum().reset_index()
         # Numero di anni distinti nello storico per normalizzare
-        anni_storico = max(1, (df_oci['Data'].max() - df_oci['Data'].min()).days / 365)
+        # Media giornaliera storica (tutto lo storico OCI)
+        gg_sto = max(1, (df_oci['Data'].max() - df_oci['Data'].min()).days)
+        df_storico_fam['Media_Giorno_Sto'] = df_storico_fam['Qta Doc'] / gg_sto
 
-        # Calcola vendite periodo filtrato per famiglia
-        df_periodo_fam = df_f.groupby('Famiglia')['Qta Doc'].sum().reset_index()
-        df_periodo_fam.columns = ['Famiglia', 'Qta_Periodo']
-
-        # Calcola durata del periodo filtrato in anni per normalizzare
+        # Calcola durata del periodo filtrato
         if periodo == "Intervallo personalizzato":
-            gg_periodo = (pd.Timestamp(data_a) - pd.Timestamp(data_da)).days
+            gg_periodo = max(1, (pd.Timestamp(data_a) - pd.Timestamp(data_da)).days)
         else:
-            gg_periodo = gg if gg < 9999 else (df_oci['Data'].max() - df_oci['Data'].min()).days
+            gg_periodo = gg if gg < 9999 else gg_sto
         gg_periodo = max(1, gg_periodo)
 
-        # Media storica annualizzata poi scalata al periodo → valore atteso nel periodo
-        df_storico_fam['Media_Anno'] = df_storico_fam['Qta Doc'] / anni_storico
-        df_storico_fam['Media_Periodo'] = df_storico_fam['Media_Anno'] * (gg_periodo / 365)
+        # Media giornaliera periodo selezionato
+        df_periodo_fam = df_f.groupby('Famiglia')['Qta Doc'].sum().reset_index()
+        df_periodo_fam.columns = ['Famiglia', 'Qta_Periodo']
+        df_periodo_fam['Media_Giorno_Per'] = df_periodo_fam['Qta_Periodo'] / gg_periodo
 
-        # Unisci
+        # Unisci e calcola scostamento %
         df_gauge = df_periodo_fam.merge(
-            df_storico_fam[['Famiglia', 'Media_Periodo']], on='Famiglia', how='left'
+            df_storico_fam[['Famiglia', 'Media_Giorno_Sto']], on='Famiglia', how='left'
         )
         df_gauge = df_gauge[df_gauge['Qta_Periodo'] > 0].copy()
-        df_gauge['Pct'] = (df_gauge['Qta_Periodo'] / df_gauge['Media_Periodo'] * 100).clip(0, 200)
+        # Scostamento: 0=media, -100=zero, +100=doppio
+        df_gauge['Pct'] = ((df_gauge['Media_Giorno_Per'] / df_gauge['Media_Giorno_Sto'] - 1) * 100).clip(-100, 100)
+        # Per etichette: media attesa nel periodo
+        df_gauge['Media_Periodo'] = (df_gauge['Media_Giorno_Sto'] * gg_periodo).round(0).astype(int)
         df_gauge = df_gauge.sort_values('Qta_Periodo', ascending=False)
 
         if df_gauge.empty:
@@ -878,137 +880,107 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
 
             def _disegna_gauge(pct, qta, media, fam):
                 """
-                Disegna un contagiri con vera lancetta a ago.
-                Arco rosso 0-100%, arco verde 100-200%.
-                Lancetta = linea dal centro verso il bordo.
+                Contagiri scala -100/0/+100.
+                0 = media storica giornaliera (linea gialla).
+                Settori a step 25pt con sfumature rosso->verde.
                 """
-                # Angoli: 0%=-180°, 100%=-90° (in su), 200%=0°
-                # In coordinate plotly (x,y): angolo 0=destra, 90=su
-                # Usiamo angolo_plot = 180 - pct/200*180 per avere sx→destra
-                def pct_to_angle(p):
-                    # 0% -> 180° (sx), 100% -> 90° (cima), 200% -> 0° (dx)
-                    return _math.radians(180 - (p / 200) * 180)
+                import math as _m
+                def _pta(p):
+                    return _m.radians(90 - (p / 100) * 90)
+                N = 40
+                RE, RI = 1.0, 0.55
 
-                # Punti arco (semicerchio)
-                N = 60
-                R_EST = 1.0   # raggio esterno
-                R_INT = 0.55  # raggio interno
-
-                def arco_xy(a_start_pct, a_end_pct, r_est, r_int, n=N):
+                def arco_xy(s, e, re, ri):
                     xs, ys = [], []
-                    for i in range(n+1):
-                        p = a_start_pct + (a_end_pct - a_start_pct) * i / n
-                        a = pct_to_angle(p)
-                        xs.append(r_est * _math.cos(a))
-                        ys.append(r_est * _math.sin(a))
-                    for i in range(n+1):
-                        p = a_end_pct - (a_end_pct - a_start_pct) * i / n
-                        a = pct_to_angle(p)
-                        xs.append(r_int * _math.cos(a))
-                        ys.append(r_int * _math.sin(a))
+                    for i in range(N+1):
+                        a = _pta(s + (e-s)*i/N)
+                        xs.append(re*_m.cos(a)); ys.append(re*_m.sin(a))
+                    for i in range(N+1):
+                        a = _pta(e - (e-s)*i/N)
+                        xs.append(ri*_m.cos(a)); ys.append(ri*_m.sin(a))
                     xs.append(xs[0]); ys.append(ys[0])
                     return xs, ys
 
+                settori = [
+                    (-100, -75, '#B71C1C'),
+                    ( -75, -50, '#E53935'),
+                    ( -50, -25, '#EF9A9A'),
+                    ( -25,   0, '#FFCDD2'),
+                    (   0,  25, '#C8E6C9'),
+                    (  25,  50, '#66BB6A'),
+                    (  50,  75, '#2E7D32'),
+                    (  75, 100, '#1B5E20'),
+                ]
+
                 fig = go.Figure()
+                for s, e, col in settori:
+                    sx, sy = arco_xy(s, e, RE, RI)
+                    fig.add_trace(go.Scatter(x=sx, y=sy, fill='toself',
+                        fillcolor=col, line=dict(color=col, width=0),
+                        showlegend=False, hoverinfo='skip', mode='lines'))
 
-                # Arco rosso 0-100%
-                rx, ry = arco_xy(0, 100, R_EST, R_INT)
+                # Linea 0% gialla
+                a0 = _pta(0)
                 fig.add_trace(go.Scatter(
-                    x=rx, y=ry, fill='toself',
-                    fillcolor='#C62828', line=dict(color='#C62828', width=0),
-                    showlegend=False, hoverinfo='skip', mode='lines'
-                ))
+                    x=[RI*_m.cos(a0), RE*_m.cos(a0)],
+                    y=[RI*_m.sin(a0), RE*_m.sin(a0)],
+                    mode='lines', line=dict(color='#FFD700', width=3),
+                    showlegend=False, hoverinfo='skip'))
 
-                # Arco verde 100-200%
-                gx, gy = arco_xy(100, 200, R_EST, R_INT)
+                # Lancetta
+                al = _pta(pct)
                 fig.add_trace(go.Scatter(
-                    x=gx, y=gy, fill='toself',
-                    fillcolor='#388E3C', line=dict(color='#388E3C', width=0),
-                    showlegend=False, hoverinfo='skip', mode='lines'
-                ))
-
-                # Linea separatrice a 100% (gialla)
-                a100 = pct_to_angle(100)
+                    x=[0, 0.90*_m.cos(al)], y=[0, 0.90*_m.sin(al)],
+                    mode='lines', line=dict(color='#111111', width=3),
+                    showlegend=False, hoverinfo='skip'))
+                tc = [_m.radians(i) for i in range(361)]
                 fig.add_trace(go.Scatter(
-                    x=[R_INT * _math.cos(a100), R_EST * _math.cos(a100)],
-                    y=[R_INT * _math.sin(a100), R_EST * _math.sin(a100)],
-                    mode='lines', line=dict(color='#FFD700', width=2),
-                    showlegend=False, hoverinfo='skip'
-                ))
-
-                # Lancetta a ago
-                a_lanc = pct_to_angle(pct)
-                lx = 0.90 * _math.cos(a_lanc)
-                ly = 0.90 * _math.sin(a_lanc)
-                # Ago: da centro (0,0) a punta
-                fig.add_trace(go.Scatter(
-                    x=[0, lx], y=[0, ly],
-                    mode='lines',
-                    line=dict(color='#111111', width=3),
-                    showlegend=False, hoverinfo='skip'
-                ))
-                # Cerchio centrale
-                theta_c = [_math.radians(i) for i in range(361)]
-                r_c = 0.07
-                fig.add_trace(go.Scatter(
-                    x=[r_c * _math.cos(t) for t in theta_c],
-                    y=[r_c * _math.sin(t) for t in theta_c],
+                    x=[0.07*_m.cos(t) for t in tc],
+                    y=[0.07*_m.sin(t) for t in tc],
                     fill='toself', fillcolor='#111111',
                     line=dict(color='#111111', width=0),
-                    showlegend=False, hoverinfo='skip', mode='lines'
-                ))
+                    showlegend=False, hoverinfo='skip', mode='lines'))
 
-                # Tick marks a 0%, 50%, 100%, 150%, 200%
-                for tick_pct, label in [(0,'0%'),(50,'50%'),(100,'100%'),(150,'150%'),(200,'200%')]:
-                    a_t = pct_to_angle(tick_pct)
-                    x0 = R_EST * _math.cos(a_t)
-                    y0 = R_EST * _math.sin(a_t)
-                    x1 = (R_EST + 0.08) * _math.cos(a_t)
-                    y1 = (R_EST + 0.08) * _math.sin(a_t)
+                # Tick
+                for tp, lb in [(-100,'-100%'),(-50,'-50%'),(0,'0'),(50,'+50%'),(100,'+100%')]:
+                    at = _pta(tp)
                     fig.add_trace(go.Scatter(
-                        x=[x0, x1], y=[y0, y1],
+                        x=[RE*_m.cos(at), (RE+0.08)*_m.cos(at)],
+                        y=[RE*_m.sin(at), (RE+0.08)*_m.sin(at)],
                         mode='lines', line=dict(color='#8B949E', width=1),
-                        showlegend=False, hoverinfo='skip'
-                    ))
+                        showlegend=False, hoverinfo='skip'))
                     fig.add_annotation(
-                        x=(R_EST + 0.20) * _math.cos(a_t),
-                        y=(R_EST + 0.20) * _math.sin(a_t),
-                        text=label, showarrow=False,
+                        x=(RE+0.26)*_m.cos(at), y=(RE+0.26)*_m.sin(at),
+                        text=lb, showarrow=False,
                         font=dict(size=8, color='#8B949E'),
-                        xanchor='center', yanchor='middle'
-                    )
+                        xanchor='center', yanchor='middle')
 
-                # Valore % e label famiglia al centro-basso
-                col_pct = '#66BB6A' if pct >= 100 else '#EF5350'
-                fig.add_annotation(
-                    x=0, y=-0.25,
-                    text=f"<b style='font-size:16px;color:{col_pct}'>{pct:.0f}%</b>",
-                    showarrow=False, font=dict(size=14, color=col_pct),
-                    xanchor='center', yanchor='top'
-                )
-                fig.add_annotation(
-                    x=0, y=-0.45,
+                col_pct = '#1B5E20' if pct >= 0 else '#B71C1C'
+                segno = '+' if pct >= 0 else ''
+                fig.add_annotation(x=0, y=-0.25,
+                    text=f"<b>{segno}{pct:.0f}%</b>",
+                    showarrow=False, font=dict(size=16, color=col_pct),
+                    xanchor='center', yanchor='top')
+                fig.add_annotation(x=0, y=-0.45,
                     text=f"<b>{fam}</b>",
                     showarrow=False, font=dict(size=11, color='#C9D1D9'),
-                    xanchor='center', yanchor='top'
-                )
-                fig.add_annotation(
-                    x=0, y=-0.60,
-                    text=f"{qta:,} pa. | media: {media:,} pa.".replace(",","."),
+                    xanchor='center', yanchor='top')
+                fig.add_annotation(x=0, y=-0.60,
+                    text=f"{qta:,} pa. | med: {media:,} pa.".replace(",","."),
                     showarrow=False, font=dict(size=9, color='#8B949E'),
-                    xanchor='center', yanchor='top'
-                )
+                    xanchor='center', yanchor='top')
 
                 fig.update_layout(
                     height=260,
                     margin=dict(t=10, b=10, l=10, r=10),
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)',
-                    xaxis=dict(visible=False, range=[-1.5, 1.5], scaleanchor='y'),
-                    yaxis=dict(visible=False, range=[-0.8, 1.3]),
+                    xaxis=dict(visible=False, range=[-1.55, 1.55], scaleanchor='y'),
+                    yaxis=dict(visible=False, range=[-0.85, 1.35]),
                     showlegend=False,
                 )
                 return fig
+
 
             for riga in righe:
                 cols = st.columns(N_COL)
