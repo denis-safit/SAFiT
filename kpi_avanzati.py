@@ -364,9 +364,10 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         with c1:
             periodo = st.selectbox(
                 "Periodo",
-                ["Ultimi 90 gg", "Ultimi 6 mesi", "Ultimo anno",
+                ["Mese in corso", "Anno in corso",
+                 "Ultimi 90 gg", "Ultimi 6 mesi", "Ultimo anno",
                  "Tutto lo storico", "Intervallo personalizzato"],
-                index=2, key=f"kpi_periodo_{_key_suffix}"
+                index=4, key=f"kpi_periodo_{_key_suffix}"
             )
         with c2:
             famiglie = sorted(df_oci['Famiglia'].dropna().unique().tolist())
@@ -407,7 +408,28 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         cutoff   = None
         gg       = 9999
 
-        if periodo == "Intervallo personalizzato":
+        _oggi = datetime.now().date()
+
+        if periodo == "Mese in corso":
+            cutoff_da = pd.Timestamp(_oggi.replace(day=1))
+            cutoff_a  = pd.Timestamp(_oggi)
+            df_f      = df_f[(df_f["Data"] >= cutoff_da) & (df_f["Data"] <= cutoff_a)]
+            df_dvf_f  = df_dvf_f[(df_dvf_f["Data"] >= cutoff_da) & (df_dvf_f["Data"] <= cutoff_a)]
+            cutoff    = cutoff_da
+            gg        = max(1, (_oggi - _oggi.replace(day=1)).days + 1)
+        elif periodo == "Anno in corso":
+            # Dal 1° gennaio all'ultimo giorno del mese scorso
+            from calendar import monthrange as _mr
+            _mese_scorso = (_oggi.month - 1) or 12
+            _anno_ms = _oggi.year if _oggi.month > 1 else _oggi.year - 1
+            _ultimo_ms = _mr(_anno_ms, _mese_scorso)[1]
+            cutoff_da = pd.Timestamp(date(_oggi.year, 1, 1))
+            cutoff_a  = pd.Timestamp(date(_anno_ms, _mese_scorso, _ultimo_ms))
+            df_f      = df_f[(df_f["Data"] >= cutoff_da) & (df_f["Data"] <= cutoff_a)]
+            df_dvf_f  = df_dvf_f[(df_dvf_f["Data"] >= cutoff_da) & (df_dvf_f["Data"] <= cutoff_a)]
+            cutoff    = cutoff_da
+            gg        = max(1, (cutoff_a.date() - cutoff_da.date()).days)
+        elif periodo == "Intervallo personalizzato":
             cutoff_da = pd.Timestamp(data_da)
             cutoff_a  = pd.Timestamp(data_a)
             df_f      = df_f[(df_f["Data"] >= cutoff_da) & (df_f["Data"] <= cutoff_a)]
