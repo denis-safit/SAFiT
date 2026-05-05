@@ -1444,16 +1444,37 @@ if not df_res.empty:
                 from datetime import datetime as _dt_op, timedelta as _td_op
 
                 # Selettore periodo
-                _gg_map_op = {"Ultimi 90 gg": 90, "Ultimi 6 mesi": 180,
+                _gg_map_op = {"Mese in corso": -1, "Anno in corso": -2,
+                              "Ultimi 90 gg": 90, "Ultimi 6 mesi": 180,
                               "Ultimo anno": 365, "Tutto lo storico": 9999}
                 _pc1, _pc2 = st.columns([1, 2])
                 with _pc1:
                     _periodo_op = st.selectbox(
                         "Periodo performance",
                         list(_gg_map_op.keys()) + ["Intervallo personalizzato"],
-                        index=2, key="kpi_op_periodo"
+                        index=4, key="kpi_op_periodo"
                     )
-                if _periodo_op == "Intervallo personalizzato":
+
+                _oggi_op = _dt_op.now().date()
+
+                if _periodo_op == "Mese in corso":
+                    _da_op = _oggi_op.replace(day=1)
+                    _a_op  = _oggi_op
+                    _df_op = _df_sto[(_df_sto["Data"] >= pd.Timestamp(_da_op)) &
+                                      (_df_sto["Data"] <= pd.Timestamp(_a_op))]
+                    _gg_op = max(1, (_a_op - _da_op).days + 1)
+
+                elif _periodo_op == "Anno in corso":
+                    from calendar import monthrange as _mr_op
+                    _ms = (_oggi_op.month - 1) or 12
+                    _as = _oggi_op.year if _oggi_op.month > 1 else _oggi_op.year - 1
+                    _da_op = _oggi_op.replace(month=1, day=1)
+                    _a_op  = _oggi_op.replace(year=_as, month=_ms, day=_mr_op(_as, _ms)[1])
+                    _df_op = _df_sto[(_df_sto["Data"] >= pd.Timestamp(_da_op)) &
+                                      (_df_sto["Data"] <= pd.Timestamp(_a_op))]
+                    _gg_op = max(1, (_a_op - _da_op).days)
+
+                elif _periodo_op == "Intervallo personalizzato":
                     _dmin = _df_sto["Data"].min().date() if not _df_sto.empty else _dt_op(2024,1,1).date()
                     _dmax = _df_sto["Data"].max().date() if not _df_sto.empty else _dt_op.now().date()
                     _pd1, _pd2 = st.columns(2)
@@ -1468,6 +1489,7 @@ if not df_res.empty:
                     _df_op = _df_sto[(_df_sto["Data"] >= pd.Timestamp(_da_op)) &
                                       (_df_sto["Data"] <= pd.Timestamp(_a_op))]
                     _gg_op = max(1, (pd.Timestamp(_a_op) - pd.Timestamp(_da_op)).days)
+
                 else:
                     _gg_op = _gg_map_op[_periodo_op]
                     if _gg_op < 9999:
