@@ -1490,15 +1490,19 @@ if not df_res.empty:
                 # Unisci e calcola %
                 _df_g = _df_per_fam.merge(_df_sto_fam[['Famiglia','Media_Giorno_Sto']], on='Famiglia', how='left')
                 _df_g = _df_g[_df_g['Qta_Periodo'] > 0].copy()
-                _df_g['Pct'] = (_df_g['Media_Giorno_Per'] / _df_g['Media_Giorno_Sto'] * 100).clip(0, 200)
+                # Scostamento dalla media storica: 0=pari alla media, -100=zero, +100=doppio
+                _df_g['Pct'] = ((_df_g['Media_Giorno_Per'] / _df_g['Media_Giorno_Sto'] - 1) * 100).clip(-100, 100)
                 # Per le etichette mostra i valori giornalieri x1000 per leggibilità
                 _df_g['Media_Periodo'] = (_df_g['Media_Giorno_Sto'] * _gg_op).round(0).astype(int)
                 _df_g = _df_g.sort_values('Qta_Periodo', ascending=False).head(10)
 
                 def _gauge_op(pct, qta, media, fam):
+                    """Contagiri scala -100/0/+100 con settori colorati a step 25pt."""
+                    import plotly.graph_objects as go
                     def _pta(p):
-                        return _math_g.radians(180 - (p / 200) * 180)
-                    N = 50
+                        # -100->180(sx), 0->90(cima), +100->0(dx)
+                        return _math_g.radians(90 - (p / 100) * 90)
+                    N = 40
                     RE, RI = 1.0, 0.58
 
                     def _arco(s, e, re, ri):
@@ -1512,23 +1516,30 @@ if not df_res.empty:
                         xs.append(xs[0]); ys.append(ys[0])
                         return xs, ys
 
-                    import plotly.graph_objects as go
-                    fig = go.Figure()
-                    rx, ry = _arco(0, 100, RE, RI)
-                    fig.add_trace(go.Scatter(x=rx, y=ry, fill='toself',
-                        fillcolor='#C62828', line=dict(color='#C62828', width=0),
-                        showlegend=False, hoverinfo='skip', mode='lines'))
-                    gx, gy = _arco(100, 200, RE, RI)
-                    fig.add_trace(go.Scatter(x=gx, y=gy, fill='toself',
-                        fillcolor='#2E7D32', line=dict(color='#2E7D32', width=0),
-                        showlegend=False, hoverinfo='skip', mode='lines'))
+                    settori = [
+                        (-100, -75, '#B71C1C'),
+                        ( -75, -50, '#E53935'),
+                        ( -50, -25, '#EF9A9A'),
+                        ( -25,   0, '#FFCDD2'),
+                        (   0,  25, '#C8E6C9'),
+                        (  25,  50, '#66BB6A'),
+                        (  50,  75, '#2E7D32'),
+                        (  75, 100, '#1B5E20'),
+                    ]
 
-                    # Separatore 100% giallo
-                    a100 = _pta(100)
+                    fig = go.Figure()
+                    for s, e, col in settori:
+                        sx, sy = _arco(s, e, RE, RI)
+                        fig.add_trace(go.Scatter(x=sx, y=sy, fill='toself',
+                            fillcolor=col, line=dict(color=col, width=0),
+                            showlegend=False, hoverinfo='skip', mode='lines'))
+
+                    # Linea 0% gialla (= media storica)
+                    a0 = _pta(0)
                     fig.add_trace(go.Scatter(
-                        x=[RI*_math_g.cos(a100), RE*_math_g.cos(a100)],
-                        y=[RI*_math_g.sin(a100), RE*_math_g.sin(a100)],
-                        mode='lines', line=dict(color='#FFD700', width=2),
+                        x=[RI*_math_g.cos(a0), RE*_math_g.cos(a0)],
+                        y=[RI*_math_g.sin(a0), RE*_math_g.sin(a0)],
+                        mode='lines', line=dict(color='#FFD700', width=3),
                         showlegend=False, hoverinfo='skip'))
 
                     # Lancetta
@@ -1545,24 +1556,24 @@ if not df_res.empty:
                         line=dict(color='#111', width=0),
                         showlegend=False, hoverinfo='skip', mode='lines'))
 
-                    # Tick 0/100/200%
-                    for tp, lb in [(0,'0%'),(100,'100%'),(200,'200%')]:
+                    # Tick
+                    for tp, lb in [(-100,'-100%'),(-50,'-50%'),(0,'0'),(50,'+50%'),(100,'+100%')]:
                         at = _pta(tp)
                         fig.add_trace(go.Scatter(
                             x=[RE*_math_g.cos(at), (RE+0.07)*_math_g.cos(at)],
                             y=[RE*_math_g.sin(at), (RE+0.07)*_math_g.sin(at)],
-                            mode='lines', line=dict(color='#666', width=1),
+                            mode='lines', line=dict(color='#555', width=1),
                             showlegend=False, hoverinfo='skip'))
                         fig.add_annotation(
-                            x=(RE+0.22)*_math_g.cos(at), y=(RE+0.22)*_math_g.sin(at),
+                            x=(RE+0.26)*_math_g.cos(at), y=(RE+0.26)*_math_g.sin(at),
                             text=lb, showarrow=False,
-                            font=dict(size=9, color='#555'),
+                            font=dict(size=8, color='#555'),
                             xanchor='center', yanchor='middle')
 
-                    # Valori testo — grandi e ben visibili
-                    col_p = '#2E7D32' if pct >= 100 else '#C62828'
+                    col_p = '#1B5E20' if pct >= 0 else '#B71C1C'
+                    segno = '+' if pct >= 0 else ''
                     fig.add_annotation(x=0, y=-0.18,
-                        text=f"<b>{pct:.0f}%</b>",
+                        text=f"<b>{segno}{pct:.0f}%</b>",
                         showarrow=False, font=dict(size=22, color=col_p),
                         xanchor='center', yanchor='top')
                     fig.add_annotation(x=0, y=-0.42,
@@ -1579,8 +1590,8 @@ if not df_res.empty:
                         margin=dict(t=8, b=8, l=8, r=8),
                         paper_bgcolor='rgba(0,0,0,0)',
                         plot_bgcolor='rgba(0,0,0,0)',
-                        xaxis=dict(visible=False, range=[-1.45, 1.45], scaleanchor='y'),
-                        yaxis=dict(visible=False, range=[-0.80, 1.25]),
+                        xaxis=dict(visible=False, range=[-1.55, 1.55], scaleanchor='y'),
+                        yaxis=dict(visible=False, range=[-0.85, 1.35]),
                         showlegend=False,
                     )
                     return fig
