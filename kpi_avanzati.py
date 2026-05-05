@@ -27,7 +27,7 @@ import os
 import os as _os
 _DIR = _os.path.dirname(_os.path.abspath(__file__))
 PATH_STORICO   = _os.path.join(_DIR, "righe_ordini_storico_con_date.xlsx")
-PATH_CONSEGNE  = _os.path.join(_DIR, "dettagli_consegne.xlsx")
+PATH_CONSEGNE  = _os.path.join(_DIR, "dettagli_consegne_CLI.xlsx")
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 KPI_CSS = """
@@ -116,7 +116,7 @@ def carica_storico_arca(path=PATH_STORICO):
 @st.cache_data(ttl=1800, show_spinner=False)
 def carica_dettagli_consegne(path=PATH_CONSEGNE):
     """
-    Carica il file dettagli_consegne.xlsx esportato da ARCA.
+    Carica il file dettagli_consegne_CLI.xlsx esportato da ARCA.
     Contiene già lo scostamento calcolato (datadifference) per ogni riga DVF.
     Colonne chiave:
       Cd_CF, CF_Descrizione, Cd_AR, DORig_Descrizione,
@@ -228,7 +228,7 @@ def calcola_frequenza_riordino(df_ordini):
 
 def calcola_scostamento_consegna(df_cons, filtro_cliente=None, filtro_articolo=None, filtro_famiglie=None, cutoff=None):
     """
-    Calcola puntualità consegne dal file dettagli_consegne.xlsx.
+    Calcola puntualità consegne dal file dettagli_consegne_CLI.xlsx.
     Usa datadifference già calcolato da ARCA — nessun join complicato.
     Positivo = ritardo, Negativo = anticipo, 0 = puntuale.
     """
@@ -650,7 +650,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         df_det_cons = carica_dettagli_consegne()
         if df_det_cons.empty:
             st.info(
-                "File `dettagli_consegne.xlsx` non trovato. "
+                "File `dettagli_consegne_CLI.xlsx` non trovato. "
                 "Esporta il report da ARCA e caricalo su GitHub."
             )
             df_cons, summary = pd.DataFrame(), {}
@@ -666,7 +666,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         if df_cons.empty:
             st.info(
                 "Nessuna riga trovata nel file consegne per i filtri selezionati. "
-                "Verifica che il file `dettagli_consegne.xlsx` contenga dati "
+                "Verifica che il file `dettagli_consegne_CLI.xlsx` contenga dati "
                 "per il cliente/periodo selezionato."
             )
         else:
