@@ -67,14 +67,7 @@ echo ============================================================
 C:\Windows\System32\timeout.exe /t 2 >nul
 
 
-
-
-
-pause 
-
-
-
-
+start C:\Users\Venezian.Denis\Desktop\python_access_sql\Agente_segretaria\start_segretaria.bat
 start C:\Users\Venezian.Denis\Desktop\python_access_sql\Agente_arca_mail\avvia_agente.bat
 
 exit
