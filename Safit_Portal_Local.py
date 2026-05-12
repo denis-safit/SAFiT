@@ -899,11 +899,10 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
                 )
 
     with tab_kpi_cli:
-        # Sotto-tab KPI per il cliente loggato
-        kpi_sub = st.tabs(["📋 Operativi", "📊 Avanzati", "🎯 Qualità", "📈 Storici"])
+        # Sotto-tab KPI per il cliente loggato (solo Operativi e Avanzati)
+        kpi_sub = st.tabs(["📋 Operativi", "📊 Avanzati"])
 
         with kpi_sub[0]:
-            # KPI Operativi semplificati per il cliente
             tot = int(df_cli['Qta Residua'].sum())
             pr  = int(df_cli[df_cli['ST'].isin(['DISPONIBILE','COPERTO BOM'])]['Qta Residua'].sum())
             acq = int(df_cli[df_cli['ST'] == 'ACQUISTO']['Qta Residua'].sum())
@@ -915,7 +914,6 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
             c3.metric("🚚 Acquisto",  f"{acq:,}".replace(",","."))
             c4.metric("🔧 Produzione",f"{pro:,}".replace(",","."))
             c5.metric("⚠️ Mancanti",  f"{man:,}".replace(",","."))
-            # Dettaglio per articolo
             df_ops = df_cli.groupby('ART_KEY').agg(
                 Descrizione=('Articolo D','first'),
                 Qta=('Qta Residua','sum'),
@@ -934,23 +932,6 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
                 )
             except Exception as e:
                 st.warning(f"KPI Avanzati non disponibili: {e}")
-
-        with kpi_sub[2]:
-            try:
-                from kpi_qualita import render_kpi_qualita
-                render_kpi_qualita(
-                    filtro_cliente=nome_cliente if nome_cliente else None,
-                    filtro_famiglie=None
-                )
-            except Exception as e:
-                st.warning(f"KPI Qualità non disponibili: {e}")
-
-        with kpi_sub[3]:
-            try:
-                from storico_safit import render_kpi_storici
-                render_kpi_storici()
-            except Exception as e:
-                st.warning(f"KPI Storici non disponibili: {e}")
 
 
 # ===========================================================
