@@ -65,21 +65,23 @@ KPI_CSS = """
 
 @st.cache_data(ttl=1800, show_spinner=False)
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def carica_ordini_aperti(_mtime=0):
-    """Carica righe_Ordini_ARCA.xlsx — restituisce set (Articolo C, Cod_Cliente) con ordini aperti."""
-    if not _os.path.exists(PATH_ARCA):
+    """Legge righe_ordini_storico_con_date.xlsx — OCI con Qta Residua > 0
+    restituisce set di (Articolo C upper, Cod_Cliente) per il filtro solleciti."""
+    if not _os.path.exists(PATH_STORICO):
         return set()
     try:
-        df = pd.read_excel(PATH_ARCA)
+        df = pd.read_excel(PATH_STORICO, skiprows=2)
         df.columns = [str(c).strip() for c in df.columns]
-        if "Articolo C" in df.columns and "Cliente Fornitore CD" in df.columns:
-            df["Cod_Cliente"] = df["Cliente Fornitore CD"].astype(str).str.split(" - ", n=1).str[0].str.strip()
-            df["Articolo C"]  = df["Articolo C"].astype(str).str.strip().str.upper()
-            return set(zip(df["Articolo C"], df["Cod_Cliente"]))
+        df["Codice Documento"] = df["Codice Documento"].ffill()
+        df["Qta Residua"] = pd.to_numeric(df["Qta Residua"], errors="coerce").fillna(0)
+        df["Articolo C"]  = df["Articolo C"].astype(str).str.strip().str.upper()
+        df["Cod_Cliente"] = df["Cliente Fornitore CD"].astype(str).str.split(" - ", n=1).str[0].str.strip()
+        df_oci = df[(df["Codice Documento"] == "OCI") & (df["Qta Residua"] > 0)]
+        return set(zip(df_oci["Articolo C"], df_oci["Cod_Cliente"]))
     except Exception:
-        pass
-    return set()
+        return set()
 
 def carica_storico_arca(path=PATH_STORICO):
     """
@@ -676,8 +678,11 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                     df_alert['Intervallo_Medio_gg'] - df_alert['Giorni_Da_Ultimo']
                 ).round(0)
                 # Carica ordini aperti per escludere articoli già ordinati
-                _mtime_arca = _os.path.getmtime(PATH_ARCA) if _os.path.exists(PATH_ARCA) else 0
+                _mtime_arca = _os.path.getmtime(PATH_STORICO) if _os.path.exists(PATH_STORICO) else 0
                 _aperti = carica_ordini_aperti(_mtime_arca)
+                # DEBUG temporaneo
+                _5bi_t8 = ("PCP199200080000000", "C000071") in _aperti
+                st.caption(f"DEBUG: (PCP199200080000000, C000071) in aperti = {_5bi_t8} | tot={len(_aperti)}")
                 df_alert['_art_up'] = df_alert['Articolo C'].astype(str).str.strip().str.upper()
                 df_alert['_ha_ordine_aperto'] = df_alert.apply(
                     lambda r: (r['_art_up'], r['Cod_Cliente']) in _aperti, axis=1)
