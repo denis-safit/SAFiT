@@ -680,9 +680,6 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                 # Carica ordini aperti per escludere articoli già ordinati
                 _mtime_arca = _os.path.getmtime(PATH_STORICO) if _os.path.exists(PATH_STORICO) else 0
                 _aperti = carica_ordini_aperti(_mtime_arca)
-                # DEBUG temporaneo
-                _5bi_t8 = ("PCP199200080000000", "C000071") in _aperti
-                st.caption(f"DEBUG: (PCP199200080000000, C000071) in aperti = {_5bi_t8} | tot={len(_aperti)}")
                 df_alert['_art_up'] = df_alert['Articolo C'].astype(str).str.strip().str.upper()
                 df_alert['_ha_ordine_aperto'] = df_alert.apply(
                     lambda r: (r['_art_up'], r['Cod_Cliente']) in _aperti, axis=1)
