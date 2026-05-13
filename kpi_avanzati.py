@@ -28,6 +28,7 @@ import os as _os
 _DIR = _os.path.dirname(_os.path.abspath(__file__))
 PATH_STORICO   = _os.path.join(_DIR, "righe_ordini_storico_con_date.xlsx")
 PATH_CONSEGNE  = _os.path.join(_DIR, "dettagli_consegne_CLI.xlsx")
+PATH_ARCA      = _os.path.join(_DIR, "righe_Ordini_ARCA.xlsx")
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 KPI_CSS = """
@@ -63,6 +64,23 @@ KPI_CSS = """
 # ── Caricamento e pulizia dati ────────────────────────────────────────────────
 
 @st.cache_data(ttl=1800, show_spinner=False)
+
+@st.cache_data(show_spinner=False)
+def carica_ordini_aperti(_mtime=0):
+    """Carica righe_Ordini_ARCA.xlsx — restituisce set (Articolo C, Cod_Cliente) con ordini aperti."""
+    if not _os.path.exists(PATH_ARCA):
+        return set()
+    try:
+        df = pd.read_excel(PATH_ARCA)
+        df.columns = [str(c).strip() for c in df.columns]
+        if "Articolo C" in df.columns and "Cliente Fornitore CD" in df.columns:
+            df["Cod_Cliente"] = df["Cliente Fornitore CD"].astype(str).str.split(" - ", n=1).str[0].str.strip()
+            df["Articolo C"]  = df["Articolo C"].astype(str).str.strip().str.upper()
+            return set(zip(df["Articolo C"], df["Cod_Cliente"]))
+    except Exception:
+        pass
+    return set()
+
 def carica_storico_arca(path=PATH_STORICO):
     """
     Carica e normalizza il file export ARCA con struttura pivot.
@@ -657,9 +675,16 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                 df_alert['Giorni_Al_Riordino'] = (
                     df_alert['Intervallo_Medio_gg'] - df_alert['Giorni_Da_Ultimo']
                 ).round(0)
+                # Carica ordini aperti per escludere articoli già ordinati
+                _mtime_arca = _os.path.getmtime(PATH_ARCA) if _os.path.exists(PATH_ARCA) else 0
+                _aperti = carica_ordini_aperti(_mtime_arca)
+                df_alert['_art_up'] = df_alert['Articolo C'].astype(str).str.strip().str.upper()
+                df_alert['_ha_ordine_aperto'] = df_alert.apply(
+                    lambda r: (r['_art_up'], r['Cod_Cliente']) in _aperti, axis=1)
                 df_prossimi = df_alert[
                     df_alert['Giorni_Al_Riordino'].between(-7, 14) &
-                    (df_alert['Intervallo_Medio_gg'] >= 20)
+                    (df_alert['Intervallo_Medio_gg'] >= 20) &
+                    ~df_alert['_ha_ordine_aperto']  # escludi se già ordinato
                 ].sort_values('Giorni_Al_Riordino')
 
             with st.expander("📋 Dettaglio frequenza riordino"):
