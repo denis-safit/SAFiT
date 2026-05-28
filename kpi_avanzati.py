@@ -28,7 +28,6 @@ import os as _os
 _DIR = _os.path.dirname(_os.path.abspath(__file__))
 PATH_STORICO   = _os.path.join(_DIR, "righe_ordini_storico_con_date.xlsx")
 PATH_CONSEGNE  = _os.path.join(_DIR, "dettagli_consegne_CLI.xlsx")
-PATH_ARCA      = _os.path.join(_DIR, "righe_Ordini_ARCA.xlsx")
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 KPI_CSS = """
@@ -64,25 +63,6 @@ KPI_CSS = """
 # ── Caricamento e pulizia dati ────────────────────────────────────────────────
 
 @st.cache_data(ttl=1800, show_spinner=False)
-
-@st.cache_data(ttl=300, show_spinner=False)
-def carica_ordini_aperti(_mtime=0):
-    """Legge righe_ordini_storico_con_date.xlsx — OCI con Qta Residua > 0
-    restituisce set di (Articolo C upper, Cod_Cliente) per il filtro solleciti."""
-    if not _os.path.exists(PATH_STORICO):
-        return set()
-    try:
-        df = pd.read_excel(PATH_STORICO, skiprows=2)
-        df.columns = [str(c).strip() for c in df.columns]
-        df["Codice Documento"] = df["Codice Documento"].ffill()
-        df["Qta Residua"] = pd.to_numeric(df["Qta Residua"], errors="coerce").fillna(0)
-        df["Articolo C"]  = df["Articolo C"].astype(str).str.strip().str.upper()
-        df["Cod_Cliente"] = df["Cliente Fornitore CD"].astype(str).str.split(" - ", n=1).str[0].str.strip()
-        df_oci = df[(df["Codice Documento"] == "OCI") & (df["Qta Residua"] > 0)]
-        return set(zip(df_oci["Articolo C"], df_oci["Cod_Cliente"]))
-    except Exception:
-        return set()
-
 def carica_storico_arca(path=PATH_STORICO):
     """
     Carica e normalizza il file export ARCA con struttura pivot.
@@ -213,64 +193,34 @@ def calcola_storicita_rotazione(df_ordini):
 
 
 def calcola_frequenza_riordino(df_ordini):
-    """Intervallo e quantità di riordino per articolo x cliente.
-    Logica: raggruppa per numero ordine reale, poi calcola intervallo
-    tra ordini consecutivi e quantità per ordine — non per riga.
-    """
+    """Intervallo medio di riordino per articolo × cliente."""
     if df_ordini.empty:
         return pd.DataFrame()
 
     risultati = []
     for (art, cli), g in df_ordini.groupby(['Articolo C', 'Cliente']):
-        # Aggrega per articolo + numero ordine:
-        # somma quantità dello stesso articolo nello stesso ordine,
-        # prende la data minima dell'ordine
-        if 'Numero Documento' in g.columns:
-            ordini = (g.groupby(['Numero Documento'])
-                       .agg(Data=('Data', 'min'), Qta=('Qta Doc', 'sum'))
-                       .sort_values('Data')
-                       .reset_index())
-        else:
-            # Fallback: raggruppa per data
-            ordini = (g.assign(_d=g['Data'].dt.date)
-                       .groupby('_d')
-                       .agg(Qta=('Qta Doc', 'sum'))
-                       .reset_index()
-                       .rename(columns={'_d': 'Data'}))
-            ordini['Data'] = pd.to_datetime(ordini['Data'])
-
-        n_ordini = len(ordini)
-        date_ordini = ordini['Data'].dropna().tolist()
-        qte_ordini  = ordini['Qta'].tolist()
-
-        # Intervallo: mediana degli intervalli tra ordini consecutivi
-        # (la mediana è più robusta della media contro valori anomali)
-        if n_ordini >= 2:
-            delta = [(date_ordini[i+1] - date_ordini[i]).days
-                     for i in range(len(date_ordini)-1)
-                     if (date_ordini[i+1] - date_ordini[i]).days > 0]
-            intervallo = round(float(np.median(delta)), 0) if delta else None
-        else:
+        date_ordini = sorted(g['Data'].dropna().tolist())
+        if len(date_ordini) < 2:
             intervallo = None
-
-        # Quantità: mediana delle quantità per ordine reale
-        qta_media = round(float(np.median(qte_ordini)), 0) if qte_ordini else 0
+        else:
+            delta = [(date_ordini[i+1]-date_ordini[i]).days
+                     for i in range(len(date_ordini)-1)]
+            intervallo = round(float(np.mean(delta)), 1)
 
         ultimo = max(date_ordini) if date_ordini else pd.NaT
-        giorni_da_ultimo = (datetime.now() - ultimo).days if pd.notnull(ultimo) else None
-
+        qta_media = round(g['Qta Doc'].mean(), 0) if len(g) > 0 else 0
         risultati.append({
             'Articolo C':          art,
             'Articolo D':          g['Articolo D'].iloc[0],
-            'Famiglia':            g['Famiglia'].iloc[0] if 'Famiglia' in g.columns else '',
+            'Famiglia':            g['Famiglia'].iloc[0],
             'Cliente':             cli,
-            'Cod_Cliente':         g['Cod_Cliente'].iloc[0] if 'Cod_Cliente' in g.columns else '',
-            'N_Ordini':            n_ordini,
+            'Cod_Cliente':         g['Cod_Cliente'].iloc[0],
+            'N_Ordini':            len(date_ordini),
             'Qta_Totale':          g['Qta Doc'].sum(),
             'Qta_Media_Ordine':    qta_media,
             'Intervallo_Medio_gg': intervallo,
             'Ultimo_Ordine':       ultimo,
-            'Giorni_Da_Ultimo':    giorni_da_ultimo,
+            'Giorni_Da_Ultimo':    (datetime.now() - ultimo).days if pd.notnull(ultimo) else None,
         })
 
     return pd.DataFrame(risultati).sort_values('N_Ordini', ascending=False)
@@ -677,16 +627,8 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                 df_alert['Giorni_Al_Riordino'] = (
                     df_alert['Intervallo_Medio_gg'] - df_alert['Giorni_Da_Ultimo']
                 ).round(0)
-                # Carica ordini aperti per escludere articoli già ordinati
-                _mtime_arca = _os.path.getmtime(PATH_STORICO) if _os.path.exists(PATH_STORICO) else 0
-                _aperti = carica_ordini_aperti(_mtime_arca)
-                df_alert['_art_up'] = df_alert['Articolo C'].astype(str).str.strip().str.upper()
-                df_alert['_ha_ordine_aperto'] = df_alert.apply(
-                    lambda r: (r['_art_up'], r['Cod_Cliente']) in _aperti, axis=1)
                 df_prossimi = df_alert[
-                    df_alert['Giorni_Al_Riordino'].between(-7, 14) &
-                    (df_alert['Intervallo_Medio_gg'] >= 20) &
-                    ~df_alert['_ha_ordine_aperto']  # escludi se già ordinato
+                    df_alert['Giorni_Al_Riordino'].between(-7, 14)
                 ].sort_values('Giorni_Al_Riordino')
 
             with st.expander("📋 Dettaglio frequenza riordino"):
@@ -887,7 +829,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
             )
 
             # Elenco righe alert
-            st.markdown(f"**{len(df_prossimi)} articoli con riordino atteso entro 14 giorni** *(solo clienti con intervallo abituale ≥ 20gg)*:")
+            st.markdown(f"**{len(df_prossimi)} articoli con riordino atteso entro 14 giorni:**")
             for _, r in df_prossimi.iterrows():
                 gg_r = int(r['Giorni_Al_Riordino'])
                 ico  = "🟢" if gg_r > 0 else "🔴"
@@ -1085,3 +1027,129 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
 
                 for j in range(len(riga), N_COL):
                     cols[j].empty()
+
+        # ════════════════════════════════════════════════════════════════════
+        # SEZIONE — PERFORMANCE PER CLIENTE E NAZIONE
+        # ════════════════════════════════════════════════════════════════════
+        st.markdown('<div class="sec-h">🔍 Performance per Cliente / Nazione</div>',
+                    unsafe_allow_html=True)
+
+        _dim_tab1, _dim_tab2 = st.tabs(["👥 Per Cliente", "🌍 Per Nazione"])
+
+        # PATH file nazioni
+        import os as _os2
+        PATH_NAZIONI = _os2.path.join(_os2.path.dirname(_os2.path.abspath(__file__)),
+                                      "clienti_nazioni.xlsx")
+
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def _carica_nazioni():
+            if not _os2.path.exists(PATH_NAZIONI):
+                return {}
+            try:
+                df_n = pd.read_excel(PATH_NAZIONI)
+                df_n.columns = [str(c).strip() for c in df_n.columns]
+                return dict(zip(df_n['Cd_CF'].astype(str).str.strip(),
+                                df_n['Nazione_Descrizione'].astype(str).str.strip()))
+            except Exception:
+                return {}
+
+        def _gauge_dim(df_curr, df_sto, dim_col, dim_label, top_n=20, key_pfx="dim"):
+            """Contagiri + barre per una dimensione generica (cliente o nazione)."""
+            if df_curr.empty:
+                st.info(f"Nessun dato per {dim_label} nel periodo selezionato.")
+                return
+
+            # Aggregazione periodo corrente
+            df_p = df_curr.groupby(dim_col)['Qta Doc'].sum().reset_index()
+            df_p.columns = [dim_col, 'Qta_Periodo']
+            df_p = df_p[df_p['Qta_Periodo'] > 0].sort_values('Qta_Periodo', ascending=False)
+
+            # Media storica (totale storico / n_anni)
+            df_s = df_sto.groupby(dim_col)['Qta Doc'].sum().reset_index()
+            df_s.columns = [dim_col, 'Qta_Storico']
+            anni_sto = max(1, df_sto['Anno'].nunique()) if 'Anno' in df_sto.columns else 1
+            df_s['Media_Anno'] = (df_s['Qta_Storico'] / anni_sto).round(0).astype(int)
+
+            df_g = df_p.merge(df_s[[dim_col, 'Media_Anno']], on=dim_col, how='left')
+            df_g['Media_Anno'] = df_g['Media_Anno'].fillna(df_g['Qta_Periodo'])
+            df_g['Pct'] = ((df_g['Qta_Periodo'] / df_g['Media_Anno']) * 100).clip(0, 200).round(1)
+            df_g = df_g.head(top_n)
+
+            # Slider top N
+            top_n_sel = st.slider(f"Top N {dim_label}", 5, min(50, len(df_g)), min(20, len(df_g)),
+                                  key=f"{key_pfx}_topn")
+            df_g = df_g.head(top_n_sel)
+
+            # Contagiri
+            N_COL = 4
+            righe = [df_g[dim_col].tolist()[i:i+N_COL]
+                     for i in range(0, len(df_g[dim_col].tolist()), N_COL)]
+
+            for riga in righe:
+                cols = st.columns(N_COL)
+                for j, nome in enumerate(riga):
+                    row = df_g[df_g[dim_col] == nome].iloc[0]
+                    pct   = float(row['Pct'])
+                    qta   = int(row['Qta_Periodo'])
+                    media = int(row['Media_Anno'])
+                    # Usa _disegna_gauge già definita sopra
+                    label = str(nome)[:22] + '…' if len(str(nome)) > 24 else str(nome)
+                    fig = _disegna_gauge(pct, qta, media, label)
+                    with cols[j]:
+                        st.plotly_chart(fig, use_container_width=True,
+                                        config={'displayModeBar': False},
+                                        key=f"{key_pfx}_{nome}_{_key_suffix}")
+                for j in range(len(riga), N_COL):
+                    cols[j].empty()
+
+            # Barra orizzontale riepilogativa
+            st.markdown("---")
+            colors = ['#2ecc71' if p >= 100 else '#e74c3c' for p in df_g['Pct']]
+            fig_bar = go.Figure(go.Bar(
+                y=df_g[dim_col].astype(str).str[:30],
+                x=df_g['Qta_Periodo'],
+                orientation='h',
+                marker_color=colors,
+                text=df_g['Pct'].apply(lambda p: f"{p:.0f}%"),
+                textposition='outside',
+            ))
+            fig_bar.add_vline(x=df_g['Media_Anno'].mean(), line_dash="dash",
+                              line_color="#888", annotation_text="Media storica")
+            fig_bar.update_layout(
+                height=max(300, len(df_g) * 28),
+                margin=dict(t=10, b=10, l=0, r=80),
+                plot_bgcolor='rgba(0,0,0,0)',
+                xaxis_title="Quantità (pa.)",
+                yaxis={'categoryorder': 'total ascending'},
+                showlegend=False,
+            )
+            st.plotly_chart(fig_bar, use_container_width=True,
+                            key=f"{key_pfx}_bar_{_key_suffix}")
+
+        # ── Tab Cliente ────────────────────────────────────────────────────
+        with _dim_tab1:
+            st.caption("Confronto vendite periodo selezionato vs media storica annuale per cliente.")
+            df_curr_cli = df_f.copy()
+            df_curr_cli['Cliente'] = df_curr_cli['Cliente Fornitore CD'].astype(str).str.split(' - ', n=1).str[-1].str.strip()
+            df_sto_cli  = df_oci.copy()
+            df_sto_cli['Cliente']  = df_sto_cli['Cliente Fornitore CD'].astype(str).str.split(' - ', n=1).str[-1].str.strip()
+            df_sto_cli['Anno']     = df_sto_cli['Data'].dt.year
+            _gauge_dim(df_curr_cli, df_sto_cli, 'Cliente', 'clienti', key_pfx='cli')
+
+        # ── Tab Nazione ────────────────────────────────────────────────────
+        with _dim_tab2:
+            st.caption("Confronto vendite periodo selezionato vs media storica annuale per nazione.")
+            _naz_map = _carica_nazioni()
+            if not _naz_map:
+                st.warning(f"File `clienti_nazioni.xlsx` non trovato. Caricalo nella cartella git-files.")
+            else:
+                df_curr_naz = df_f.copy()
+                df_curr_naz['Cod_Cli'] = df_curr_naz['Cliente Fornitore CD'].astype(str).str.split(' - ', n=1).str[0].str.strip()
+                df_curr_naz['Nazione'] = df_curr_naz['Cod_Cli'].map(_naz_map).fillna('N/D')
+
+                df_sto_naz  = df_oci.copy()
+                df_sto_naz['Cod_Cli'] = df_sto_naz['Cliente Fornitore CD'].astype(str).str.split(' - ', n=1).str[0].str.strip()
+                df_sto_naz['Nazione'] = df_sto_naz['Cod_Cli'].map(_naz_map).fillna('N/D')
+                df_sto_naz['Anno']    = df_sto_naz['Data'].dt.year
+
+                _gauge_dim(df_curr_naz, df_sto_naz, 'Nazione', 'nazioni', key_pfx='naz')

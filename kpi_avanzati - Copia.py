@@ -28,6 +28,7 @@ import os as _os
 _DIR = _os.path.dirname(_os.path.abspath(__file__))
 PATH_STORICO   = _os.path.join(_DIR, "righe_ordini_storico_con_date.xlsx")
 PATH_CONSEGNE  = _os.path.join(_DIR, "dettagli_consegne_CLI.xlsx")
+PATH_ARCA      = _os.path.join(_DIR, "righe_Ordini_ARCA.xlsx")
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 KPI_CSS = """
@@ -63,6 +64,25 @@ KPI_CSS = """
 # ── Caricamento e pulizia dati ────────────────────────────────────────────────
 
 @st.cache_data(ttl=1800, show_spinner=False)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def carica_ordini_aperti(_mtime=0):
+    """Legge righe_ordini_storico_con_date.xlsx — OCI con Qta Residua > 0
+    restituisce set di (Articolo C upper, Cod_Cliente) per il filtro solleciti."""
+    if not _os.path.exists(PATH_STORICO):
+        return set()
+    try:
+        df = pd.read_excel(PATH_STORICO, skiprows=2)
+        df.columns = [str(c).strip() for c in df.columns]
+        df["Codice Documento"] = df["Codice Documento"].ffill()
+        df["Qta Residua"] = pd.to_numeric(df["Qta Residua"], errors="coerce").fillna(0)
+        df["Articolo C"]  = df["Articolo C"].astype(str).str.strip().str.upper()
+        df["Cod_Cliente"] = df["Cliente Fornitore CD"].astype(str).str.split(" - ", n=1).str[0].str.strip()
+        df_oci = df[(df["Codice Documento"] == "OCI") & (df["Qta Residua"] > 0)]
+        return set(zip(df_oci["Articolo C"], df_oci["Cod_Cliente"]))
+    except Exception:
+        return set()
+
 def carica_storico_arca(path=PATH_STORICO):
     """
     Carica e normalizza il file export ARCA con struttura pivot.
@@ -193,34 +213,64 @@ def calcola_storicita_rotazione(df_ordini):
 
 
 def calcola_frequenza_riordino(df_ordini):
-    """Intervallo medio di riordino per articolo × cliente."""
+    """Intervallo e quantità di riordino per articolo x cliente.
+    Logica: raggruppa per numero ordine reale, poi calcola intervallo
+    tra ordini consecutivi e quantità per ordine — non per riga.
+    """
     if df_ordini.empty:
         return pd.DataFrame()
 
     risultati = []
     for (art, cli), g in df_ordini.groupby(['Articolo C', 'Cliente']):
-        date_ordini = sorted(g['Data'].dropna().tolist())
-        if len(date_ordini) < 2:
-            intervallo = None
+        # Aggrega per articolo + numero ordine:
+        # somma quantità dello stesso articolo nello stesso ordine,
+        # prende la data minima dell'ordine
+        if 'Numero Documento' in g.columns:
+            ordini = (g.groupby(['Numero Documento'])
+                       .agg(Data=('Data', 'min'), Qta=('Qta Doc', 'sum'))
+                       .sort_values('Data')
+                       .reset_index())
         else:
-            delta = [(date_ordini[i+1]-date_ordini[i]).days
-                     for i in range(len(date_ordini)-1)]
-            intervallo = round(float(np.mean(delta)), 1)
+            # Fallback: raggruppa per data
+            ordini = (g.assign(_d=g['Data'].dt.date)
+                       .groupby('_d')
+                       .agg(Qta=('Qta Doc', 'sum'))
+                       .reset_index()
+                       .rename(columns={'_d': 'Data'}))
+            ordini['Data'] = pd.to_datetime(ordini['Data'])
+
+        n_ordini = len(ordini)
+        date_ordini = ordini['Data'].dropna().tolist()
+        qte_ordini  = ordini['Qta'].tolist()
+
+        # Intervallo: mediana degli intervalli tra ordini consecutivi
+        # (la mediana è più robusta della media contro valori anomali)
+        if n_ordini >= 2:
+            delta = [(date_ordini[i+1] - date_ordini[i]).days
+                     for i in range(len(date_ordini)-1)
+                     if (date_ordini[i+1] - date_ordini[i]).days > 0]
+            intervallo = round(float(np.median(delta)), 0) if delta else None
+        else:
+            intervallo = None
+
+        # Quantità: mediana delle quantità per ordine reale
+        qta_media = round(float(np.median(qte_ordini)), 0) if qte_ordini else 0
 
         ultimo = max(date_ordini) if date_ordini else pd.NaT
-        qta_media = round(g['Qta Doc'].mean(), 0) if len(g) > 0 else 0
+        giorni_da_ultimo = (datetime.now() - ultimo).days if pd.notnull(ultimo) else None
+
         risultati.append({
             'Articolo C':          art,
             'Articolo D':          g['Articolo D'].iloc[0],
-            'Famiglia':            g['Famiglia'].iloc[0],
+            'Famiglia':            g['Famiglia'].iloc[0] if 'Famiglia' in g.columns else '',
             'Cliente':             cli,
-            'Cod_Cliente':         g['Cod_Cliente'].iloc[0],
-            'N_Ordini':            len(date_ordini),
+            'Cod_Cliente':         g['Cod_Cliente'].iloc[0] if 'Cod_Cliente' in g.columns else '',
+            'N_Ordini':            n_ordini,
             'Qta_Totale':          g['Qta Doc'].sum(),
             'Qta_Media_Ordine':    qta_media,
             'Intervallo_Medio_gg': intervallo,
             'Ultimo_Ordine':       ultimo,
-            'Giorni_Da_Ultimo':    (datetime.now() - ultimo).days if pd.notnull(ultimo) else None,
+            'Giorni_Da_Ultimo':    giorni_da_ultimo,
         })
 
     return pd.DataFrame(risultati).sort_values('N_Ordini', ascending=False)
@@ -627,8 +677,16 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                 df_alert['Giorni_Al_Riordino'] = (
                     df_alert['Intervallo_Medio_gg'] - df_alert['Giorni_Da_Ultimo']
                 ).round(0)
+                # Carica ordini aperti per escludere articoli già ordinati
+                _mtime_arca = _os.path.getmtime(PATH_STORICO) if _os.path.exists(PATH_STORICO) else 0
+                _aperti = carica_ordini_aperti(_mtime_arca)
+                df_alert['_art_up'] = df_alert['Articolo C'].astype(str).str.strip().str.upper()
+                df_alert['_ha_ordine_aperto'] = df_alert.apply(
+                    lambda r: (r['_art_up'], r['Cod_Cliente']) in _aperti, axis=1)
                 df_prossimi = df_alert[
-                    df_alert['Giorni_Al_Riordino'].between(-7, 14)
+                    df_alert['Giorni_Al_Riordino'].between(-7, 14) &
+                    (df_alert['Intervallo_Medio_gg'] >= 20) &
+                    ~df_alert['_ha_ordine_aperto']  # escludi se già ordinato
                 ].sort_values('Giorni_Al_Riordino')
 
             with st.expander("📋 Dettaglio frequenza riordino"):
@@ -829,7 +887,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
             )
 
             # Elenco righe alert
-            st.markdown(f"**{len(df_prossimi)} articoli con riordino atteso entro 14 giorni:**")
+            st.markdown(f"**{len(df_prossimi)} articoli con riordino atteso entro 14 giorni** *(solo clienti con intervallo abituale ≥ 20gg)*:")
             for _, r in df_prossimi.iterrows():
                 gg_r = int(r['Giorni_Al_Riordino'])
                 ico  = "🟢" if gg_r > 0 else "🔴"
