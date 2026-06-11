@@ -1076,7 +1076,12 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
             df_g = df_g.head(top_n)
 
             # Slider top N
-            top_n_sel = st.slider(f"Top N {dim_label}", 5, min(50, len(df_g)), min(20, len(df_g)),
+            if len(df_g) <= 1:
+                st.info(f"Dati insufficienti per {dim_label} nel periodo selezionato.")
+                return
+            _max_n = min(50, len(df_g))
+            _def_n = min(20, len(df_g))
+            top_n_sel = st.slider(f"Top N {dim_label}", 1, _max_n, _def_n,
                                   key=f"{key_pfx}_topn")
             df_g = df_g.head(top_n_sel)
 
