@@ -289,11 +289,11 @@ if not st.session_state.auth:
 # ===========================================================
 LABEL_CLI = {
     'DISPONIBILE':    ('Pronto per la spedizione', '#4caf50', 'on-time-row'),
-    'COPERTO BOM':    ('Pronto (componente)',       '#4caf50', 'on-time-row'),
-    'ACQUISTO':       ('In arrivo a magazzino',     '#2196f3', 'acq-row'),
-    'PRODUZIONE':     ('In lavorazione',            '#fbc02d', 'prod-row'),
-    'MANCANTE':       ('In pianificazione',         '#f44336', 'urgent-row'),
-    'DA PIANIFICARE': ('Da confermare',             '#9e9e9e', 'oca-row'),
+    'COPERTO BOM':    ('Pronto per la spedizione', '#4caf50', 'on-time-row'),
+    'ACQUISTO':       ('In lavorazione',           '#fbc02d', 'prod-row'),
+    'PRODUZIONE':     ('In lavorazione',           '#fbc02d', 'prod-row'),
+    'MANCANTE':       ('In pianificazione',        '#f44336', 'urgent-row'),
+    'DA PIANIFICARE': ('Da confermare',            '#9e9e9e', 'oca-row'),
 }
 
 def pbar_html(pct, color):
@@ -782,8 +782,8 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
     # come ACQUISTO/PRODUZIONE ma una parte è coperta da GIA.
     label_key_by_st = {
         'DISPONIBILE': 'Pronto per la spedizione',
-        'COPERTO BOM': 'Pronto (componente)',
-        'ACQUISTO': 'In arrivo a magazzino',
+        'COPERTO BOM': 'Pronto per la spedizione',
+        'ACQUISTO': 'In lavorazione',
         'PRODUZIONE': 'In lavorazione',
         'MANCANTE': 'In pianificazione',
         'DA PIANIFICARE': 'Da confermare',
@@ -800,9 +800,9 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
         if st_line == 'DISPONIBILE':
             qty_by_label['Pronto per la spedizione'] += q
         elif st_line == 'COPERTO BOM':
-            qty_by_label['Pronto (componente)'] += q
+            qty_by_label['Pronto per la spedizione'] += q
         elif st_line == 'ACQUISTO':
-            qty_by_label['In arrivo a magazzino'] += q
+            qty_by_label['In lavorazione'] += q
         elif st_line == 'PRODUZIONE':
             qty_by_label['In lavorazione'] += q
         elif st_line == 'DA PIANIFICARE':
@@ -822,8 +822,6 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
                          color='Stato Cliente',
                          color_discrete_map={
                              'Pronto per la spedizione':'#4caf50',
-                             'Pronto (componente)':     '#4caf50',
-                             'In arrivo a magazzino':   '#2196f3',
                              'In lavorazione':          '#fbc02d',
                              'In pianificazione':       '#f44336',
                              'Da confermare':           '#9e9e9e',
@@ -839,7 +837,7 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
         st.markdown("---")
         st.caption("🟢 Pronto — disponibile in magazzino")
         st.caption("🔵 In arrivo — materiale in fase di acquisto")
-        st.caption("🟡 In lavorazione — in produzione")
+        st.caption("🟡 In lavorazione — produzione o acquisto")
         st.caption("🔴 In pianificazione — da programmare")
 
     st.markdown("---")
@@ -899,39 +897,7 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
                 )
 
     with tab_kpi_cli:
-        # Sotto-tab KPI per il cliente loggato (solo Operativi e Avanzati)
-        kpi_sub = st.tabs(["📋 Operativi", "📊 Avanzati"])
-
-        with kpi_sub[0]:
-            tot = int(df_cli['Qta Residua'].sum())
-            pr  = int(df_cli[df_cli['ST'].isin(['DISPONIBILE','COPERTO BOM'])]['Qta Residua'].sum())
-            acq = int(df_cli[df_cli['ST'] == 'ACQUISTO']['Qta Residua'].sum())
-            pro = int(df_cli[df_cli['ST'] == 'PRODUZIONE']['Qta Residua'].sum())
-            man = int(df_cli[df_cli['ST'].isin(['MANCANTE','DA PIANIFICARE'])]['Qta Residua'].sum())
-            c1,c2,c3,c4,c5 = st.columns(5)
-            c1.metric("Totale paia", f"{tot:,}".replace(",","."))
-            c2.metric("✅ Pronti",    f"{pr:,}".replace(",","."))
-            c3.metric("🚚 Acquisto",  f"{acq:,}".replace(",","."))
-            c4.metric("🔧 Produzione",f"{pro:,}".replace(",","."))
-            c5.metric("⚠️ Mancanti",  f"{man:,}".replace(",","."))
-            df_ops = df_cli.groupby('ART_KEY').agg(
-                Descrizione=('Articolo D','first'),
-                Qta=('Qta Residua','sum'),
-                Stato=('ST','first')
-            ).reset_index().sort_values('Qta', ascending=False)
-            df_ops['Qta'] = df_ops['Qta'].astype(int)
-            st.dataframe(df_ops.rename(columns={'ART_KEY':'Codice','Qta':'Qta (pa.)','Stato':'Stato'}),
-                         use_container_width=True, hide_index=True)
-
-        with kpi_sub[1]:
-            try:
-                from kpi_avanzati import render_kpi_avanzati
-                render_kpi_avanzati(
-                    filtro_cliente=nome_cliente if nome_cliente else None,
-                    filtro_famiglie=None
-                )
-            except Exception as e:
-                st.warning(f"KPI Avanzati non disponibili: {e}")
+        st.info("📊 Per i KPI avanzati di questo cliente vai al tab **KPI → Avanzati** con il cliente selezionato.")
 
 
 # ===========================================================
