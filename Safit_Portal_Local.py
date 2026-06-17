@@ -897,7 +897,40 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
                 )
 
     with tab_kpi_cli:
-        st.info("📊 Per i KPI avanzati di questo cliente vai al tab **KPI → Avanzati** con il cliente selezionato.")
+        kpi_sub = st.tabs(["📋 Operativi", "📊 Avanzati"])
+
+        with kpi_sub[0]:
+            tot = int(df_cli['Qta Residua'].sum())
+            pr  = int(df_cli[df_cli['ST'].isin(['DISPONIBILE','COPERTO BOM'])]['Qta Residua'].sum())
+            acq = int(df_cli[df_cli['ST'] == 'ACQUISTO']['Qta Residua'].sum())
+            pro = int(df_cli[df_cli['ST'] == 'PRODUZIONE']['Qta Residua'].sum())
+            man = int(df_cli[df_cli['ST'].isin(['MANCANTE','DA PIANIFICARE'])]['Qta Residua'].sum())
+            c1,c2,c3,c4,c5 = st.columns(5)
+            c1.metric("Totale paia",  f"{tot:,}".replace(",","."))
+            c2.metric("Pronti",       f"{pr:,}".replace(",","."))
+            c3.metric("In lavorazione", f"{int(acq+pro):,}".replace(",","."))
+            c4.metric("In pianificazione", f"{man:,}".replace(",","."))
+            c5.metric("% Pronto", f"{round(pr/tot*100) if tot>0 else 0}%")
+            df_ops = df_cli.groupby('ART_KEY').agg(
+                Descrizione=('Articolo D','first'),
+                Qta=('Qta Residua','sum'),
+                Stato=('ST','first')
+            ).reset_index().sort_values('Qta', ascending=False)
+            df_ops['Qta'] = df_ops['Qta'].astype(int)
+            # Mostra stato cliente-friendly
+            df_ops['Stato'] = df_ops['Stato'].map(lambda x: LABEL_CLI.get(x, (x,))[0])
+            st.dataframe(df_ops.rename(columns={'ART_KEY':'Codice','Qta':'Qta (pa.)','Stato':'Stato'}),
+                         use_container_width=True, hide_index=True)
+
+        with kpi_sub[1]:
+            try:
+                render_kpi_avanzati(
+                    filtro_cliente=nome_cliente if nome_cliente else None,
+                    filtro_famiglie=None,
+                    key_prefix="cli"
+                )
+            except Exception as e:
+                st.warning(f"KPI Avanzati non disponibili: {e}")
 
 
 # ===========================================================
