@@ -836,8 +836,7 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
         st.markdown(pbar_html(pct_pronto, '#4caf50'), unsafe_allow_html=True)
         st.markdown("---")
         st.caption("🟢 Pronto — disponibile in magazzino")
-        st.caption("🔵 In arrivo — materiale in fase di acquisto")
-        st.caption("🟡 In lavorazione — produzione o acquisto")
+        st.caption("🟡 In lavorazione — produzione")
         st.caption("🔴 In pianificazione — da programmare")
 
     st.markdown("---")
