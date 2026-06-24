@@ -1295,7 +1295,6 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                             .sum().unstack(fill_value=0).round(0).astype(int))
                 df_pivot['TOTALE'] = df_pivot.sum(axis=1)
                 df_pivot = df_pivot.sort_values('TOTALE', ascending=False)
-                st.dataframe(
-                    df_pivot.style.format('{:,}'.replace(',','.')),
-                    use_container_width=True
-                )
+                # Formatta come stringhe per evitare problemi con style.format
+                df_pivot_str = df_pivot.applymap(lambda v: f"{v:,}".replace(",","."))
+                st.dataframe(df_pivot_str, use_container_width=True)
