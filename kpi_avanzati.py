@@ -1158,3 +1158,144 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                 df_sto_naz['Anno']    = df_sto_naz['Data'].dt.year
 
                 _gauge_dim(df_curr_naz, df_sto_naz, 'Nazione', 'nazioni', key_pfx='naz')
+
+        # ════════════════════════════════════════════════════════════════════
+        # SEZIONE — ANDAMENTO FATTURATO PER FAMIGLIA (DVF)
+        # ════════════════════════════════════════════════════════════════════
+        st.markdown('<div class="sec-h">💶 Andamento Fatturato per Famiglia (DVF)</div>',
+                    unsafe_allow_html=True)
+        st.caption("Seleziona una o più famiglie per visualizzare il trend mensile del fatturato.")
+
+        # Mappa famiglie — prefisso 2 lettere -> descrizione
+        FAM_MAP = {
+            'AC': 'AC - Gommino',
+            'SO': 'SO - Solette acc.inox',
+            'PP': 'PP - Puntali acciaio',
+            'PT': 'PT - Puntali acciaio gommino',
+            'CP': 'CP - Puntali plastica',
+            'CT': 'CT - Puntali plastica gommino',
+            'PA': 'PA - Puntali alluminio',
+            'AT': 'AT - Puntali alluminio gommino',
+            'PF': 'PF - Puntali fibra vetro',
+            'FT': 'FT - Puntali fibra vetro gommino',
+            'PI': 'PI - Puntali acciaio inox',
+            'SC': 'SC - Solette carbonio',
+            'TK': 'TK - Solette tessuto',
+            'PS': 'PS - Solette acc.inox',
+            'PC': 'PC - Puntali plastica',
+            'NL': 'NL - Nastri lamiera',
+            'RB': 'RB - Ricambistica BTL',
+            'RS': 'RS - Ricambi stampi',
+            'TS': 'TS - Tessuto',
+            'VR': 'VR - Rottame',
+            'VV': 'VV - Voci valorizzabili',
+        }
+
+        # Carica DVF dallo storico
+        @st.cache_data(ttl=1800, show_spinner=False)
+        def _carica_dvf_famiglie(path=PATH_STORICO):
+            if not _os.path.exists(path):
+                return pd.DataFrame()
+            try:
+                df = pd.read_excel(path, skiprows=2)
+                df.columns = [str(c).strip() for c in df.columns]
+                df['Codice Documento'] = df['Codice Documento'].ffill()
+                df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
+                df['Valore'] = pd.to_numeric(df['Valore'], errors='coerce').fillna(0)
+                df['Articolo C'] = df['Articolo C'].fillna('').astype(str).str.strip()
+                # Solo DVF e DVE
+                df_dv = df[df['Codice Documento'].str.startswith('DV', na=False)].copy()
+                df_dv['Prefisso'] = df_dv['Articolo C'].str[:2].str.upper()
+                df_dv['Famiglia'] = df_dv['Prefisso'].map(FAM_MAP).fillna('Altro')
+                df_dv['Mese'] = df_dv['Data'].dt.to_period('M').astype(str)
+                df_dv['Anno'] = df_dv['Data'].dt.year
+                return df_dv[df_dv['Valore'] > 0]
+            except Exception:
+                return pd.DataFrame()
+
+        df_dvf_fam = _carica_dvf_famiglie()
+
+        if df_dvf_fam.empty:
+            st.warning("Nessun dato DVF disponibile.")
+        else:
+            # Filtro cliente se attivo
+            if filtro_cliente:
+                df_dvf_fam = df_dvf_fam[
+                    df_dvf_fam['Cliente Fornitore CD'].astype(str).str.contains(
+                        filtro_cliente, case=False, na=False, regex=False)]
+
+            # Famiglie disponibili con fatturato > 0
+            fam_disp = sorted(
+                df_dvf_fam.groupby('Famiglia')['Valore'].sum()
+                .loc[lambda x: x > 0].index.tolist()
+            )
+            fam_default = [f for f in ['PP - Puntali acciaio', 'PS - Solette acc.inox',
+                                        'PC - Puntali plastica', 'PA - Puntali alluminio']
+                           if f in fam_disp][:4]
+
+            col_sel, col_tipo = st.columns([3, 1])
+            with col_sel:
+                sel_famiglie = st.multiselect(
+                    "Seleziona famiglie da visualizzare:",
+                    options=fam_disp,
+                    default=fam_default,
+                    key=f"dvf_fam_{_key_suffix}"
+                )
+            with col_tipo:
+                tipo_grafico = st.selectbox(
+                    "Tipo",
+                    ["Barre stacked", "Linee", "Barre affiancate"],
+                    key=f"dvf_tipo_{_key_suffix}"
+                )
+
+            if not sel_famiglie:
+                st.info("Seleziona almeno una famiglia.")
+            else:
+                df_plot = (df_dvf_fam[df_dvf_fam['Famiglia'].isin(sel_famiglie)]
+                           .groupby(['Mese', 'Famiglia'])['Valore']
+                           .sum().reset_index()
+                           .sort_values('Mese'))
+
+                # Colori per famiglia
+                PALETTE = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd',
+                           '#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf',
+                           '#aec7e8','#ffbb78','#98df8a','#ff9896']
+                col_map = {f: PALETTE[i % len(PALETTE)] for i, f in enumerate(fam_disp)}
+
+                if tipo_grafico == "Linee":
+                    fig_dv = px.line(df_plot, x='Mese', y='Valore', color='Famiglia',
+                                     color_discrete_map=col_map,
+                                     labels={'Valore': 'Fatturato (€)', 'Mese': ''},
+                                     markers=True)
+                elif tipo_grafico == "Barre affiancate":
+                    fig_dv = px.bar(df_plot, x='Mese', y='Valore', color='Famiglia',
+                                    color_discrete_map=col_map,
+                                    barmode='group',
+                                    labels={'Valore': 'Fatturato (€)', 'Mese': ''})
+                else:  # Barre stacked
+                    fig_dv = px.bar(df_plot, x='Mese', y='Valore', color='Famiglia',
+                                    color_discrete_map=col_map,
+                                    barmode='stack',
+                                    labels={'Valore': 'Fatturato (€)', 'Mese': ''})
+
+                fig_dv.update_layout(
+                    height=380,
+                    margin=dict(t=10, b=60, l=0, r=0),
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    xaxis_tickangle=-45,
+                    legend=dict(orientation='h', y=-0.35),
+                    yaxis_tickformat=',.0f',
+                )
+                st.plotly_chart(fig_dv, use_container_width=True,
+                                key=f"dvf_chart_{_key_suffix}")
+
+                # Tabella riepilogo anno x famiglia
+                df_pivot = (df_dvf_fam[df_dvf_fam['Famiglia'].isin(sel_famiglie)]
+                            .groupby(['Famiglia', 'Anno'])['Valore']
+                            .sum().unstack(fill_value=0).round(0).astype(int))
+                df_pivot['TOTALE'] = df_pivot.sum(axis=1)
+                df_pivot = df_pivot.sort_values('TOTALE', ascending=False)
+                st.dataframe(
+                    df_pivot.style.format('{:,}'.replace(',','.')),
+                    use_container_width=True
+                )
