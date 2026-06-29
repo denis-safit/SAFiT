@@ -1127,7 +1127,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
             df_g = df_g.head(top_n_sel)
 
             # Contagiri
-            N_COL = 4
+            N_COL = 3
             righe = [df_g[dim_col].tolist()[i:i+N_COL]
                      for i in range(0, len(df_g[dim_col].tolist()), N_COL)]
 
