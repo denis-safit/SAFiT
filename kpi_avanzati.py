@@ -895,7 +895,8 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         # Scostamento: 0=media, -100=zero, +100=doppio
         df_gauge['Pct'] = ((df_gauge['Media_Giorno_Per'] / df_gauge['Media_Giorno_Sto'] - 1) * 100).clip(-100, 100)
         # Per etichette: media attesa nel periodo
-        df_gauge['Media_Periodo'] = (df_gauge['Media_Giorno_Sto'] * gg_periodo).round(0).astype(int)
+        df_gauge['Media_Giorno_Sto'] = df_gauge['Media_Giorno_Sto'].fillna(df_gauge['Media_Giorno_Per'])
+        df_gauge['Media_Periodo'] = (df_gauge['Media_Giorno_Sto'] * gg_periodo).round(0).fillna(0).astype(int)
         df_gauge = df_gauge.sort_values('Qta_Periodo', ascending=False)
 
         if df_gauge.empty:
