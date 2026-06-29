@@ -861,10 +861,18 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
         )
 
         # Calcola media storica per famiglia su tutto lo storico OCI
-        df_storico_fam = df_oci.groupby('Famiglia')['Qta Doc'].sum().reset_index()
-        # Numero di anni distinti nello storico per normalizzare
-        # Media giornaliera storica (tutto lo storico OCI)
-        gg_sto = max(1, (df_oci['Data'].max() - df_oci['Data'].min()).days)
+        # Storico = tutto df_oci ESCLUSO il periodo corrente filtrato
+        # Così confrontiamo il periodo attuale con il passato reale
+        _data_min_f = df_f['Data'].min() if not df_f.empty else pd.Timestamp.now()
+        _data_max_f = df_f['Data'].max() if not df_f.empty else pd.Timestamp.now()
+        df_oci_sto = df_oci[
+            (df_oci['Data'] < _data_min_f) | (df_oci['Data'] > _data_max_f)
+        ].copy()
+        # Se lo storico escludendo il periodo è vuoto, usa tutto lo storico
+        if df_oci_sto.empty or len(df_oci_sto) < 10:
+            df_oci_sto = df_oci.copy()
+        df_storico_fam = df_oci_sto.groupby('Famiglia')['Qta Doc'].sum().reset_index()
+        gg_sto = max(1, (df_oci_sto['Data'].max() - df_oci_sto['Data'].min()).days)
         df_storico_fam['Media_Giorno_Sto'] = df_storico_fam['Qta Doc'] / gg_sto
 
         # Calcola durata del periodo filtrato
@@ -1054,25 +1062,57 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                 return {}
 
         def _gauge_dim(df_curr, df_sto, dim_col, dim_label, top_n=20, key_pfx="dim"):
-            """Contagiri + barre per una dimensione generica (cliente o nazione)."""
+            """Contagiri + barre per una dimensione generica (cliente o nazione).
+            Pct = (pa/gg periodo - pa/gg storico) / pa/gg storico * 100
+            0% = uguale allo storico, negativo = sotto, positivo = sopra.
+            """
             if df_curr.empty:
                 st.info(f"Nessun dato per {dim_label} nel periodo selezionato.")
                 return
 
-            # Aggregazione periodo corrente
+            # Giorni periodo corrente e giorni storico
+            if 'Data' in df_curr.columns and df_curr['Data'].notna().any():
+                _d_min = df_curr['Data'].min()
+                _d_max = df_curr['Data'].max()
+                gg_per = max(1, (_d_max - _d_min).days + 1)
+            else:
+                gg_per = 365
+
+            if 'Data' in df_sto.columns and df_sto['Data'].notna().any():
+                _s_min = df_sto['Data'].min()
+                _s_max = df_sto['Data'].max()
+                gg_sto_dim = max(1, (_s_max - _s_min).days + 1)
+            else:
+                gg_sto_dim = 365
+
+            # pa/giorno periodo corrente per dimensione
             df_p = df_curr.groupby(dim_col)['Qta Doc'].sum().reset_index()
             df_p.columns = [dim_col, 'Qta_Periodo']
+            df_p['Pagg_Per'] = df_p['Qta_Periodo'] / gg_per
             df_p = df_p[df_p['Qta_Periodo'] > 0].sort_values('Qta_Periodo', ascending=False)
 
-            # Media storica (totale storico / n_anni)
-            df_s = df_sto.groupby(dim_col)['Qta Doc'].sum().reset_index()
+            # Storico esclude il periodo corrente per confronto reale
+            if 'Data' in df_curr.columns and df_curr['Data'].notna().any():
+                _dmin_c = df_curr['Data'].min()
+                _dmax_c = df_curr['Data'].max()
+                df_sto_exc = df_sto[
+                    (df_sto['Data'] < _dmin_c) | (df_sto['Data'] > _dmax_c)
+                ].copy()
+                if df_sto_exc.empty or len(df_sto_exc) < 10:
+                    df_sto_exc = df_sto.copy()
+                if df_sto_exc['Data'].notna().any():
+                    gg_sto_dim = max(1, (df_sto_exc['Data'].max() - df_sto_exc['Data'].min()).days + 1)
+            else:
+                df_sto_exc = df_sto.copy()
+            df_s = df_sto_exc.groupby(dim_col)['Qta Doc'].sum().reset_index()
             df_s.columns = [dim_col, 'Qta_Storico']
-            anni_sto = max(1, df_sto['Anno'].nunique()) if 'Anno' in df_sto.columns else 1
-            df_s['Media_Anno'] = (df_s['Qta_Storico'] / anni_sto).round(0).astype(int)
+            df_s['Pagg_Sto'] = df_s['Qta_Storico'] / gg_sto_dim
 
-            df_g = df_p.merge(df_s[[dim_col, 'Media_Anno']], on=dim_col, how='left')
-            df_g['Media_Anno'] = df_g['Media_Anno'].fillna(df_g['Qta_Periodo'])
-            df_g['Pct'] = ((df_g['Qta_Periodo'] / df_g['Media_Anno']) * 100).clip(0, 200).round(1)
+            df_g = df_p.merge(df_s[[dim_col, 'Pagg_Sto', 'Qta_Storico']], on=dim_col, how='left')
+            df_g['Pagg_Sto'] = df_g['Pagg_Sto'].fillna(df_g['Pagg_Per'])
+            # Pct = scostamento % rispetto allo storico giornaliero, clip -100/+100
+            df_g['Pct'] = ((df_g['Pagg_Per'] / df_g['Pagg_Sto'] - 1) * 100).clip(-100, 100).round(1)
+            df_g['Media_Anno'] = (df_g['Pagg_Sto'] * gg_per).round(0).astype(int)
             df_g = df_g.head(top_n)
 
             # Slider top N
@@ -1097,8 +1137,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                     pct   = float(row['Pct'])
                     qta   = int(row['Qta_Periodo'])
                     media = int(row['Media_Anno'])
-                    # Usa _disegna_gauge già definita sopra
-                    label = str(nome)[:22] + '…' if len(str(nome)) > 24 else str(nome)
+                    label = str(nome)[:22] + chr(8230) if len(str(nome)) > 24 else str(nome)
                     fig = _disegna_gauge(pct, qta, media, label)
                     with cols[j]:
                         st.plotly_chart(fig, use_container_width=True,
@@ -1109,7 +1148,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
 
             # Barra orizzontale riepilogativa
             st.markdown("---")
-            colors = ['#2ecc71' if p >= 100 else '#e74c3c' for p in df_g['Pct']]
+            colors = ['#2ecc71' if p >= 0 else '#e74c3c' for p in df_g['Pct']]
             fig_bar = go.Figure(go.Bar(
                 y=df_g[dim_col].astype(str).str[:30],
                 x=df_g['Qta_Periodo'],
