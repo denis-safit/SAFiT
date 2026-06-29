@@ -909,7 +909,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
 
             import math as _math
 
-            def _disegna_gauge(pct, qta, media, fam):
+            def _disegna_gauge(pct, qta, media, fam, height=270):
                 """
                 Contagiri scala -100/0/+100.
                 0 = media storica giornaliera (linea gialla).
@@ -1010,7 +1010,7 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                     xanchor='center', yanchor='top')
 
                 fig.update_layout(
-                    height=270,
+                    height=height,
                     margin=dict(t=10, b=10, l=10, r=10),
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)',
@@ -1126,8 +1126,8 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                                   key=f"{key_pfx}_topn")
             df_g = df_g.head(top_n_sel)
 
-            # Contagiri
-            N_COL = 3
+            # Contagiri — 2 colonne per dare più spazio ai gauge cliente/nazione
+            N_COL = 2
             righe = [df_g[dim_col].tolist()[i:i+N_COL]
                      for i in range(0, len(df_g[dim_col].tolist()), N_COL)]
 
@@ -1138,8 +1138,8 @@ def render_kpi_avanzati(path_storico=PATH_STORICO, filtro_cliente=None, filtro_a
                     pct   = float(row['Pct'])
                     qta   = int(row['Qta_Periodo'])
                     media = int(row['Media_Anno'])
-                    label = str(nome)[:22] + chr(8230) if len(str(nome)) > 24 else str(nome)
-                    fig = _disegna_gauge(pct, qta, media, label)
+                    label = str(nome)[:30] + chr(8230) if len(str(nome)) > 32 else str(nome)
+                    fig = _disegna_gauge(pct, qta, media, label, height=400)
                     with cols[j]:
                         st.plotly_chart(fig, use_container_width=True,
                                         config={'displayModeBar': False},
