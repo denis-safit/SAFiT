@@ -289,11 +289,11 @@ if not st.session_state.auth:
 # ===========================================================
 LABEL_CLI = {
     'DISPONIBILE':    ('Pronto per la spedizione', '#4caf50', 'on-time-row'),
-    'COPERTO BOM':    ('Pronto per la spedizione', '#4caf50', 'on-time-row'),
-    'ACQUISTO':       ('In lavorazione',           '#fbc02d', 'prod-row'),
-    'PRODUZIONE':     ('In lavorazione',           '#fbc02d', 'prod-row'),
-    'MANCANTE':       ('In pianificazione',        '#f44336', 'urgent-row'),
-    'DA PIANIFICARE': ('Da confermare',            '#9e9e9e', 'oca-row'),
+    'COPERTO BOM':    ('Pronto (componente)',       '#4caf50', 'on-time-row'),
+    'ACQUISTO':       ('In arrivo a magazzino',     '#2196f3', 'acq-row'),
+    'PRODUZIONE':     ('In lavorazione',            '#fbc02d', 'prod-row'),
+    'MANCANTE':       ('In pianificazione',         '#f44336', 'urgent-row'),
+    'DA PIANIFICARE': ('Da confermare',             '#9e9e9e', 'oca-row'),
 }
 
 def pbar_html(pct, color):
@@ -782,8 +782,8 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
     # come ACQUISTO/PRODUZIONE ma una parte è coperta da GIA.
     label_key_by_st = {
         'DISPONIBILE': 'Pronto per la spedizione',
-        'COPERTO BOM': 'Pronto per la spedizione',
-        'ACQUISTO': 'In lavorazione',
+        'COPERTO BOM': 'Pronto (componente)',
+        'ACQUISTO': 'In arrivo a magazzino',
         'PRODUZIONE': 'In lavorazione',
         'MANCANTE': 'In pianificazione',
         'DA PIANIFICARE': 'Da confermare',
@@ -800,9 +800,9 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
         if st_line == 'DISPONIBILE':
             qty_by_label['Pronto per la spedizione'] += q
         elif st_line == 'COPERTO BOM':
-            qty_by_label['Pronto per la spedizione'] += q
+            qty_by_label['Pronto (componente)'] += q
         elif st_line == 'ACQUISTO':
-            qty_by_label['In lavorazione'] += q
+            qty_by_label['In arrivo a magazzino'] += q
         elif st_line == 'PRODUZIONE':
             qty_by_label['In lavorazione'] += q
         elif st_line == 'DA PIANIFICARE':
@@ -822,6 +822,8 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
                          color='Stato Cliente',
                          color_discrete_map={
                              'Pronto per la spedizione':'#4caf50',
+                             'Pronto (componente)':     '#4caf50',
+                             'In arrivo a magazzino':   '#2196f3',
                              'In lavorazione':          '#fbc02d',
                              'In pianificazione':       '#f44336',
                              'Da confermare':           '#9e9e9e',
@@ -836,7 +838,8 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
         st.markdown(pbar_html(pct_pronto, '#4caf50'), unsafe_allow_html=True)
         st.markdown("---")
         st.caption("🟢 Pronto — disponibile in magazzino")
-        st.caption("🟡 In lavorazione — produzione")
+        st.caption("🔵 In arrivo — materiale in fase di acquisto")
+        st.caption("🟡 In lavorazione — in produzione")
         st.caption("🔴 In pianificazione — da programmare")
 
     st.markdown("---")
@@ -896,40 +899,7 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
                 )
 
     with tab_kpi_cli:
-        kpi_sub = st.tabs(["📋 Operativi", "📊 Avanzati"])
-
-        with kpi_sub[0]:
-            tot = int(df_cli['Qta Residua'].sum())
-            pr  = int(df_cli[df_cli['ST'].isin(['DISPONIBILE','COPERTO BOM'])]['Qta Residua'].sum())
-            acq = int(df_cli[df_cli['ST'] == 'ACQUISTO']['Qta Residua'].sum())
-            pro = int(df_cli[df_cli['ST'] == 'PRODUZIONE']['Qta Residua'].sum())
-            man = int(df_cli[df_cli['ST'].isin(['MANCANTE','DA PIANIFICARE'])]['Qta Residua'].sum())
-            c1,c2,c3,c4,c5 = st.columns(5)
-            c1.metric("Totale paia",  f"{tot:,}".replace(",","."))
-            c2.metric("Pronti",       f"{pr:,}".replace(",","."))
-            c3.metric("In lavorazione", f"{int(acq+pro):,}".replace(",","."))
-            c4.metric("In pianificazione", f"{man:,}".replace(",","."))
-            c5.metric("% Pronto", f"{round(pr/tot*100) if tot>0 else 0}%")
-            df_ops = df_cli.groupby('ART_KEY').agg(
-                Descrizione=('Articolo D','first'),
-                Qta=('Qta Residua','sum'),
-                Stato=('ST','first')
-            ).reset_index().sort_values('Qta', ascending=False)
-            df_ops['Qta'] = df_ops['Qta'].astype(int)
-            # Mostra stato cliente-friendly
-            df_ops['Stato'] = df_ops['Stato'].map(lambda x: LABEL_CLI.get(x, (x,))[0])
-            st.dataframe(df_ops.rename(columns={'ART_KEY':'Codice','Qta':'Qta (pa.)','Stato':'Stato'}),
-                         use_container_width=True, hide_index=True)
-
-        with kpi_sub[1]:
-            try:
-                render_kpi_avanzati(
-                    filtro_cliente=nome_cliente if nome_cliente else None,
-                    filtro_famiglie=None,
-                    key_prefix="cli"
-                )
-            except Exception as e:
-                st.warning(f"KPI Avanzati non disponibili: {e}")
+        st.info("📊 Per i KPI avanzati di questo cliente vai al tab **KPI → Avanzati** con il cliente selezionato.")
 
 
 # ===========================================================
@@ -1466,6 +1436,10 @@ if not df_res.empty:
             # Filtra solo OCI (ordini clienti interni) per coerenza con i KPI operativi
             if 'Codice Documento' in _df_sto.columns:
                 _df_sto = _df_sto[_df_sto['Codice Documento'] == 'OCI'].copy()
+            # Applica filtro cliente se attivo — collega al selettore sidebar
+            if sel_cli and sel_cli != 'TUTTI' and 'Cliente' in _df_sto.columns:
+                _nome_cli_op = sel_cli.split(' - ', 1)[-1].strip() if ' - ' in sel_cli else sel_cli.strip()
+                _df_sto = _df_sto[_df_sto['Cliente'].str.contains(_nome_cli_op, case=False, na=False, regex=False)]
             if not _df_sto.empty and not df_view.empty and 'Famiglia' in df_view.columns:
                 st.markdown("---")
                 st.markdown("**🎯 Performance per Famiglia** — vendite periodo vs media storica")
