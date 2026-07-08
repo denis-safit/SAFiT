@@ -1783,16 +1783,16 @@ if not df_res.empty:
         else:
             st.error("Modulo kpi_qualita.py non trovato.")
 
-    with kpi_tab_stor:
-        if _STORICO_DISPONIBILE:
-            stor.render_kpi_storici(
-                filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
-                filtro_articolo=search if search else None,
-                filtro_famiglie=st.session_state.filtro_famiglie or None
-            )
-        else:
-            st.error("Modulo storico_safit.py non trovato.")
-
+        with kpi_tab_stor:
+            if _STORICO_DISPONIBILE:
+                stor.render_kpi_storici(
+                    filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
+                    filtro_articolo=search if search else None,
+                    filtro_famiglie=st.session_state.filtro_famiglie or None
+                )
+            else:
+                st.error("Modulo storico_safit.py non trovato.")
+    
     with tab_btl:
         render_vista_btl(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
 
