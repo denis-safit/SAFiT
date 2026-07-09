@@ -1511,13 +1511,13 @@ if not df_res.empty:
                     _dmax = _df_sto["Data"].max().date() if not _df_sto.empty else _dt_op.now().date()
                     _pd1, _pd2 = st.columns(2)
                     with _pd1:
-                        _da_op = st.date_input("📅 Dal", value=_dmin, key="op_da_adm",
+                        _da_op = st.date_input("📅 Dal", value=_dmin,
                             min_value=_dmin, max_value=_dmax,
-                            key="kpi_op_da", format="DD/MM/YYYY")
+                            key="op_da_adm", format="DD/MM/YYYY")
                     with _pd2:
-                        _a_op = st.date_input("📅 Al", value=_dmax, key="op_a_adm",
+                        _a_op = st.date_input("📅 Al", value=_dmax,
                             min_value=_dmin, max_value=_dmax,
-                            key="kpi_op_a", format="DD/MM/YYYY")
+                            key="op_a_adm", format="DD/MM/YYYY")
                     _df_op = _df_sto[(_df_sto["Data"] >= pd.Timestamp(_da_op)) &
                                       (_df_sto["Data"] <= pd.Timestamp(_a_op))]
                     _gg_op = max(1, (pd.Timestamp(_a_op) - pd.Timestamp(_da_op)).days)
