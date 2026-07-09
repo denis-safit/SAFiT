@@ -899,7 +899,39 @@ def render_vista_cliente(df_cli, stock_raw, nome_cliente=''):
                 )
 
     with tab_kpi_cli:
-        st.info("📊 Per i KPI avanzati di questo cliente vai al tab **KPI → Avanzati** con il cliente selezionato.")
+        kpi_sub = st.tabs(["📋 Operativi", "📊 Avanzati"])
+
+        with kpi_sub[0]:
+            tot = int(df_cli['Qta Residua'].sum())
+            pr  = int(df_cli[df_cli['ST'].isin(['DISPONIBILE','COPERTO BOM'])]['Qta Residua'].sum())
+            acq = int(df_cli[df_cli['ST'] == 'ACQUISTO']['Qta Residua'].sum())
+            pro = int(df_cli[df_cli['ST'] == 'PRODUZIONE']['Qta Residua'].sum())
+            man = int(df_cli[df_cli['ST'].isin(['MANCANTE','DA PIANIFICARE'])]['Qta Residua'].sum())
+            c1,c2,c3,c4,c5 = st.columns(5)
+            c1.metric("Totale paia",      f"{tot:,}".replace(",","."))
+            c2.metric("Pronti",           f"{pr:,}".replace(",","."))
+            c3.metric("In lavorazione",   f"{int(acq+pro):,}".replace(",","."))
+            c4.metric("In pianificazione",f"{man:,}".replace(",","."))
+            c5.metric("% Pronto",         f"{round(pr/tot*100) if tot>0 else 0}%")
+            df_ops = df_cli.groupby('ART_KEY').agg(
+                Descrizione=('Articolo D','first'),
+                Qta=('Qta Residua','sum'),
+                Stato=('ST','first')
+            ).reset_index().sort_values('Qta', ascending=False)
+            df_ops['Qta']   = df_ops['Qta'].astype(int)
+            df_ops['Stato'] = df_ops['Stato'].map(lambda x: LABEL_CLI.get(x, (x,))[0])
+            st.dataframe(df_ops.rename(columns={'ART_KEY':'Codice','Qta':'Qta (pa.)','Stato':'Stato'}),
+                         use_container_width=True, hide_index=True)
+
+        with kpi_sub[1]:
+            try:
+                render_kpi_avanzati(
+                    filtro_cliente=nome_cliente if nome_cliente else None,
+                    filtro_famiglie=None,
+                    key_prefix="cli"
+                )
+            except Exception as e:
+                st.warning(f"KPI Avanzati non disponibili: {e}")
 
 
 # ===========================================================
@@ -1371,10 +1403,10 @@ if not df_res.empty:
 
     _cf, _cs = st.columns([3, 2])
     with _cf:
-        _sel_fam = st.selectbox("Famiglia", _fam_disp,
+        _sel_fam = st.selectbox("Famiglia", _fam_disp, key="op_fam_adm",
             index=0, label_visibility="collapsed", key="sb_fam")
     with _cs:
-        _sel_sta = st.selectbox("Stato", _sta_disp,
+        _sel_sta = st.selectbox("Stato", _sta_disp, key="op_sta_adm",
             index=0, label_visibility="collapsed", key="sb_sta")
 
     # Applica filtri — se "— Tutti —" non filtra
@@ -1436,10 +1468,6 @@ if not df_res.empty:
             # Filtra solo OCI (ordini clienti interni) per coerenza con i KPI operativi
             if 'Codice Documento' in _df_sto.columns:
                 _df_sto = _df_sto[_df_sto['Codice Documento'] == 'OCI'].copy()
-            # Applica filtro cliente se attivo — collega al selettore sidebar
-            if sel_cli and sel_cli != 'TUTTI' and 'Cliente' in _df_sto.columns:
-                _nome_cli_op = sel_cli.split(' - ', 1)[-1].strip() if ' - ' in sel_cli else sel_cli.strip()
-                _df_sto = _df_sto[_df_sto['Cliente'].str.contains(_nome_cli_op, case=False, na=False, regex=False)]
             if not _df_sto.empty and not df_view.empty and 'Famiglia' in df_view.columns:
                 st.markdown("---")
                 st.markdown("**🎯 Performance per Famiglia** — vendite periodo vs media storica")
@@ -1456,7 +1484,7 @@ if not df_res.empty:
                     _periodo_op = st.selectbox(
                         "Periodo performance",
                         list(_gg_map_op.keys()) + ["Intervallo personalizzato"],
-                        index=4, key="kpi_op_periodo"
+                        index=4, key="kpi_op_periodo_adm"
                     )
 
                 _oggi_op = _dt_op.now().date()
@@ -1483,11 +1511,11 @@ if not df_res.empty:
                     _dmax = _df_sto["Data"].max().date() if not _df_sto.empty else _dt_op.now().date()
                     _pd1, _pd2 = st.columns(2)
                     with _pd1:
-                        _da_op = st.date_input("📅 Dal", value=_dmin,
+                        _da_op = st.date_input("📅 Dal", value=_dmin, key="op_da_adm",
                             min_value=_dmin, max_value=_dmax,
                             key="kpi_op_da", format="DD/MM/YYYY")
                     with _pd2:
-                        _a_op = st.date_input("📅 Al", value=_dmax,
+                        _a_op = st.date_input("📅 Al", value=_dmax, key="op_a_adm",
                             min_value=_dmin, max_value=_dmax,
                             key="kpi_op_a", format="DD/MM/YYYY")
                     _df_op = _df_sto[(_df_sto["Data"] >= pd.Timestamp(_da_op)) &
@@ -1783,16 +1811,16 @@ if not df_res.empty:
         else:
             st.error("Modulo kpi_qualita.py non trovato.")
 
-        with kpi_tab_stor:
-            if _STORICO_DISPONIBILE:
-                stor.render_kpi_storici(
-                    filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
-                    filtro_articolo=search if search else None,
-                    filtro_famiglie=st.session_state.filtro_famiglie or None
-                )
-            else:
-                st.error("Modulo storico_safit.py non trovato.")
-    
+    with kpi_tab_stor:
+        if _STORICO_DISPONIBILE:
+            stor.render_kpi_storici(
+                filtro_cliente=sel_cli if sel_cli != "TUTTI" else None,
+                filtro_articolo=search if search else None,
+                filtro_famiglie=st.session_state.filtro_famiglie or None
+            )
+        else:
+            st.error("Modulo storico_safit.py non trovato.")
+
     with tab_btl:
         render_vista_btl(df_res, filtro_famiglie=st.session_state.filtro_famiglie)
 
