@@ -1403,11 +1403,11 @@ if not df_res.empty:
 
     _cf, _cs = st.columns([3, 2])
     with _cf:
-        _sel_fam = st.selectbox("Famiglia", _fam_disp, key="op_fam_adm",
-            index=0, label_visibility="collapsed", key="sb_fam")
+        _sel_fam = st.selectbox("Famiglia", _fam_disp,
+            index=0, label_visibility="collapsed", key="op_fam_adm")
     with _cs:
-        _sel_sta = st.selectbox("Stato", _sta_disp, key="op_sta_adm",
-            index=0, label_visibility="collapsed", key="sb_sta")
+        _sel_sta = st.selectbox("Stato", _sta_disp,
+            index=0, label_visibility="collapsed", key="op_sta_adm")
 
     # Applica filtri — se "— Tutti —" non filtra
     df_view = df_f.copy()
